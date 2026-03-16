@@ -1,0 +1,28 @@
+project_id = "cxoozxngfswtmvxocpzq"
+
+[db]
+port = 54322
+
+[functions.config-api]
+verify_jwt = false
+
+[functions.pdc-execute]
+verify_jwt = false
+
+[functions.upload-proxy]
+verify_jwt = false
+
+[functions.resolve-placeholder]
+verify_jwt = false
+
+[functions.embed-auth]
+verify_jwt = false
+
+[functions.pdc-auth]
+verify_jwt = false
+
+[functions.invite-org-user]
+verify_jwt = false
+
+[functions.llm-insights]
+verify_jwt = false
