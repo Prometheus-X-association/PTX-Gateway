@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-label="Organization page for super admin">
+  <rect width="1200" height="560" fill="#0f172a"/>
+  <text x="60" y="84" fill="#e2e8f0" font-size="40" font-family="Arial, sans-serif" font-weight="700">Organization (Super Admin)</text>
+  <text x="60" y="120" fill="#94a3b8" font-size="23" font-family="Arial, sans-serif">Manage organization profile, slug, activation, and tenant-level details</text>
+  <rect x="60" y="160" width="1080" height="340" rx="16" fill="#111827" stroke="#334155"/>
+  <text x="90" y="220" fill="#cbd5e1" font-size="22" font-family="Arial, sans-serif">Update organization identity and metadata</text>
+  <text x="90" y="260" fill="#cbd5e1" font-size="22" font-family="Arial, sans-serif">Control active/inactive state and discovery behavior</text>
+  <text x="90" y="300" fill="#cbd5e1" font-size="22" font-family="Arial, sans-serif">Use carefully in production multi-tenant environments</text>
+</svg>

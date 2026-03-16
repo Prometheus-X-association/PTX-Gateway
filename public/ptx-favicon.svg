@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PTX Gateway">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1726" />
+      <stop offset="100%" stop-color="#11324a" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2dd4df" />
+      <stop offset="100%" stop-color="#1e9fd6" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#bg)" />
+  <path d="M16 18h17c7.5 0 12 4.5 12 11.2S40.5 40.5 33 40.5h-8.5V50H16V18zm8.5 15.8h7.1c3.1 0 5-1.7 5-4.4 0-2.8-1.9-4.5-5-4.5h-7.1v8.9z" fill="#f5fbff"/>
+  <path d="M39 18h9l-7.8 10.3L49 40.5h-9.2l-4.1-6.1-4.1 6.1H22l8.9-12.2L23.1 18h9l3.6 5.6L39 18z" fill="url(#accent)"/>
+</svg>

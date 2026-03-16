@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PTX Gateway Admin Pages Guide</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #0b1220; color: #e5e7eb; line-height: 1.5; }
+    main { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+    h1, h2 { color: #f8fafc; }
+    h1 { margin-top: 0; font-size: 32px; }
+    h2 { margin-top: 38px; font-size: 24px; }
+    p, li { color: #cbd5e1; }
+    .card { border: 1px solid #334155; background: #0f172a; border-radius: 12px; padding: 18px; }
+    img { width: 100%; border: 1px solid #334155; border-radius: 10px; background: #111827; margin-top: 10px; }
+    code { background: #1e293b; border-radius: 6px; padding: 2px 6px; color: #e2e8f0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>PTX Gateway Admin Pages Guide</h1>
+    <p>Reference guide for administrators to manage PTX Gateway setup, security, and operations.</p>
+
+    <h2>Admin Dashboard Overview</h2>
+    <p>Central page for organization-level management and settings backup/import.</p>
+    <img src="./images/admin/00-admin-dashboard.svg" alt="Admin dashboard overview" />
+
+    <h2>1) PDC Config</h2>
+    <p>Set active PDC endpoint, fallback result settings, and organization-specific bearer token.</p>
+    <img src="./images/admin/01-pdc-config.svg" alt="PDC config page" />
+
+    <h2>2) Resources</h2>
+    <p>Manage extracted contracts, software/data resources, parameters, and service chains.</p>
+    <img src="./images/admin/02-resources.svg" alt="Resources page" />
+
+    <h2>3) Global Settings</h2>
+    <p>Configure environment profile, feature switches, limits, and logging policies.</p>
+    <img src="./images/admin/03-global-settings.svg" alt="Global settings page" />
+
+    <h2>4) Visualization</h2>
+    <p>Control presentation settings for user-facing output and result experience.</p>
+    <img src="./images/admin/04-visualization.svg" alt="Visualization page" />
+
+    <h2>5) Embed</h2>
+    <p>Enable embedding, define <code>Allowed Origins</code>, issue/revoke tokens, and copy iframe/web component snippets.</p>
+    <img src="./images/admin/05-embed.svg" alt="Embed page" />
+
+    <h2>6) Users (Super Admin)</h2>
+    <p>Invite users and manage organization roles: <code>user</code>, <code>admin</code>, <code>super_admin</code>.</p>
+    <img src="./images/admin/06-users-super-admin.svg" alt="Users page" />
+
+    <h2>7) Organization (Super Admin)</h2>
+    <p>Manage organization metadata, activation status, and tenant-level governance settings.</p>
+    <img src="./images/admin/07-organization-super-admin.svg" alt="Organization page" />
+  </main>
+</body>
+</html>

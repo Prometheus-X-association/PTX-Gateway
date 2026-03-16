@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="PTX Gateway">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#07111d" />
+      <stop offset="50%" stop-color="#0f2435" />
+      <stop offset="100%" stop-color="#112d45" />
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#2dd4df" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#2dd4df" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2dd4df" />
+      <stop offset="100%" stop-color="#1e9fd6" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)" />
+  <rect width="1200" height="630" fill="url(#glow)" />
+
+  <g opacity="0.18" stroke="#8adfe8" fill="none">
+    <path d="M90 120h1020" />
+    <path d="M90 510h1020" />
+    <path d="M170 80v470" />
+    <path d="M1030 80v470" />
+  </g>
+
+  <rect x="100" y="110" width="170" height="170" rx="36" fill="#0c1f30" stroke="#1e9fd6" stroke-opacity="0.4" />
+  <path d="M144 156h46c28 0 45 17 45 42s-17 42-45 42h-23v40h-23V156zm23 64h20c14 0 23-8 23-22s-9-22-23-22h-20v44z" fill="#f5fbff"/>
+  <path d="M224 156h28l-24 32 27 38h-29l-13-19-13 19h-30l28-38-24-32h28l11 16 11-16z" fill="url(#accent)"/>
+
+  <text x="320" y="210" fill="#f5fbff" font-family="Inter, Arial, sans-serif" font-size="66" font-weight="700">
+    PTX Gateway
+  </text>
+  <text x="320" y="286" fill="#9fb8c8" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="400">
+    Operationalize PTX contracts from configuration to execution and visualization
+  </text>
+
+  <g transform="translate(320 355)">
+    <rect width="220" height="110" rx="24" fill="#0d2031" stroke="#2dd4df" stroke-opacity="0.35" />
+    <text x="30" y="42" fill="#2dd4df" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="600">Contract</text>
+    <text x="30" y="74" fill="#f5fbff" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">PTX Definition</text>
+  </g>
+
+  <g transform="translate(570 355)">
+    <rect width="220" height="110" rx="24" fill="#0d2031" stroke="#2dd4df" stroke-opacity="0.35" />
+    <text x="30" y="42" fill="#2dd4df" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="600">Execution</text>
+    <text x="30" y="74" fill="#f5fbff" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Governed Flow</text>
+  </g>
+
+  <g transform="translate(820 355)">
+    <rect width="220" height="110" rx="24" fill="#0d2031" stroke="#2dd4df" stroke-opacity="0.35" />
+    <text x="30" y="42" fill="#2dd4df" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="600">Outcome</text>
+    <text x="30" y="74" fill="#f5fbff" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Visualization</text>
+  </g>
+
+  <g stroke="url(#accent)" stroke-width="6" stroke-linecap="round" fill="none">
+    <path d="M540 410h22" />
+    <path d="M790 410h22" />
+  </g>
+</svg>
