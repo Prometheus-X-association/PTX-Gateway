@@ -259,7 +259,7 @@ const AnalyticsSelection = ({
   return (
     <div className="animate-fade-in">
       <div className="text-center mb-8">
-        <h2 className="text-3xl font-bold mb-2">
+        <h2 className="theme-section-title mb-2">
           Select <span className="gradient-text">Analytics Type</span>
         </h2>
         <p className="text-muted-foreground">
@@ -291,10 +291,10 @@ const AnalyticsSelection = ({
               )}
               
               {/* Provider badge instead of icon */}
-              <div className={`inline-flex px-3 py-1.5 rounded-lg text-sm font-medium mb-4 transition-colors ${
+              <div className={`theme-badge mb-4 transition-colors ${
                 optionSelected 
-                  ? "bg-primary text-primary-foreground" 
-                  : "bg-muted text-muted-foreground"
+                  ? "theme-provider-badge selected" 
+                  : "theme-provider-badge"
               }`}>
                 {info.provider}
               </div>
@@ -347,7 +347,7 @@ const AnalyticsSelection = ({
         <button
           onClick={handleContinue}
           disabled={!selected}
-          className={`px-8 py-3 rounded-lg font-medium transition-all duration-300 ${
+          className={`theme-button px-8 py-3 transition-all duration-300 ${
             selected
               ? "bg-primary text-primary-foreground hover:opacity-90 glow-effect"
               : "bg-muted text-muted-foreground cursor-not-allowed"

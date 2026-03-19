@@ -36,7 +36,7 @@
 
     --radius: 0.75rem;
 
-    --gradient-primary: linear-gradient(135deg, hsl(187 85% 53%), hsl(200 85% 45%));
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
     --gradient-card: linear-gradient(145deg, hsl(222 47% 10%), hsl(222 47% 7%));
     --gradient-glow: radial-gradient(ellipse at center, hsl(187 85% 53% / 0.15), transparent 70%);
 
@@ -45,6 +45,46 @@
 
     --font-sans: 'Inter', system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+
+    --theme-setting-globalwidth: 1280px;
+    --theme-setting-globalradius: 0.75rem;
+    --theme-font-size-xs: 12px;
+    --theme-font-size-s: 14px;
+    --theme-font-size-m: 16px;
+    --theme-font-size-l: 20px;
+    --theme-font-size-xl: 24px;
+    --theme-font-size-xxl: 32px;
+    --theme-border-primary: 1px solid hsl(var(--border));
+    --theme-border-secondary: 1px solid hsl(var(--input));
+    --theme-shadow-primary: var(--shadow-card);
+    --theme-shadow-secondary: var(--shadow-glow);
+    --theme-table-row-primary-body: hsl(var(--background));
+    --theme-table-row-primary-text: hsl(var(--foreground));
+    --theme-table-row-secondary-body: hsl(var(--muted));
+    --theme-table-row-secondary-text: hsl(var(--foreground));
+    --theme-table-row-hover-body: hsl(var(--muted));
+    --theme-table-row-hover-text: hsl(var(--foreground));
+    --theme-table-header-body: hsl(var(--card));
+    --theme-table-header-text: hsl(var(--muted-foreground));
+    --theme-color-body-secondary: hsl(var(--card));
+    --theme-color-body-tertiary: hsl(var(--muted));
+    --theme-color-text-primary: hsl(var(--foreground));
+    --theme-color-text-secondary: hsl(var(--foreground));
+    --theme-color-text-meta: hsl(var(--muted-foreground));
+    --theme-color-primary-over: hsl(var(--primary-foreground));
+    --theme-color-secondary-over: hsl(var(--secondary-foreground));
+
+    --step-indicator-size: 2.5rem;
+    --step-indicator-font-size: var(--theme-font-size-s);
+    --step-indicator-label-size: var(--theme-font-size-xs);
+    --step-indicator-gap: 0.5rem;
+    --step-indicator-connector-width: 4rem;
+    --step-indicator-connector-height: 2px;
+    --theme-heading-display-size: var(--theme-font-size-xxl);
+    --theme-heading-section-size: var(--theme-font-size-xxl);
+    --theme-heading-card-size: var(--theme-font-size-xl);
+    --theme-heading-weight: 700;
+    --theme-subtitle-size: 1.125rem;
   }
 }
 
@@ -65,8 +105,11 @@
 
 @layer components {
   .glass-card {
-    @apply bg-card/80 backdrop-blur-xl border border-border/50 rounded-xl;
-    box-shadow: var(--shadow-card);
+    @apply backdrop-blur-xl;
+    background: color-mix(in srgb, var(--theme-color-body-secondary) 80%, transparent);
+    border: var(--theme-border-primary);
+    border-radius: max(var(--radius), var(--theme-setting-globalradius));
+    box-shadow: var(--theme-shadow-primary);
   }
 
   .glow-effect {
@@ -81,50 +124,69 @@
   }
 
   .analytics-card {
-    @apply glass-card p-6 transition-all duration-300 cursor-pointer;
+    @apply glass-card transition-all duration-300 cursor-pointer;
+    padding: 1.5rem;
   }
 
   .analytics-card:hover {
-    @apply border-primary/50 scale-[1.02];
-    box-shadow: var(--shadow-glow);
+    transform: scale(1.02);
+    box-shadow: var(--theme-shadow-secondary);
+    border-color: color-mix(in srgb, hsl(var(--primary)) 50%, transparent);
   }
 
   .analytics-card.selected {
-    @apply border-primary bg-primary/10;
-    box-shadow: var(--shadow-glow);
+    background: color-mix(in srgb, hsl(var(--primary)) 10%, var(--theme-color-body-secondary));
+    border-color: hsl(var(--primary));
+    box-shadow: var(--theme-shadow-secondary);
   }
 
   .step-indicator {
-    @apply w-10 h-10 rounded-full flex items-center justify-center font-medium text-sm transition-all duration-300;
+    @apply flex items-center justify-center font-medium transition-all duration-300;
+    width: var(--step-indicator-size);
+    height: var(--step-indicator-size);
+    min-width: var(--step-indicator-size);
+    border-radius: 9999px;
+    font-size: var(--step-indicator-font-size);
   }
 
   .step-indicator.active {
-    @apply bg-primary text-primary-foreground;
-    box-shadow: var(--shadow-glow);
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    box-shadow: var(--theme-shadow-secondary);
   }
 
   .step-indicator.completed {
-    @apply bg-primary/20 text-primary border border-primary/50;
+    background: color-mix(in srgb, hsl(var(--primary)) 20%, transparent);
+    color: hsl(var(--primary));
+    border: 1px solid color-mix(in srgb, hsl(var(--primary)) 50%, transparent);
   }
 
   .step-indicator.pending {
-    @apply bg-muted text-muted-foreground;
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
   }
 
   .upload-zone {
-    @apply glass-card border-2 border-dashed border-border/50 p-8 text-center transition-all duration-300;
+    @apply glass-card border-2 border-dashed text-center transition-all duration-300;
+    padding: 2rem;
+    border-color: color-mix(in srgb, hsl(var(--border)) 50%, transparent);
   }
 
   .upload-zone:hover, .upload-zone.dragging {
-    @apply border-primary/50 bg-primary/5;
+    border-color: color-mix(in srgb, hsl(var(--primary)) 50%, transparent);
+    background: color-mix(in srgb, hsl(var(--primary)) 5%, var(--theme-color-body-secondary));
   }
 
   .progress-bar {
-    @apply h-2 bg-muted rounded-full overflow-hidden;
+    @apply overflow-hidden;
+    height: 0.5rem;
+    background: var(--theme-color-body-tertiary);
+    border-radius: 9999px;
   }
 
   .progress-bar-fill {
-    @apply h-full bg-gradient-to-r from-primary to-accent transition-all duration-500 ease-out;
+    @apply h-full transition-all duration-500 ease-out;
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)));
   }
 
   .pulse-dot {
@@ -133,11 +195,141 @@
   }
 
   .export-btn {
-    @apply glass-card px-6 py-4 flex flex-col items-center gap-2 transition-all duration-300 hover:border-primary/50 hover:scale-105;
+    @apply glass-card flex flex-col items-center gap-2 transition-all duration-300;
+    padding: 1rem 1.5rem;
   }
 
   .export-btn:hover {
-    box-shadow: var(--shadow-glow);
+    box-shadow: var(--theme-shadow-secondary);
+    border-color: color-mix(in srgb, hsl(var(--primary)) 50%, transparent);
+    transform: scale(1.05);
+  }
+
+  .theme-button {
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap transition-colors disabled:pointer-events-none disabled:opacity-50;
+    min-height: 2.5rem;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius);
+    font-size: var(--theme-font-size-s);
+    font-weight: 500;
+  }
+
+  .theme-button.subtle {
+    background: color-mix(in srgb, var(--theme-color-body-tertiary) 70%, transparent);
+    color: var(--theme-color-text-meta);
+    border: var(--theme-border-secondary);
+  }
+
+  .theme-button.subtle:hover {
+    color: var(--theme-color-text-primary);
+  }
+
+  .theme-button.primary-soft {
+    background: color-mix(in srgb, hsl(var(--primary)) 10%, transparent);
+    color: hsl(var(--primary));
+    border: 1px solid color-mix(in srgb, hsl(var(--primary)) 20%, transparent);
+  }
+
+  .theme-button.primary-soft:hover {
+    background: color-mix(in srgb, hsl(var(--primary)) 20%, transparent);
+  }
+
+  .theme-json-surface {
+    font-family: var(--theme-font-family-secondary, var(--font-mono));
+    font-size: var(--theme-font-size-s);
+    background: color-mix(in srgb, var(--theme-color-body-tertiary) 30%, transparent);
+    border: var(--theme-border-primary);
+    border-radius: var(--radius);
+  }
+
+  .theme-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.375rem 0.75rem;
+    border-radius: var(--radius);
+    font-size: var(--theme-font-size-s);
+    font-weight: 500;
+  }
+
+  .theme-provider-badge {
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+  }
+
+  .theme-provider-badge.selected {
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+  }
+
+  .theme-table {
+    border: var(--theme-border-primary);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+
+  .theme-table thead {
+    background: var(--theme-table-header-body);
+    color: var(--theme-table-header-text);
+  }
+
+  .theme-table tbody tr {
+    background: var(--theme-table-row-primary-body);
+    color: var(--theme-table-row-primary-text);
+  }
+
+  .theme-table tbody tr:nth-child(even) {
+    background: var(--theme-table-row-secondary-body);
+    color: var(--theme-table-row-secondary-text);
+  }
+
+  .theme-table tbody tr:hover {
+    background: var(--theme-table-row-hover-body);
+    color: var(--theme-table-row-hover-text);
+  }
+
+  .theme-tabs-list {
+    background: color-mix(in srgb, var(--theme-color-body-tertiary) 70%, transparent);
+    border: var(--theme-border-primary);
+  }
+
+  .theme-tabs-trigger[data-state="active"] {
+    background: var(--theme-color-body-secondary);
+    color: var(--theme-color-text-primary);
+  }
+
+  .theme-muted-panel {
+    background: color-mix(in srgb, var(--theme-color-body-secondary) 50%, transparent);
+    border: var(--theme-border-primary);
+    border-radius: var(--radius);
+  }
+
+  .theme-hero-title {
+    color: var(--theme-color-text-primary);
+    font-size: var(--theme-heading-display-size);
+    font-weight: var(--theme-heading-weight);
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+  }
+
+  .theme-section-title {
+    color: var(--theme-color-text-primary);
+    font-size: var(--theme-heading-section-size);
+    font-weight: var(--theme-heading-weight);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
+
+  .theme-card-title {
+    color: var(--theme-color-text-primary);
+    font-size: var(--theme-heading-card-size);
+    font-weight: 600;
+    line-height: 1.2;
+  }
+
+  .theme-subtitle {
+    color: var(--theme-color-text-meta);
+    font-size: var(--theme-subtitle-size);
   }
 }
 

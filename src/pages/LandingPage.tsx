@@ -249,13 +249,13 @@ const LandingPage = () => {
           </AnimatedSection>
 
           <AnimatedSection delay={100}>
-            <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold mb-6 leading-tight">
+            <h1 className="theme-hero-title mb-6">
               From PTX Contract to <span className="gradient-text">Operational Visualization</span>
             </h1>
           </AnimatedSection>
 
           <AnimatedSection delay={200}>
-            <p className="text-lg sm:text-xl text-muted-foreground max-w-3xl mx-auto mb-12">
+            <p className="theme-subtitle max-w-3xl mx-auto mb-12">
               PTX Gateway helps organizations move fast from contract definition to executable visualization, whether
               embedded in another platform or delivered as a standalone app to operationalize the PTX contract.
             </p>
@@ -316,10 +316,10 @@ const LandingPage = () => {
         <div className="max-w-5xl mx-auto">
           <AnimatedSection>
             <div className="text-center mb-16">
-              <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+              <h2 className="theme-section-title mb-4">
                 What is a <span className="gradient-text">Dataspace</span>?
               </h2>
-              <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              <p className="theme-subtitle max-w-2xl mx-auto">
                 A dataspace is a decentralized infrastructure that enables secure, sovereign data sharing between
                 organizations while respecting privacy and compliance requirements.
               </p>
@@ -374,10 +374,10 @@ const LandingPage = () => {
         <div className="max-w-5xl mx-auto">
           <AnimatedSection>
             <div className="text-center mb-16">
-              <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+              <h2 className="theme-section-title mb-4">
                 PTX Gateway <span className="gradient-text">Objectives</span>
               </h2>
-              <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              <p className="theme-subtitle max-w-2xl mx-auto">
                 PTX Gateway is designed to accelerate implementation from PTX contract to visualization and give
                 organizations flexible deployment choices for operational use.
               </p>
@@ -453,10 +453,10 @@ const LandingPage = () => {
         <div className="max-w-5xl mx-auto">
           <AnimatedSection>
             <div className="text-center mb-16">
-              <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+              <h2 className="theme-section-title mb-4">
                 Implementation <span className="gradient-text">Path</span>
               </h2>
-              <p className="text-lg text-muted-foreground max-w-3xl mx-auto">
+              <p className="theme-subtitle max-w-3xl mx-auto">
                 A focused delivery path for organizations that want to operationalize PTX contracts quickly without
                 separating contract logic, execution flow, and visualization into disconnected tools.
               </p>
@@ -479,7 +479,7 @@ const LandingPage = () => {
           <AnimatedSection delay={350}>
             <div className="grid gap-6 lg:grid-cols-[1.4fr_0.9fr] mt-10">
               <div className="glass-card p-8">
-                <h3 className="text-2xl font-semibold mb-4">One PTX implementation, multiple delivery models</h3>
+                <h3 className="theme-card-title mb-4">One PTX implementation, multiple delivery models</h3>
                 <p className="text-muted-foreground mb-6">
                   PTX Gateway keeps the contract-driven configuration governed in one place, then exposes it through
                   the delivery model that fits the organization.
@@ -506,7 +506,7 @@ const LandingPage = () => {
 
               <div className="glass-card p-8 bg-gradient-to-br from-primary/5 to-primary/10">
                 <p className="text-xs uppercase tracking-[0.2em] text-primary mb-3">Objective</p>
-                <h3 className="text-2xl font-semibold mb-4">
+                <h3 className="theme-card-title mb-4">
                   Operationalize the PTX contract instead of leaving it as configuration only
                 </h3>
                 <p className="text-muted-foreground">
@@ -525,10 +525,10 @@ const LandingPage = () => {
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <AnimatedSection>
               <div>
-                <h2 className="text-3xl sm:text-4xl font-bold mb-6">
+                <h2 className="theme-section-title mb-6">
                   Benefits for <span className="gradient-text">Organizations</span>
                 </h2>
-                <p className="text-lg text-muted-foreground mb-8">
+                <p className="theme-subtitle mb-8">
                   Outcome-focused advantages for organizations adopting PTX dataspace contracts and gateway-based
                   execution.
                 </p>
@@ -549,7 +549,7 @@ const LandingPage = () => {
                   <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-primary/20 mb-6">
                     <Sparkles className="w-10 h-10 text-primary" />
                   </div>
-                  <h3 className="text-2xl font-bold mb-4">Ready to Get Started?</h3>
+                  <h3 className="theme-card-title mb-4">Ready to Get Started?</h3>
                   <p className="text-muted-foreground mb-6">
                     Enter your organization's identifier below to access your dedicated gateway.
                   </p>
@@ -572,10 +572,10 @@ const LandingPage = () => {
         <div className="max-w-5xl mx-auto">
           <AnimatedSection>
             <div className="text-center mb-16">
-              <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+              <h2 className="theme-section-title mb-4">
                 Platform <span className="gradient-text">Features</span>
               </h2>
-              <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              <p className="theme-subtitle max-w-2xl mx-auto">
                 Core capabilities for contract-driven PTX execution, secure embedding, and governed administration.
               </p>
               <div className="mt-6">
@@ -610,7 +610,7 @@ const LandingPage = () => {
               <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-6">
                 <Search className="w-8 h-8 text-primary" />
               </div>
-              <h2 className="text-2xl sm:text-3xl font-bold mb-4">Access Your Gateway</h2>
+              <h2 className="theme-section-title mb-4">Access Your Gateway</h2>
               <p className="text-muted-foreground mb-8">
                 Enter your organization's unique identifier or slug to access your dedicated PTX Gateway and start
                 exploring data resources.

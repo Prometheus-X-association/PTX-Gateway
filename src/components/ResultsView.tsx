@@ -923,17 +923,17 @@ const CollapsibleJson = ({ data, onChange }: CollapsibleJsonProps) => {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end gap-2">
-        <button onClick={expandAll} className="px-3 py-1.5 text-sm rounded-md bg-secondary/50 text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5">
+        <button onClick={expandAll} className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-s)]">
           <Maximize2 className="w-3.5 h-3.5" />
           Expand All
         </button>
-        <button onClick={collapseAll} className="px-3 py-1.5 text-sm rounded-md bg-secondary/50 text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5">
+        <button onClick={collapseAll} className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-s)]">
           <Minimize2 className="w-3.5 h-3.5" />
           Collapse All
         </button>
       </div>
 
-      <div className="font-mono text-sm bg-secondary/30 rounded-lg p-4 max-h-[450px] overflow-auto border border-border">
+      <div className="theme-json-surface p-4 max-h-[450px] overflow-auto">
         <JsonNode
           keyName={null}
           value={data}

@@ -7,7 +7,7 @@ interface StepIndicatorProps {
 
 const StepIndicator = ({ steps, currentStep }: StepIndicatorProps) => {
   return (
-    <div className="flex items-center justify-center gap-2 mb-12">
+    <div className="flex items-center justify-center gap-[var(--step-indicator-gap)] mb-12">
       {steps.map((step, index) => (
         <div key={step} className="flex items-center">
           <div className="flex flex-col items-center">
@@ -27,7 +27,7 @@ const StepIndicator = ({ steps, currentStep }: StepIndicatorProps) => {
               )}
             </div>
             <span
-              className={`mt-2 text-xs font-medium ${
+              className={`mt-2 text-[length:var(--step-indicator-label-size)] font-medium ${
                 index <= currentStep
                   ? "text-foreground"
                   : "text-muted-foreground"
@@ -38,9 +38,13 @@ const StepIndicator = ({ steps, currentStep }: StepIndicatorProps) => {
           </div>
           {index < steps.length - 1 && (
             <div
-              className={`w-16 h-0.5 mx-2 mb-6 transition-colors duration-300 ${
+              className={`mx-2 mb-6 transition-colors duration-300 ${
                 index < currentStep ? "bg-primary" : "bg-muted"
               }`}
+              style={{
+                width: "var(--step-indicator-connector-width)",
+                height: "var(--step-indicator-connector-height)",
+              }}
             />
           )}
         </div>
