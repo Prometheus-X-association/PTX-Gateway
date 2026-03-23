@@ -19,6 +19,7 @@ const DEFAULT_VISUALIZATION: VisualizationSettings = {
   accent_color: "",
   background_color: "",
   card_color: "",
+  design_url: "",
 };
 
 const VisualizationConfigSection = () => {
@@ -59,6 +60,19 @@ const VisualizationConfigSection = () => {
     if (!user?.organization?.id) return;
     setIsSaving(true);
     try {
+      const trimmedDesignUrl = settings.design_url?.trim() || "";
+      if (trimmedDesignUrl) {
+        try {
+          const parsed = new URL(trimmedDesignUrl);
+          if (!["http:", "https:"].includes(parsed.protocol)) {
+            throw new Error("Unsupported protocol");
+          }
+        } catch {
+          toast.error("Design URL must be a valid http/https URL");
+          return;
+        }
+      }
+
       const { data: org, error: fetchError } = await supabase
         .from("organizations")
         .select("settings")
@@ -66,7 +80,10 @@ const VisualizationConfigSection = () => {
         .single();
       if (fetchError) throw fetchError;
 
-      const merged = mergeVisualizationSettingsIntoOrgSettings(org?.settings, settings);
+      const merged = mergeVisualizationSettingsIntoOrgSettings(org?.settings, {
+        ...settings,
+        design_url: trimmedDesignUrl,
+      });
       const { error } = await supabase
         .from("organizations")
         .update({ settings: merged })
@@ -147,6 +164,19 @@ const VisualizationConfigSection = () => {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="viz-design-url">Design URL</Label>
+          <Input
+            id="viz-design-url"
+            value={settings.design_url || ""}
+            onChange={(e) => setSettings({ ...settings, design_url: e.target.value })}
+            placeholder="https://example.com/theme.json"
+          />
+          <p className="text-xs text-muted-foreground">
+            Optional remote design JSON for this organization gateway. If provided, it overrides the default design from the environment.
+          </p>
+        </div>
+
         <div className="space-y-2">
           <Label htmlFor="viz-favicon">Favicon URL</Label>
           <Input

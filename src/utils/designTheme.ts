@@ -8,6 +8,8 @@ interface RemoteDesignThemePayload {
   };
 }
 
+type DesignThemeCleanup = () => void;
+
 const normalizeHex = (value: string): string | null => {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -251,14 +253,114 @@ const getThemeCssVariables = (payload: unknown): ThemeCssVariables | null => {
   }, {});
 };
 
-export const applyRemoteDesignTheme = (cssVariables: ThemeCssVariables): void => {
+export const applyRemoteDesignTheme = (cssVariables: ThemeCssVariables): DesignThemeCleanup => {
   const root = document.documentElement;
+  const previousValues: Record<string, string> = {};
 
   Object.entries(cssVariables).forEach(([key, value]) => {
+    if (!(key in previousValues)) {
+      previousValues[key] = root.style.getPropertyValue(key);
+    }
     root.style.setProperty(key, value);
   });
 
+  const mappedVariables = [
+    "--primary",
+    "--primary-foreground",
+    "--secondary",
+    "--secondary-foreground",
+    "--destructive",
+    "--destructive-foreground",
+    "--background",
+    "--card",
+    "--popover",
+    "--muted",
+    "--accent",
+    "--accent-foreground",
+    "--foreground",
+    "--card-foreground",
+    "--popover-foreground",
+    "--muted-foreground",
+    "--ring",
+    "--input",
+    "--border",
+    "--radius",
+    "--font-sans",
+    "--font-mono",
+    "--shadow-card",
+    "--shadow-glow",
+    "--theme-setting-globalwidth",
+    "--theme-font-size-xs",
+    "--theme-font-size-s",
+    "--theme-font-size-m",
+    "--theme-font-size-l",
+    "--theme-font-size-xl",
+    "--theme-font-size-xxl",
+    "--theme-heading-card-size",
+    "--theme-heading-display-size",
+    "--theme-heading-section-size",
+    "--theme-font-weight-primary",
+    "--theme-font-weight-secondary",
+    "--theme-heading-weight",
+    "--theme-border-primary",
+    "--theme-border-secondary",
+    "--theme-table-header-body",
+    "--theme-table-header-text",
+    "--theme-table-row-primary-body",
+    "--theme-table-row-primary-text",
+    "--theme-table-row-secondary-body",
+    "--theme-table-row-secondary-text",
+    "--theme-table-row-hover-body",
+    "--theme-table-row-hover-text",
+    "--gradient-primary",
+    "--step-indicator-label-size",
+    "--step-indicator-font-size",
+  ];
+
+  mappedVariables.forEach((key) => {
+    if (!(key in previousValues)) {
+      previousValues[key] = root.style.getPropertyValue(key);
+    }
+  });
+
   applySemanticThemeMappings(root, cssVariables);
+
+  return () => {
+    Object.entries(previousValues).forEach(([key, value]) => {
+      if (value) root.style.setProperty(key, value);
+      else root.style.removeProperty(key);
+    });
+  };
+};
+
+export const loadAndApplyDesignThemeFromUrl = async (
+  url: string,
+): Promise<DesignThemeCleanup> => {
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) return () => {};
+
+  const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/result-proxy`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      "x-result-url": trimmedUrl,
+      "x-result-method": "GET",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Theme request failed with status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as unknown;
+  const cssVariables = getThemeCssVariables(payload);
+
+  if (!cssVariables) {
+    throw new Error("Theme payload does not contain ThemeGlobal.css variables");
+  }
+
+  return applyRemoteDesignTheme(cssVariables);
 };
 
 export const loadAndApplyStartupDesignTheme = async (

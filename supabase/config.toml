@@ -12,6 +12,9 @@ verify_jwt = false
 [functions.upload-proxy]
 verify_jwt = false
 
+[functions.result-proxy]
+verify_jwt = false
+
 [functions.resolve-placeholder]
 verify_jwt = false
 
