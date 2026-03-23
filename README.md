@@ -1039,4 +1039,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-**Co-designed and co-developed by Scheer IMC GmbH** as part of the EDGE-Skills Project.
+**Co-designed and co-developed by Scheer IMC** as part of the EDGE-Skills Project.
