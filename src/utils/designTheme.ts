@@ -339,13 +339,12 @@ export const loadAndApplyDesignThemeFromUrl = async (
   const trimmedUrl = url.trim();
   if (!trimmedUrl) return () => {};
 
-  const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/result-proxy`, {
+  const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/theme-proxy`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-      "x-result-url": trimmedUrl,
-      "x-result-method": "GET",
+      "x-theme-url": trimmedUrl,
     },
   });
 
@@ -377,13 +376,12 @@ export const loadAndApplyStartupDesignTheme = async (
 
     if (import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) {
       attempts.push(() =>
-        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/result-proxy`, {
+        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/theme-proxy`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-            "x-result-url": url,
-            "x-result-method": "GET",
+            "x-theme-url": url,
           },
         }),
       );
