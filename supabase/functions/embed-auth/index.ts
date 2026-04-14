@@ -33,15 +33,41 @@ type RevokePersistentBody = {
   token_id: string;
 };
 
-type Body = IssueBody | ValidateBody | RevokePersistentBody;
+type ViewPersistentBody = {
+  action: "view_persistent";
+  org_slug: string;
+  token_id: string;
+};
+
+type ActivatePersistentBody = {
+  action: "activate_persistent";
+  org_slug: string;
+  token_id: string;
+};
+
+type DeletePersistentBody = {
+  action: "delete_persistent";
+  org_slug: string;
+  token_id: string;
+};
+
+type Body =
+  | IssueBody
+  | ValidateBody
+  | RevokePersistentBody
+  | ViewPersistentBody
+  | ActivatePersistentBody
+  | DeletePersistentBody;
 
 type PersistentTokenEntry = {
   id: string;
   label: string;
   origin: string;
   token_hash: string;
+  token_encrypted?: string | null;
   created_at: string;
   revoked_at?: string | null;
+  deleted_at?: string | null;
 };
 
 const textEncoder = new TextEncoder();
@@ -74,6 +100,37 @@ const sign = async (data: string, secret: string): Promise<string> => {
 const verify = async (data: string, signature: string, secret: string): Promise<boolean> => {
   const expected = await sign(data, secret);
   return expected === signature;
+};
+
+const getAesKey = async (secret: string): Promise<CryptoKey> => {
+  const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(secret));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+};
+
+const encryptSecretValue = async (value: string, secret: string): Promise<string> => {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await getAesKey(secret);
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    textEncoder.encode(value),
+  );
+  return `${toBase64Url(iv)}.${toBase64Url(new Uint8Array(encrypted))}`;
+};
+
+const decryptSecretValue = async (payload: string, secret: string): Promise<string | null> => {
+  const [ivPart, cipherPart] = payload.split(".");
+  if (!ivPart || !cipherPart) return null;
+
+  try {
+    const iv = Uint8Array.from(fromBase64Url(ivPart), (char) => char.charCodeAt(0));
+    const cipher = Uint8Array.from(fromBase64Url(cipherPart), (char) => char.charCodeAt(0));
+    const key = await getAesKey(secret);
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipher);
+    return new TextDecoder().decode(decrypted);
+  } catch {
+    return null;
+  }
 };
 
 const sha256Hex = async (input: string): Promise<string> => {
@@ -119,8 +176,10 @@ const getPersistentTokens = (embedSettings: Record<string, unknown>): Persistent
       label: String(item.label || "Persistent Token"),
       origin: String(item.origin || ""),
       token_hash: String(item.token_hash || ""),
+      token_encrypted: item.token_encrypted ? String(item.token_encrypted) : null,
       created_at: String(item.created_at || ""),
       revoked_at: item.revoked_at ? String(item.revoked_at) : null,
+      deleted_at: item.deleted_at ? String(item.deleted_at) : null,
     }))
     .filter((item) => item.id && item.origin && item.token_hash);
 };
@@ -256,14 +315,30 @@ serve(async (req) => {
 
       const tokenHash = await sha256Hex(token);
       const persistentTokens = getPersistentTokens(embedSettings);
-      const matched = persistentTokens.find((t) => !t.revoked_at && t.token_hash === tokenHash);
+      const hashMatch = persistentTokens.find((t) => t.token_hash === tokenHash);
 
-      if (!matched) {
+      if (!hashMatch) {
         return new Response(JSON.stringify({ ok: false, error: "Invalid persistent token" }), {
           status: 401,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+
+      if (hashMatch.deleted_at) {
+        return new Response(JSON.stringify({ ok: false, error: "Persistent token deleted" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (hashMatch.revoked_at) {
+        return new Response(JSON.stringify({ ok: false, error: "Persistent token revoked" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const matched = hashMatch;
 
       if (normalizedParent && normalizedParent !== matched.origin) {
         return new Response(JSON.stringify({ ok: false, error: "Parent origin not allowed" }), {
@@ -304,7 +379,7 @@ serve(async (req) => {
       });
     }
 
-    if (body.action === "revoke_persistent") {
+    if (body.action === "revoke_persistent" || body.action === "activate_persistent" || body.action === "delete_persistent" || body.action === "view_persistent") {
       const orgSlug = body.org_slug?.toLowerCase().trim();
       const tokenId = body.token_id?.trim();
       if (!orgSlug || !tokenId) {
@@ -337,9 +412,71 @@ serve(async (req) => {
       const settings = asRecord(org.settings);
       const embed = getEmbedSettings(settings);
       const persistentTokens = getPersistentTokens(embed);
-      const updatedTokens = persistentTokens.map((token) =>
-        token.id === tokenId ? { ...token, revoked_at: new Date().toISOString() } : token
-      );
+      const targetToken = persistentTokens.find((token) => token.id === tokenId);
+
+      if (!targetToken) {
+        return new Response(JSON.stringify({ error: "Persistent token not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (targetToken.deleted_at) {
+        if (body.action === "view_persistent") {
+          return new Response(JSON.stringify({ error: "Persistent token deleted" }), {
+            status: 410,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        return new Response(JSON.stringify({ error: "Deleted tokens can no longer be modified" }), {
+          status: 409,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (body.action === "view_persistent") {
+        const tokenValue = targetToken.token_encrypted
+          ? await decryptSecretValue(targetToken.token_encrypted, embedSecret)
+          : null;
+
+        return new Response(JSON.stringify({
+          ok: true,
+          token: tokenValue,
+          token_id: targetToken.id,
+          token_type: "persistent",
+          origin: targetToken.origin,
+          label: targetToken.label,
+          revoked_at: targetToken.revoked_at ?? null,
+          deleted_at: targetToken.deleted_at ?? null,
+          can_view_value: !!tokenValue,
+        }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const updatedTokens = persistentTokens.map((token) => {
+        if (token.id !== tokenId) return token;
+
+        if (body.action === "delete_persistent") {
+          return {
+            ...token,
+            deleted_at: new Date().toISOString(),
+          };
+        }
+
+        if (body.action === "revoke_persistent") {
+          return {
+            ...token,
+            revoked_at: new Date().toISOString(),
+          };
+        }
+
+        return {
+          ...token,
+          revoked_at: null,
+        };
+      });
 
       const merged = {
         ...settings,
@@ -354,7 +491,7 @@ serve(async (req) => {
         .update({ settings: merged })
         .eq("id", org.id);
       if (updateError) {
-        return new Response(JSON.stringify({ error: "Failed to revoke token" }), {
+        return new Response(JSON.stringify({ error: "Failed to update token" }), {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -456,6 +593,7 @@ serve(async (req) => {
 
     const plainToken = randomToken();
     const tokenHash = await sha256Hex(plainToken);
+    const tokenEncrypted = await encryptSecretValue(plainToken, embedSecret);
     const tokenId = randomId();
     const persistentTokens = getPersistentTokens(embed);
     const entry: PersistentTokenEntry = {
@@ -463,6 +601,7 @@ serve(async (req) => {
       label: body.label?.trim() || "Persistent Token",
       origin: targetOrigin,
       token_hash: tokenHash,
+      token_encrypted: tokenEncrypted,
       created_at: new Date().toISOString(),
       revoked_at: null,
     };

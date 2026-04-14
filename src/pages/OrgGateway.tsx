@@ -682,6 +682,15 @@ const OrgGatewayContent = ({
           </p>
         </header>
 
+        {selectedAnalytics && (
+          <div className="text-center mb-6">
+            <p className="text-sm text-muted-foreground">
+              Selected analytics:{" "}
+              <span className="font-medium text-foreground">{analyticsDisplayName}</span>
+            </p>
+          </div>
+        )}
+
         {/* Step Indicator */}
         <StepIndicator steps={steps} currentStep={currentStep} />
 
