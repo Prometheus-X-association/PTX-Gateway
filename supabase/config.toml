@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.llm-insights]
 verify_jwt = false
+
+[functions.result-proxy]
+verify_jwt = false

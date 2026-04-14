@@ -755,7 +755,7 @@ The page also provides ready-to-copy iframe/web component snippets.
 **Location**: `public/pdc-gateway.js`
 
 ```html
-<script src="https://your-gateway-domain.com/pdc-gateway.js"></script>
+<script src="https://your-gateway-domain.com/pdc-gateway.js" crossorigin="anonymous"></script>
 <pdc-gateway
   org-slug="your-org-slug"
   theme="dark"
@@ -782,6 +782,9 @@ The page also provides ready-to-copy iframe/web component snippets.
 - Persistent tokens are long-lived and must be revoked manually from Admin.
 - Token validation happens in `supabase/functions/embed-auth/index.ts`.
 - `/embed` denies access when token is missing/invalid/expired or origin is not allowed.
+- `/:slug` is the public direct-access route and is intended for normal browser navigation, not embedded usage.
+- `/:slug` now refuses to run inside an iframe. Embedded integrations must use `/embed?...&token=...`.
+- Use `/embed?...&token=...` for origin-bound iframe and web component access control.
 - If parent site uses strict `Referrer-Policy: no-referrer`, origin validation may fail.
 
 ### Event Communication

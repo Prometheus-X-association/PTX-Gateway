@@ -397,7 +397,7 @@ const ResourceDetailsModal = ({ resource, open, onOpenChange, onSave, isSaving }
                       type="password"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Authorization header for fetching results (overrides PDC fallback authorization if set)
+                      Authorization for fetching results. You can enter either a full value like <code>Bearer your-token</code> or just the raw token; the gateway will normalize it.
                     </p>
                   </div>
 

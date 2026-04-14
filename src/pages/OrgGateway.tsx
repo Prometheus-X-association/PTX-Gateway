@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { Sparkles, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import StepIndicator from "@/components/StepIndicator";
 import AnalyticsSelection from "@/components/AnalyticsSelection";
@@ -21,6 +21,8 @@ import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { Json } from "@/integrations/supabase/types";
 import { applyOrganizationVisualizationSettings, getVisualizationSettingsFromOrgSettings } from "@/utils/visualizationSettings";
+import { getParamValuesMap } from "@/types/dataspace";
+import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
 
 interface SelectedDataType {
   files: File[];
@@ -41,6 +43,71 @@ interface Organization {
   slug: string;
   settings?: Record<string, unknown> | null;
 }
+
+const findPreselectedAnalytics = (
+  searchParams: URLSearchParams,
+  softwareResources: SoftwareResource[],
+  serviceChains: ServiceChain[],
+): AnalyticsOption | null => {
+  const softwareId = searchParams.get("software_id");
+  const softwareUrl = searchParams.get("software_url");
+  const serviceChainId = searchParams.get("service_chain_id");
+  const catalogId = searchParams.get("catalog_id");
+
+  if (softwareId) {
+    const match = softwareResources.find((item) => item.id === softwareId);
+    if (match) return { type: "software", data: match };
+  }
+
+  if (softwareUrl) {
+    const match = softwareResources.find((item) => item.resource_url === softwareUrl);
+    if (match) return { type: "software", data: match };
+  }
+
+  if (serviceChainId) {
+    const match = serviceChains.find((item) => item.id === serviceChainId);
+    if (match) return { type: "serviceChain", data: match };
+  }
+
+  if (catalogId) {
+    const match = serviceChains.find((item) => item.catalog_id === catalogId);
+    if (match) return { type: "serviceChain", data: match };
+  }
+
+  return null;
+};
+
+const hasPreselectionTarget = (searchParams: URLSearchParams): boolean =>
+  Boolean(
+    searchParams.get("software_id") ||
+    searchParams.get("software_url") ||
+    searchParams.get("service_chain_id") ||
+    searchParams.get("catalog_id")
+  );
+
+const buildPreselectedQueryParams = (
+  searchParams: URLSearchParams,
+  option: AnalyticsOption,
+  sessionId: string,
+): Record<string, string> => {
+  if (option.type !== "software") return {};
+
+  const defaults = getParamValuesMap(option.data.parameters);
+  const next: Record<string, string> = {};
+
+  Object.entries(defaults).forEach(([key, value]) => {
+    next[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+  });
+
+  Object.keys(defaults).forEach((key) => {
+    const incoming = searchParams.get(key);
+    if (incoming !== null) {
+      next[key] = incoming;
+    }
+  });
+
+  return next;
+};
 
 // Helper functions for parsing (same as useDataspaceConfig)
 const parseParameters = (params: Json | null): { paramName: string; paramValue: string; paramAction?: string }[] => {
@@ -168,6 +235,15 @@ const clearPersistedOrgFlow = (slug: string): void => {
   localStorage.removeItem(getOrgFlowStorageKey(slug));
 };
 
+const isEmbeddedFrame = (): boolean => {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+};
+
 const buildDummySkillResult = (error: unknown, organizationName: string) => {
   const categories = [
     "Data Management",
@@ -236,6 +312,7 @@ const OrgGatewayContent = ({
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
 }) => {
+  const [searchParams] = useSearchParams();
   const { user, isAdmin, isAuthenticated
  } = useAuth();
   const isDebugMode = isAdmin && user?.isDebugMode;
@@ -268,6 +345,8 @@ const OrgGatewayContent = ({
   const [allowContinueOnPdcError, setAllowContinueOnPdcError] = useState(false);
   const [forcedResultData, setForcedResultData] = useState<unknown | null>(null);
   const [forcedResultNotice, setForcedResultNotice] = useState<string | null>(null);
+  const hasPreselection = hasPreselectionTarget(searchParams);
+  const skipSelection = hasPreselection && searchParams.get("skip_selection") !== "false";
 
   useEffect(() => {
     let isMounted = true;
@@ -368,6 +447,33 @@ const OrgGatewayContent = ({
     const previousIndex = Math.max(0, processingIndex - 1);
     setCurrentStep(previousIndex);
   }, [organization.slug, getStepIndex]);
+
+  useEffect(() => {
+    if (!skipSelection || selectedAnalytics) return;
+
+    const preselected = findPreselectedAnalytics(searchParams, softwareResources, serviceChains);
+    if (!preselected) return;
+
+    resetSession();
+    clearPersistedOrgFlow(organization.slug);
+    setPersistedFlow(null);
+    setProcessingFailed(false);
+    setForcedResultData(null);
+    setForcedResultNotice(null);
+    setSelectedAnalytics(preselected);
+    setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
+    setCurrentStep(getStepIndex("Choose Data"));
+  }, [
+    skipSelection,
+    selectedAnalytics,
+    searchParams,
+    softwareResources,
+    serviceChains,
+    resetSession,
+    organization.slug,
+    sessionId,
+    getStepIndex,
+  ]);
 
   // Generate PDC payload when we have analytics and data selected
   const pdcPayload: PdcPayload | null = useMemo(() => {
@@ -677,6 +783,12 @@ const OrgGateway = () => {
     let mounted = true;
 
     const fetchOrgData = async () => {
+      if (isEmbeddedFrame()) {
+        setError("Embedded access is only supported through /embed with a valid embed token.");
+        setIsLoading(false);
+        return;
+      }
+
       if (!slug) {
         setError("Organization not specified");
         setIsLoading(false);
@@ -734,7 +846,8 @@ const OrgGateway = () => {
         });
 
         if (tokenError || !tokenData?.ok || !tokenData?.token) {
-          throw new Error(tokenData?.error || tokenError?.message || "Failed to initialize processing token");
+          const reason = tokenData?.error || tokenError?.message || "Failed to initialize processing token";
+          throw new Error(`Gateway initialization failed: ${reason}`);
         }
         setOrgExecutionToken(tokenData.token as string);
 
@@ -851,7 +964,7 @@ const OrgGateway = () => {
         setIsLoading(false);
       } catch (err) {
         console.error("Error fetching organization data:", err);
-        setError("Failed to load organization data");
+        setError(err instanceof Error ? err.message : "Failed to load organization data");
         setIsLoading(false);
       }
     };

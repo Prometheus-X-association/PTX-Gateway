@@ -4,6 +4,12 @@
     var theme = element.getAttribute("theme") || "dark";
     var token = element.getAttribute("token");
     var gatewayOrigin = element.getAttribute("gateway-origin");
+    var softwareId = element.getAttribute("software-id");
+    var softwareUrl = element.getAttribute("software-url");
+    var serviceChainId = element.getAttribute("service-chain-id");
+    var catalogId = element.getAttribute("catalog-id");
+    var skipSelection = element.getAttribute("skip-selection");
+    var queryParams = element.getAttribute("query-params");
 
     var baseOrigin = gatewayOrigin || window.PDC_GATEWAY_ORIGIN || window.location.origin;
     var embedUrl = new URL("/embed", baseOrigin);
@@ -11,6 +17,16 @@
     if (orgSlug) embedUrl.searchParams.set("org", orgSlug);
     if (theme) embedUrl.searchParams.set("theme", theme);
     if (token) embedUrl.searchParams.set("token", token);
+    if (softwareId) embedUrl.searchParams.set("software_id", softwareId);
+    if (softwareUrl) embedUrl.searchParams.set("software_url", softwareUrl);
+    if (serviceChainId) embedUrl.searchParams.set("service_chain_id", serviceChainId);
+    if (catalogId) embedUrl.searchParams.set("catalog_id", catalogId);
+    if (skipSelection) embedUrl.searchParams.set("skip_selection", skipSelection);
+    if (queryParams) {
+      new URLSearchParams(queryParams).forEach(function (value, key) {
+        embedUrl.searchParams.set(key, value);
+      });
+    }
 
     return embedUrl.toString();
   }
@@ -20,7 +36,7 @@
 
     class PDCGatewayElement extends HTMLElement {
       static get observedAttributes() {
-        return ["org-slug", "theme", "token", "gateway-origin", "height"];
+        return ["org-slug", "theme", "token", "gateway-origin", "height", "software-id", "software-url", "service-chain-id", "catalog-id", "skip-selection", "query-params"];
       }
 
       connectedCallback() {

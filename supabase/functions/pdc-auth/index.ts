@@ -6,6 +6,11 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const LOCAL_SUPABASE_URL_FALLBACK = "http://kong:8000";
+const LOCAL_SUPABASE_ANON_KEY_FALLBACK =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+const LOCAL_SUPABASE_JWT_FALLBACK = "super-secret-jwt-token-with-at-least-32-characters-long";
+
 type IssuePublicBody = {
   action: "issue_public";
   org_slug: string;
@@ -46,15 +51,26 @@ const issueSignedToken = async (payload: Record<string, unknown>, secret: string
 
 const isValidSlug = (value: string): boolean => /^[a-z0-9-]{2,100}$/i.test(value);
 
+const getSupabaseUrl = (): string | null =>
+  Deno.env.get("SUPABASE_URL") || LOCAL_SUPABASE_URL_FALLBACK;
+
+const getSupabaseAnonKey = (): string | null =>
+  Deno.env.get("SUPABASE_ANON_KEY") || LOCAL_SUPABASE_ANON_KEY_FALLBACK;
+
+const getExecutionTokenSecret = (): string | null =>
+  Deno.env.get("PDC_EXECUTE_TOKEN_SECRET") ||
+  Deno.env.get("SUPABASE_INTERNAL_JWT_SECRET") ||
+  LOCAL_SUPABASE_JWT_FALLBACK;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
-    const executeTokenSecret = Deno.env.get("PDC_EXECUTE_TOKEN_SECRET");
+    const supabaseUrl = getSupabaseUrl();
+    const supabaseAnonKey = getSupabaseAnonKey();
+    const executeTokenSecret = getExecutionTokenSecret();
 
     if (!supabaseUrl || !supabaseAnonKey || !executeTokenSecret) {
       return new Response(

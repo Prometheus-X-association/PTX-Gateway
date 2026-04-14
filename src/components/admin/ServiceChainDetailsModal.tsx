@@ -402,6 +402,9 @@ const ServiceChainDetailsModal = ({ chain, open, onOpenChange, onSave, isSaving 
                     placeholder="Bearer <token>"
                     type="password"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    You can enter <code>Bearer your-token</code> or just the raw token; the gateway will normalize it.
+                  </p>
                 </div>
               )}
 
@@ -668,6 +671,9 @@ const ServiceChainDetailsModal = ({ chain, open, onOpenChange, onSave, isSaving 
                                           placeholder="Bearer <token>"
                                           type="password"
                                         />
+                                        <p className="text-xs text-muted-foreground">
+                                          You can enter <code>Bearer your-token</code> or just the raw token; the gateway will normalize it.
+                                        </p>
                                       </div>
                                     </div>
                                   )}

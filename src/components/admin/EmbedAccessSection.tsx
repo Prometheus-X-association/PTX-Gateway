@@ -337,7 +337,7 @@ const EmbedAccessSection = () => {
   }, [issuedToken, orgSlug, normalizedGatewayOrigin]);
 
   const webComponentScriptSnippet = useMemo(() => {
-    return `<script src="${normalizedGatewayOrigin}/pdc-gateway.js"></script>`;
+    return `<script src="${normalizedGatewayOrigin}/pdc-gateway.js" crossorigin="anonymous"></script>`;
   }, [normalizedGatewayOrigin]);
 
   const fullWebComponentExample = useMemo(() => {
@@ -443,6 +443,9 @@ ${webComponentSnippet}`;
 
         <div className="space-y-2">
           <Label>Allowed Origins</Label>
+          <p className="text-xs text-muted-foreground">
+            Embedded integrations must use the protected <code>/embed</code> route. The public <code>/:slug</code> route is for direct browser access and is blocked inside iframes.
+          </p>
           <div className="flex gap-2">
             <Input
               value={newOrigin}
@@ -676,11 +679,21 @@ ${webComponentSnippet}`;
                 <li>Add your external host domain in Allowed Origins (example: <code>https://app.example.com</code>).</li>
                 <li>Issue an embed token (temporary or persistent).</li>
                 <li>Set Gateway Base URL to a publicly reachable PTX Gateway host (avoid localhost for external sites).</li>
+                <li>Do not embed the public <code>/:slug</code> URL. Embedded usage must go through <code>/embed</code> with a valid token.</li>
               </ul>
             </div>
 
             <div className="space-y-2">
-              <p className="font-medium">2. Iframe (Copy/Paste)</p>
+              <p className="font-medium">2. Route Rules</p>
+              <div className="rounded border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+                <p><code>/:slug</code> is for direct public access in a normal browser tab.</p>
+                <p><code>/embed?org=...&token=...</code> is required for iframe and web component integrations.</p>
+                <p>If you load <code>/:slug</code> inside an iframe, the gateway now refuses to run and tells the user to use <code>/embed</code>.</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="font-medium">3. Iframe (Copy/Paste)</p>
               <div className="rounded border bg-muted/40 p-3">
                 <pre className="text-xs whitespace-pre-wrap break-all">{iframeSnippet || "<issue token first to generate snippet>"}</pre>
               </div>
@@ -693,7 +706,7 @@ ${webComponentSnippet}`;
             </div>
 
             <div className="space-y-2">
-              <p className="font-medium">3. Web Component (Copy/Paste)</p>
+              <p className="font-medium">4. Web Component (Copy/Paste)</p>
               <div className="rounded border bg-muted/40 p-3">
                 <pre className="text-xs whitespace-pre-wrap break-all">{fullWebComponentExample || "<issue token first to generate snippet>"}</pre>
               </div>
@@ -716,6 +729,7 @@ ${webComponentSnippet}`;
               <p>- Temporary tokens are safer for external sites; persistent tokens are for trusted internal apps.</p>
               <p>- Set Gateway Base URL to a reachable public URL; localhost usually fails from external servers.</p>
               <p>- If parent page is HTTPS, use HTTPS Gateway Base URL to avoid mixed-content blocking.</p>
+              <p>- For web components, load <code>pdc-gateway.js</code> with <code>crossorigin="anonymous"</code>.</p>
             </div>
           </div>
         </DialogContent>
