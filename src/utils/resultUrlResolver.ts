@@ -109,7 +109,10 @@ export const resolveResultUrl = (
           isServiceChain: true,
           isFallback: false,
           description: `Result from last embedded resource representation (${lastResource.resource_name || 'unnamed'})`,
-          authorization: serviceChain.result_authorization || undefined,
+          authorization:
+            lastResource.result_authorization ||
+            serviceChain.result_authorization ||
+            undefined,
         };
       }
     }

@@ -10,7 +10,7 @@ export class PDCGatewayElement extends HTMLElement {
   private mountPoint: HTMLDivElement | null = null;
 
   static get observedAttributes() {
-    return ['org-slug', 'theme', 'token'];
+    return ['org-slug', 'theme', 'token', 'gateway-origin', 'height', 'software-id', 'software-url', 'service-chain-id', 'catalog-id', 'skip-selection', 'query-params'];
   }
 
   connectedCallback() {
@@ -54,6 +54,13 @@ export class PDCGatewayElement extends HTMLElement {
     const orgSlug = this.getAttribute('org-slug');
     const theme = this.getAttribute('theme') || 'dark';
     const token = this.getAttribute('token');
+    const gatewayOrigin = this.getAttribute('gateway-origin');
+    const softwareId = this.getAttribute('software-id');
+    const softwareUrl = this.getAttribute('software-url');
+    const serviceChainId = this.getAttribute('service-chain-id');
+    const catalogId = this.getAttribute('catalog-id');
+    const skipSelection = this.getAttribute('skip-selection');
+    const queryParams = this.getAttribute('query-params');
     
     // Create or update the iframe
     let iframe = this.mountPoint.querySelector('iframe');
@@ -66,11 +73,20 @@ export class PDCGatewayElement extends HTMLElement {
     }
     
     // Build the embed URL
-    const baseUrl = window.location.origin;
+    const baseUrl = gatewayOrigin || window.location.origin;
     const embedUrl = new URL('/embed', baseUrl);
     if (orgSlug) embedUrl.searchParams.set('org', orgSlug);
     if (theme) embedUrl.searchParams.set('theme', theme);
     if (token) embedUrl.searchParams.set('token', token);
+    if (softwareId) embedUrl.searchParams.set('software_id', softwareId);
+    if (softwareUrl) embedUrl.searchParams.set('software_url', softwareUrl);
+    if (serviceChainId) embedUrl.searchParams.set('service_chain_id', serviceChainId);
+    if (catalogId) embedUrl.searchParams.set('catalog_id', catalogId);
+    if (skipSelection) embedUrl.searchParams.set('skip_selection', skipSelection);
+    if (queryParams) {
+      const nestedParams = new URLSearchParams(queryParams);
+      nestedParams.forEach((value, key) => embedUrl.searchParams.set(key, value));
+    }
     
     iframe.src = embedUrl.toString();
   }

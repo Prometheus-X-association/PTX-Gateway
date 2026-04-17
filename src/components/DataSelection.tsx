@@ -518,7 +518,6 @@ const DataSelection = ({ onNext, onBack, dataResources, selectedAnalytics, isDeb
           Upload documents or connect to data APIs from the dataspace
         </p>
       </div>
-
       <div className="max-w-3xl mx-auto space-y-8 mb-8">
         {/* Upload Documents Section - Only show if there are upload resources */}
         {uploadResources.length > 0 && (

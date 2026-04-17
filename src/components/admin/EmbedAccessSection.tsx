@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, ShieldCheck, Plus, Trash2, KeyRound, Copy } from "lucide-react";
 import { BookOpen } from "lucide-react";
 import { toast } from "sonner";
@@ -22,6 +23,7 @@ interface PersistentTokenInfo {
   origin: string;
   created_at: string;
   revoked_at?: string | null;
+  deleted_at?: string | null;
 }
 
 interface IssuedTokenHistoryItem {
@@ -43,7 +45,10 @@ interface TokenRow {
   label?: string;
   created_at: string;
   revoked_at?: string | null;
+  deleted_at?: string | null;
 }
+
+type EmbedPreselectionType = "none" | "software_id" | "software_url" | "service_chain_id" | "catalog_id";
 
 const DEFAULT_EMBED_SETTINGS: EmbedSettingsState = {
   embed_enabled: true,
@@ -72,10 +77,17 @@ const EmbedAccessSection = () => {
   const [selectedIssuedTokenId, setSelectedIssuedTokenId] = useState<string>("");
   const [newOrigin, setNewOrigin] = useState("");
   const [revokingTokenId, setRevokingTokenId] = useState<string | null>(null);
+  const [activatingTokenId, setActivatingTokenId] = useState<string | null>(null);
+  const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
+  const [viewingTokenId, setViewingTokenId] = useState<string | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
   const [gatewayBaseUrl, setGatewayBaseUrl] = useState(
     typeof window !== "undefined" ? window.location.origin : "https://your-gateway-domain.com"
   );
+  const [preselectionType, setPreselectionType] = useState<EmbedPreselectionType>("none");
+  const [preselectionValue, setPreselectionValue] = useState("");
+  const [preselectionQueryParams, setPreselectionQueryParams] = useState("");
+  const [skipAnalyticsSelection, setSkipAnalyticsSelection] = useState(true);
 
   const orgSlug = user?.organization?.slug || "";
 
@@ -86,6 +98,39 @@ const EmbedAccessSection = () => {
       return typeof window !== "undefined" ? window.location.origin : "https://your-gateway-domain.com";
     }
   }, [gatewayBaseUrl]);
+
+  const buildEmbedUrl = useMemo(() => {
+    if (!orgSlug || !issuedToken) return "";
+
+    const url = new URL("/embed", normalizedGatewayOrigin);
+    url.searchParams.set("org", orgSlug);
+    url.searchParams.set("theme", "dark");
+    url.searchParams.set("token", issuedToken);
+
+    if (preselectionType !== "none" && preselectionValue.trim()) {
+      url.searchParams.set(preselectionType, preselectionValue.trim());
+      if (skipAnalyticsSelection) {
+        url.searchParams.set("skip_selection", "true");
+      }
+    }
+
+    if (preselectionQueryParams.trim()) {
+      const nestedParams = new URLSearchParams(preselectionQueryParams.trim());
+      nestedParams.forEach((value, key) => {
+        url.searchParams.set(key, value);
+      });
+    }
+
+    return url.toString();
+  }, [
+    issuedToken,
+    orgSlug,
+    normalizedGatewayOrigin,
+    preselectionType,
+    preselectionValue,
+    preselectionQueryParams,
+    skipAnalyticsSelection,
+  ]);
 
   const fetchSettings = async () => {
     if (!user?.organization?.id) return;
@@ -113,6 +158,7 @@ const EmbedAccessSection = () => {
           origin: String(item.origin || ""),
           created_at: String(item.created_at || ""),
           revoked_at: item.revoked_at ? String(item.revoked_at) : null,
+          deleted_at: item.deleted_at ? String(item.deleted_at) : null,
         }))
         .filter((item) => item.id && item.origin);
 
@@ -325,19 +371,96 @@ const EmbedAccessSection = () => {
     }
   };
 
+  const handleActivatePersistentToken = async (tokenId: string) => {
+    if (!orgSlug) return;
+    setActivatingTokenId(tokenId);
+    try {
+      const { data, error } = await supabase.functions.invoke("embed-auth", {
+        body: {
+          action: "activate_persistent",
+          org_slug: orgSlug,
+          token_id: tokenId,
+        },
+      });
+      if (error || !data?.ok) {
+        throw new Error(data?.error || error?.message || "Failed to activate token");
+      }
+      toast.success("Persistent token activated");
+      await fetchSettings();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to activate token");
+    } finally {
+      setActivatingTokenId(null);
+    }
+  };
+
+  const handleDeletePersistentToken = async (tokenId: string) => {
+    if (!orgSlug) return;
+    setDeletingTokenId(tokenId);
+    try {
+      const { data, error } = await supabase.functions.invoke("embed-auth", {
+        body: {
+          action: "delete_persistent",
+          org_slug: orgSlug,
+          token_id: tokenId,
+        },
+      });
+      if (error || !data?.ok) {
+        throw new Error(data?.error || error?.message || "Failed to delete token");
+      }
+      toast.success("Persistent token deleted");
+      await fetchSettings();
+      if (selectedTokenRow?.token_id === tokenId) {
+        setIssuedToken("");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete token");
+    } finally {
+      setDeletingTokenId(null);
+    }
+  };
+
   const iframeSnippet = useMemo(() => {
-    if (!orgSlug || !issuedToken) return "";
-    const src = `${normalizedGatewayOrigin}/embed?org=${encodeURIComponent(orgSlug)}&theme=dark&token=${encodeURIComponent(issuedToken)}`;
+    if (!buildEmbedUrl) return "";
+    const src = buildEmbedUrl;
     return `<iframe src="${src}" width="100%" height="800" style="border:0;" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
-  }, [issuedToken, orgSlug, normalizedGatewayOrigin]);
+  }, [buildEmbedUrl]);
 
   const webComponentSnippet = useMemo(() => {
     if (!orgSlug || !issuedToken) return "";
-    return `<pdc-gateway org-slug="${orgSlug}" theme="dark" token="${issuedToken}" gateway-origin="${normalizedGatewayOrigin}" height="800"></pdc-gateway>`;
-  }, [issuedToken, orgSlug, normalizedGatewayOrigin]);
+    const attrs = [
+      `org-slug="${orgSlug}"`,
+      `theme="dark"`,
+      `token="${issuedToken}"`,
+      `gateway-origin="${normalizedGatewayOrigin}"`,
+      `height="800"`,
+    ];
+
+    if (preselectionType !== "none" && preselectionValue.trim()) {
+      const attrName = preselectionType.replace(/_/g, "-");
+      attrs.push(`${attrName}="${preselectionValue.trim()}"`);
+      if (skipAnalyticsSelection) {
+        attrs.push(`skip-selection="true"`);
+      }
+    }
+
+    if (preselectionQueryParams.trim()) {
+      attrs.push(`query-params="${preselectionQueryParams.trim()}"`);
+    }
+
+    return `<pdc-gateway ${attrs.join(" ")}></pdc-gateway>`;
+  }, [
+    issuedToken,
+    orgSlug,
+    normalizedGatewayOrigin,
+    preselectionType,
+    preselectionValue,
+    preselectionQueryParams,
+    skipAnalyticsSelection,
+  ]);
 
   const webComponentScriptSnippet = useMemo(() => {
-    return `<script src="${normalizedGatewayOrigin}/pdc-gateway.js"></script>`;
+    return `<script src="${normalizedGatewayOrigin}/pdc-gateway.js" crossorigin="anonymous"></script>`;
   }, [normalizedGatewayOrigin]);
 
   const fullWebComponentExample = useMemo(() => {
@@ -360,7 +483,53 @@ ${webComponentSnippet}`;
     setSelectedIssuedTokenId(id);
     const selected = tokenRows.find((item) => item.id === id);
     if (selected) {
-      setIssuedToken(selected.token);
+      if (selected.deleted_at) {
+        setIssuedToken("");
+        setIssuedTokenType(selected.token_type);
+        toast.error("This token was deleted and can no longer be viewed");
+        return;
+      }
+
+      if (selected.token) {
+        setIssuedToken(selected.token);
+      } else if (selected.token_type === "persistent" && selected.token_id && orgSlug) {
+        void (async () => {
+          setViewingTokenId(selected.token_id!);
+          try {
+            const { data, error } = await supabase.functions.invoke("embed-auth", {
+              body: {
+                action: "view_persistent",
+                org_slug: orgSlug,
+                token_id: selected.token_id,
+              },
+            });
+            if (error || !data?.ok) {
+              throw new Error(data?.error || error?.message || "Failed to view token");
+            }
+
+            const tokenValue = typeof data.token === "string" ? data.token : "";
+            setIssuedToken(tokenValue);
+
+            if (tokenValue) {
+              setIssuedTokenHistory((prev) => {
+                const next = prev.map((item) =>
+                  item.token_id === selected.token_id ? { ...item, token: tokenValue } : item
+                );
+                const orgId = user?.organization?.id;
+                if (orgId) persistIssuedTokenHistory(orgId, next);
+                return next;
+              });
+            }
+          } catch (err) {
+            setIssuedToken("");
+            toast.error(err instanceof Error ? err.message : "Failed to view token");
+          } finally {
+            setViewingTokenId(null);
+          }
+        })();
+      } else {
+        setIssuedToken("");
+      }
       setIssuedTokenType(selected.token_type);
     }
   };
@@ -374,6 +543,7 @@ ${webComponentSnippet}`;
         label: item.label || persistentMeta?.label,
         origin: item.origin || persistentMeta?.origin || "",
         revoked_at: persistentMeta?.revoked_at ?? null,
+        deleted_at: persistentMeta?.deleted_at ?? null,
         created_at: item.created_at || persistentMeta?.created_at || new Date().toISOString(),
       };
     });
@@ -395,12 +565,18 @@ ${webComponentSnippet}`;
         label: p.label,
         created_at: p.created_at,
         revoked_at: p.revoked_at ?? null,
+        deleted_at: p.deleted_at ?? null,
       }));
 
     return [...historyRows, ...persistentOnlyRows].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
   }, [issuedTokenHistory, persistentTokens]);
+
+  const selectedTokenRow = useMemo(
+    () => tokenRows.find((item) => item.id === selectedIssuedTokenId) || null,
+    [tokenRows, selectedIssuedTokenId]
+  );
 
   if (isLoading) {
     return (
@@ -443,6 +619,9 @@ ${webComponentSnippet}`;
 
         <div className="space-y-2">
           <Label>Allowed Origins</Label>
+          <p className="text-xs text-muted-foreground">
+            Embedded integrations must use the protected <code>/embed</code> route. The public <code>/:slug</code> route is for direct browser access and is blocked inside iframes.
+          </p>
           <div className="flex gap-2">
             <Input
               value={newOrigin}
@@ -543,56 +722,99 @@ ${webComponentSnippet}`;
             )}
           </Button>
 
-          {issuedToken && (
+          {(issuedToken || tokenRows.length > 0 || !!selectedIssuedTokenId) && (
             <div className="space-y-3">
               {tokenRows.length > 0 && (
                 <div>
                   <Label className="text-xs">Issued Tokens</Label>
                   <div className="mt-1 max-h-44 overflow-auto rounded border divide-y">
-                    {tokenRows.map((item) => (
-                      <div
-                        key={item.id}
-                        className={`px-3 py-2 flex items-center justify-between gap-3 ${
-                          selectedIssuedTokenId === item.id ? "bg-primary/10" : "bg-background"
-                        }`}
-                      >
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium truncate">
-                            {item.token_type === "persistent" ? "Persistent" : "Temporary"} • {item.origin}
-                          </p>
-                          <p className="text-[11px] text-muted-foreground truncate">
-                            {new Date(item.created_at).toLocaleString()}
-                            {item.label ? ` • ${item.label}` : ""} {item.revoked_at ? "• Revoked" : ""}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            variant={selectedIssuedTokenId === item.id ? "default" : "outline"}
-                            size="sm"
-                            disabled={!item.token}
-                            onClick={() => handleSelectIssuedToken(item.id)}
-                          >
-                            View
-                          </Button>
-                          {item.token_type === "persistent" && item.token_id && (
+                    {tokenRows.map((item) => {
+                      const isSelected = selectedIssuedTokenId === item.id;
+                      const isDeleted = !!item.deleted_at;
+                      const isRevoked = !!item.revoked_at;
+
+                      return (
+                        <div
+                          key={item.id}
+                          className={`px-3 py-2 flex items-center justify-between gap-3 transition-opacity ${
+                            isDeleted
+                              ? "bg-muted/40 opacity-60"
+                              : isSelected
+                                ? "bg-primary/10"
+                                : "bg-background"
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-medium truncate">
+                              {item.token_type === "persistent" ? "Persistent" : "Temporary"} • {item.origin}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground truncate">
+                              {new Date(item.created_at).toLocaleString()}
+                              {item.label ? ` • ${item.label}` : ""}
+                              {isDeleted ? " • Deleted" : isRevoked ? " • Revoked" : ""}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
                             <Button
                               type="button"
-                              variant="outline"
+                              variant={isSelected ? "default" : "outline"}
                               size="sm"
-                              disabled={!!item.revoked_at || revokingTokenId === item.token_id}
-                              onClick={() => handleRevokePersistentToken(item.token_id!)}
+                              disabled={isDeleted}
+                              onClick={() => handleSelectIssuedToken(item.id)}
                             >
-                              {revokingTokenId === item.token_id ? (
+                              {item.token_type === "persistent" && item.token_id && viewingTokenId === item.token_id ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
-                                "Revoke"
+                                "View"
                               )}
                             </Button>
-                          )}
+                            {item.token_type === "persistent" && item.token_id && (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isDeleted || isRevoked || revokingTokenId === item.token_id}
+                                  onClick={() => handleRevokePersistentToken(item.token_id!)}
+                                >
+                                  {revokingTokenId === item.token_id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    "Revoke"
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isDeleted || !isRevoked || activatingTokenId === item.token_id}
+                                  onClick={() => handleActivatePersistentToken(item.token_id!)}
+                                >
+                                  {activatingTokenId === item.token_id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    "Activate"
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isDeleted || deletingTokenId === item.token_id}
+                                  onClick={() => handleDeletePersistentToken(item.token_id!)}
+                                >
+                                  {deletingTokenId === item.token_id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    "Delete"
+                                  )}
+                                </Button>
+                              </>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -602,8 +824,24 @@ ${webComponentSnippet}`;
                   Token ({issuedTokenType === "persistent" ? "Persistent" : "Temporary"})
                 </Label>
                 <div className="flex gap-2 mt-1">
-                  <Input value={issuedToken} readOnly className="font-mono text-xs" />
-                  <Button variant="outline" size="icon" onClick={() => copyText(issuedToken, "Token")}>
+                  <Input
+                    value={
+                      issuedToken ||
+                      (selectedTokenRow?.deleted_at
+                        ? "This token was deleted and is no longer available"
+                        : selectedTokenRow && !selectedTokenRow.token
+                          ? "Token value is not available anymore"
+                          : "")
+                    }
+                    readOnly
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => copyText(issuedToken, "Token")}
+                    disabled={!issuedToken}
+                  >
                     <Copy className="h-4 w-4" />
                   </Button>
                 </div>
@@ -611,7 +849,11 @@ ${webComponentSnippet}`;
 
               {selectedIssuedTokenId && (
                 <p className="text-xs text-muted-foreground">
-                  Showing selected issued token details. Tokens issued before this feature may not be listed.
+                  {selectedTokenRow?.deleted_at
+                    ? "This token was deleted. It stays listed for audit visibility, but it can no longer be viewed or reused. Ask an admin to create a new one if access is still needed."
+                    : selectedTokenRow && !selectedTokenRow.token
+                      ? "Showing selected token metadata only. Older persistent tokens may not have a recoverable stored value. Newly issued persistent tokens can be viewed again from the database-backed list."
+                      : "Showing selected issued token details from the database-backed token list."}
                 </p>
               )}
 
@@ -628,6 +870,77 @@ ${webComponentSnippet}`;
                 <p className="text-[11px] text-muted-foreground mt-1">
                   Use the public PTX Gateway URL reachable from the external site (not localhost unless same machine).
                 </p>
+              </div>
+
+              <div className="rounded-lg border p-4 space-y-3">
+                <div>
+                  <Label className="text-xs">Preselected Analytics (Optional)</Label>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Configure iframe/web component snippets to open directly at the data step with a preselected software resource or service chain.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Preselection Type</Label>
+                    <Select
+                      value={preselectionType}
+                      onValueChange={(value) => {
+                        setPreselectionType(value as EmbedPreselectionType);
+                        setPreselectionValue("");
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Choose type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="software_id">Software ID</SelectItem>
+                        <SelectItem value="software_url">Software URL</SelectItem>
+                        <SelectItem value="service_chain_id">Service Chain ID</SelectItem>
+                        <SelectItem value="catalog_id">Service Chain Catalog ID</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Preselection Value</Label>
+                    <Input
+                      value={preselectionValue}
+                      onChange={(e) => setPreselectionValue(e.target.value)}
+                      placeholder={
+                        preselectionType === "software_id" ? "Resource UUID" :
+                        preselectionType === "software_url" ? "https://api.../softwareresources/..." :
+                        preselectionType === "service_chain_id" ? "Service chain UUID" :
+                        preselectionType === "catalog_id" ? "Catalog ID" :
+                        "Not used"
+                      }
+                      disabled={preselectionType === "none"}
+                      className="font-mono text-xs"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between rounded border px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium">Skip Analytics Selection</p>
+                    <p className="text-xs text-muted-foreground">Go directly to the data step when a preselection value is provided.</p>
+                  </div>
+                  <Switch
+                    checked={skipAnalyticsSelection}
+                    onCheckedChange={setSkipAnalyticsSelection}
+                    disabled={preselectionType === "none" || !preselectionValue.trim()}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Additional Query Params (Optional)</Label>
+                  <Input
+                    value={preselectionQueryParams}
+                    onChange={(e) => setPreselectionQueryParams(e.target.value)}
+                    placeholder="country=DE&year=2025"
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    For software resources, matching query param names prefill analytics parameters. Example: <code>country=DE&year=2025</code>.
+                  </p>
+                </div>
               </div>
 
               <div>
@@ -676,11 +989,34 @@ ${webComponentSnippet}`;
                 <li>Add your external host domain in Allowed Origins (example: <code>https://app.example.com</code>).</li>
                 <li>Issue an embed token (temporary or persistent).</li>
                 <li>Set Gateway Base URL to a publicly reachable PTX Gateway host (avoid localhost for external sites).</li>
+                <li>Do not embed the public <code>/:slug</code> URL. Embedded usage must go through <code>/embed</code> with a valid token.</li>
+                <li>Optional: configure a preselected analytics target to skip the Select Type step in the embedded flow.</li>
               </ul>
             </div>
 
             <div className="space-y-2">
-              <p className="font-medium">2. Iframe (Copy/Paste)</p>
+              <p className="font-medium">2. Route Rules</p>
+              <div className="rounded border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+                <p><code>/:slug</code> is for direct public access in a normal browser tab.</p>
+                <p><code>/embed?org=...&token=...</code> is required for iframe and web component integrations.</p>
+                <p>If you load <code>/:slug</code> inside an iframe, the gateway now refuses to run and tells the user to use <code>/embed</code>.</p>
+                <p>Embedded snippets can optionally include <code>software_id</code>, <code>software_url</code>, <code>service_chain_id</code>, or <code>catalog_id</code> plus <code>skip_selection=true</code>.</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="font-medium">3. Where To Get The IDs</p>
+              <div className="rounded border bg-muted/40 p-3 text-xs text-muted-foreground space-y-2">
+                <p><code>software_id</code>: Admin → Resources → Software resources → open Details. Use the internal resource UUID for deterministic preselection.</p>
+                <p><code>software_url</code>: Admin → Resources → Software resources → open Details. Use the Resource URL field if the host system already knows the software resource URL.</p>
+                <p><code>service_chain_id</code>: Admin → Resources → Service chains → open Details. Use the internal chain UUID for deterministic preselection.</p>
+                <p><code>catalog_id</code>: Admin → Resources → Service chains. Use the Catalog ID shown in the service-chain list or details.</p>
+                <p><code>org slug</code>: Use the organization slug shown in the gateway URL or in the authenticated organization context.</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="font-medium">4. Iframe (Copy/Paste)</p>
               <div className="rounded border bg-muted/40 p-3">
                 <pre className="text-xs whitespace-pre-wrap break-all">{iframeSnippet || "<issue token first to generate snippet>"}</pre>
               </div>
@@ -693,7 +1029,7 @@ ${webComponentSnippet}`;
             </div>
 
             <div className="space-y-2">
-              <p className="font-medium">3. Web Component (Copy/Paste)</p>
+              <p className="font-medium">5. Web Component (Copy/Paste)</p>
               <div className="rounded border bg-muted/40 p-3">
                 <pre className="text-xs whitespace-pre-wrap break-all">{fullWebComponentExample || "<issue token first to generate snippet>"}</pre>
               </div>
@@ -710,12 +1046,46 @@ ${webComponentSnippet}`;
               )}
             </div>
 
+            <div className="space-y-2">
+              <p className="font-medium">6. Preselection Examples</p>
+              <div className="rounded border bg-muted/40 p-3 space-y-3 text-xs">
+                <div>
+                  <p className="font-medium mb-1">Software Resource by ID</p>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_id=YOUR_SOFTWARE_UUID&skip_selection=true" width="100%" height="800" style="border:0;"></iframe>`}</pre>
+                </div>
+                <div>
+                  <p className="font-medium mb-1">Software Resource by URL</p>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_url=${encodeURIComponent("https://api.example.com/v1/catalog/softwareresources/...")}&skip_selection=true" width="100%" height="800" style="border:0;"></iframe>`}</pre>
+                </div>
+                <div>
+                  <p className="font-medium mb-1">Service Chain by ID</p>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&service_chain_id=YOUR_CHAIN_UUID&skip_selection=true" width="100%" height="800" style="border:0;"></iframe>`}</pre>
+                </div>
+                <div>
+                  <p className="font-medium mb-1">Service Chain by Catalog ID</p>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&catalog_id=YOUR_CATALOG_ID&skip_selection=true" width="100%" height="800" style="border:0;"></iframe>`}</pre>
+                </div>
+                <div>
+                  <p className="font-medium mb-1">Web Component with Preselected Service Chain</p>
+                  <pre className="whitespace-pre-wrap break-all">{`${webComponentScriptSnippet}
+<pdc-gateway org-slug="${orgSlug || "your-org-slug"}" token="YOUR_EMBED_TOKEN" gateway-origin="${normalizedGatewayOrigin}" service-chain-id="YOUR_CHAIN_UUID" skip-selection="true" height="800"></pdc-gateway>`}</pre>
+                </div>
+                <div>
+                  <p className="font-medium mb-1">Software Prefill Query Params</p>
+                  <pre className="whitespace-pre-wrap break-all">{`${webComponentScriptSnippet}
+<pdc-gateway org-slug="${orgSlug || "your-org-slug"}" token="YOUR_EMBED_TOKEN" gateway-origin="${normalizedGatewayOrigin}" software-id="YOUR_SOFTWARE_UUID" skip-selection="true" query-params="country=DE&year=2025" height="800"></pdc-gateway>`}</pre>
+                </div>
+              </div>
+            </div>
+
             <div className="space-y-1 text-xs text-muted-foreground">
               <p>Notes:</p>
               <p>- Keep embed tokens secret and rotate/revoke when needed.</p>
               <p>- Temporary tokens are safer for external sites; persistent tokens are for trusted internal apps.</p>
               <p>- Set Gateway Base URL to a reachable public URL; localhost usually fails from external servers.</p>
               <p>- If parent page is HTTPS, use HTTPS Gateway Base URL to avoid mixed-content blocking.</p>
+              <p>- For web components, load <code>pdc-gateway.js</code> with <code>crossorigin="anonymous"</code>.</p>
+              <p>- Preselected service chains are most deterministic when you use <code>service_chain_id</code>; <code>catalog_id</code> can match the first visible chain with that catalog id.</p>
             </div>
           </div>
         </DialogContent>

@@ -17,6 +17,21 @@ function isValidUrl(url: string): boolean {
   }
 }
 
+function normalizeAuthorizationHeader(value: string | null): string | null {
+  if (!value) return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const withoutPrefix = trimmed.replace(/^authorization\s*:\s*/i, "").trim();
+
+  if (/^(bearer|basic)\s+/i.test(withoutPrefix)) {
+    return withoutPrefix;
+  }
+
+  return `Bearer ${withoutPrefix}`;
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -26,7 +41,7 @@ serve(async (req) => {
   try {
     // Get target URL and authorization from headers
     const resultUrl = req.headers.get('x-result-url');
-    const resultAuth = req.headers.get('x-result-authorization');
+    const resultAuth = normalizeAuthorizationHeader(req.headers.get('x-result-authorization'));
     const resultMethod = req.headers.get('x-result-method') || 'GET';
 
     console.log('Result proxy request received:', {

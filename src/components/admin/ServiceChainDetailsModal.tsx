@@ -41,6 +41,7 @@ interface EmbeddedResource {
   result_url_source: ResultUrlSource;
   custom_result_url: string | null;
   result_authorization: string | null;
+  result_query_params: ResultQueryParam[];
 }
 
 interface ResultQueryParam {
@@ -402,6 +403,9 @@ const ServiceChainDetailsModal = ({ chain, open, onOpenChange, onSave, isSaving 
                     placeholder="Bearer <token>"
                     type="password"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    You can enter <code>Bearer your-token</code> or just the raw token; the gateway will normalize it.
+                  </p>
                 </div>
               )}
 
@@ -668,6 +672,74 @@ const ServiceChainDetailsModal = ({ chain, open, onOpenChange, onSave, isSaving 
                                           placeholder="Bearer <token>"
                                           type="password"
                                         />
+                                        <p className="text-xs text-muted-foreground">
+                                          You can enter <code>Bearer your-token</code> or just the raw token; the gateway will normalize it.
+                                        </p>
+                                      </div>
+
+                                      <div className="space-y-3">
+                                        <div className="flex items-center justify-between">
+                                          <Label>Embedded Result Query Parameters</Label>
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => {
+                                              const params = [...(resource.result_query_params || [])];
+                                              params.push({ paramName: '', paramValue: '' });
+                                              updateEmbeddedResource(index, { result_query_params: params });
+                                            }}
+                                          >
+                                            <Plus className="h-3 w-3 mr-1" />
+                                            Add Parameter
+                                          </Button>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                          Stored with the embedded resource metadata. Use <code className="bg-muted px-1 rounded">#genSessionId</code> to inject the current session ID.
+                                        </p>
+
+                                        {(resource.result_query_params || []).length === 0 ? (
+                                          <p className="text-xs text-muted-foreground italic">No embedded query parameters configured.</p>
+                                        ) : (
+                                          <div className="space-y-2">
+                                            {(resource.result_query_params || []).map((param, paramIdx) => (
+                                              <div key={paramIdx} className="flex items-center gap-2">
+                                                <Input
+                                                  value={param.paramName}
+                                                  onChange={(e) => {
+                                                    const params = [...(resource.result_query_params || [])];
+                                                    params[paramIdx] = { ...params[paramIdx], paramName: e.target.value };
+                                                    updateEmbeddedResource(index, { result_query_params: params });
+                                                  }}
+                                                  placeholder="Parameter name"
+                                                  className="flex-1"
+                                                />
+                                                <Input
+                                                  value={param.paramValue}
+                                                  onChange={(e) => {
+                                                    const params = [...(resource.result_query_params || [])];
+                                                    params[paramIdx] = { ...params[paramIdx], paramValue: e.target.value };
+                                                    updateEmbeddedResource(index, { result_query_params: params });
+                                                  }}
+                                                  placeholder="Value"
+                                                  className="flex-1"
+                                                />
+                                                <Button
+                                                  type="button"
+                                                  variant="ghost"
+                                                  size="sm"
+                                                  onClick={() => {
+                                                    const params = [...(resource.result_query_params || [])];
+                                                    params.splice(paramIdx, 1);
+                                                    updateEmbeddedResource(index, { result_query_params: params });
+                                                  }}
+                                                >
+                                                  <X className="h-4 w-4 text-destructive" />
+                                                </Button>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   )}

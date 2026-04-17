@@ -94,6 +94,7 @@ interface EmbeddedResource {
   result_url_source: 'contract' | 'fallback' | 'custom';
   custom_result_url: string | null;
   result_authorization: string | null;
+  result_query_params: Array<{ paramName: string; paramValue: string }>;
 }
 
 const normalizeEmbeddedResources = (value: unknown): EmbeddedResource[] => {
@@ -136,6 +137,20 @@ const normalizeEmbeddedResources = (value: unknown): EmbeddedResource[] => {
         result_url_source: (String(obj.result_url_source ?? 'contract') as 'contract' | 'fallback' | 'custom'),
         custom_result_url: obj.custom_result_url ? String(obj.custom_result_url) : null,
         result_authorization: obj.result_authorization ? String(obj.result_authorization) : null,
+        result_query_params: Array.isArray(obj.result_query_params)
+          ? obj.result_query_params
+              .map((p) => {
+                if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+                const paramObj = p as Record<string, unknown>;
+                const paramName = typeof paramObj.paramName === 'string' ? paramObj.paramName : '';
+                if (!paramName) return null;
+                return {
+                  paramName,
+                  paramValue: typeof paramObj.paramValue === 'string' ? paramObj.paramValue : String(paramObj.paramValue ?? ''),
+                };
+              })
+              .filter((p): p is { paramName: string; paramValue: string } => !!p)
+          : [],
       };
     })
     .filter((r): r is EmbeddedResource => !!r);

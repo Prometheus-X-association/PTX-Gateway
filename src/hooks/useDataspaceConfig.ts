@@ -84,6 +84,20 @@ const parseEmbeddedResources = (data: Json | null): ServiceChainEmbeddedResource
         result_url_source: (String(obj.result_url_source || 'contract') as 'contract' | 'fallback' | 'custom'),
         custom_result_url: obj.custom_result_url ? String(obj.custom_result_url) : null,
         result_authorization: obj.result_authorization ? String(obj.result_authorization) : null,
+        result_query_params: Array.isArray(obj.result_query_params)
+          ? obj.result_query_params
+              .map((p) => {
+                if (typeof p === 'object' && p !== null && !Array.isArray(p)) {
+                  const param = p as Record<string, Json>;
+                  return {
+                    paramName: String(param.paramName || ''),
+                    paramValue: String(param.paramValue || ''),
+                  };
+                }
+                return { paramName: '', paramValue: '' };
+              })
+              .filter((p) => p.paramName)
+          : [],
       };
     }
     return {
@@ -103,6 +117,7 @@ const parseEmbeddedResources = (data: Json | null): ServiceChainEmbeddedResource
       result_url_source: 'contract' as const,
       custom_result_url: null,
       result_authorization: null,
+      result_query_params: [],
     };
   }).filter(r => r.resource_url);
 };

@@ -11,9 +11,10 @@ import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { resolveResultUrl, ResultUrlInfo } from "@/utils/resultUrlResolver";
 import { generatePdcPayload, PdcPayload } from "@/utils/pdcPayloadGenerator";
 import { useDataspaceConfig } from "@/hooks/useDataspaceConfig";
-import { AnalyticsOption, DataResource } from "@/types/dataspace";
+import { AnalyticsOption, DataResource, ServiceChain, SoftwareResource, getParamValuesMap } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
+import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
 
 interface SelectedDataType {
   files: File[];
@@ -27,6 +28,71 @@ interface SelectedDataType {
   manualJsonData?: string;
   serviceChainResourceParams?: Record<string, Record<string, string>>;
 }
+
+const findPreselectedAnalytics = (
+  searchParams: URLSearchParams,
+  softwareResources: SoftwareResource[],
+  serviceChains: ServiceChain[],
+): AnalyticsOption | null => {
+  const softwareId = searchParams.get("software_id");
+  const softwareUrl = searchParams.get("software_url");
+  const serviceChainId = searchParams.get("service_chain_id");
+  const catalogId = searchParams.get("catalog_id");
+
+  if (softwareId) {
+    const match = softwareResources.find((item) => item.id === softwareId);
+    if (match) return { type: "software", data: match };
+  }
+
+  if (softwareUrl) {
+    const match = softwareResources.find((item) => item.resource_url === softwareUrl);
+    if (match) return { type: "software", data: match };
+  }
+
+  if (serviceChainId) {
+    const match = serviceChains.find((item) => item.id === serviceChainId);
+    if (match) return { type: "serviceChain", data: match };
+  }
+
+  if (catalogId) {
+    const match = serviceChains.find((item) => item.catalog_id === catalogId);
+    if (match) return { type: "serviceChain", data: match };
+  }
+
+  return null;
+};
+
+const hasPreselectionTarget = (searchParams: URLSearchParams): boolean =>
+  Boolean(
+    searchParams.get("software_id") ||
+    searchParams.get("software_url") ||
+    searchParams.get("service_chain_id") ||
+    searchParams.get("catalog_id")
+  );
+
+const buildPreselectedQueryParams = (
+  searchParams: URLSearchParams,
+  option: AnalyticsOption,
+  sessionId: string,
+): Record<string, string> => {
+  if (option.type !== "software") return {};
+
+  const defaults = getParamValuesMap(option.data.parameters);
+  const next: Record<string, string> = {};
+
+  Object.entries(defaults).forEach(([key, value]) => {
+    next[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+  });
+
+  Object.keys(defaults).forEach((key) => {
+    const incoming = searchParams.get(key);
+    if (incoming !== null) {
+      next[key] = incoming;
+    }
+  });
+
+  return next;
+};
 
 const EmbedGatewayContent = () => {
   const [searchParams] = useSearchParams();
@@ -54,13 +120,20 @@ const EmbedGatewayContent = () => {
       const message = err instanceof Error ? err.message : "Embed access denied";
       const normalized = message.toLowerCase();
 
-      if (
-        normalized.includes("non-2xx") ||
-        normalized.includes("revoked") ||
-        normalized.includes("invalid token") ||
-        normalized.includes("expired")
-      ) {
-        return "This service has been revoked by the gateway owner.";
+      if (normalized.includes("deleted")) {
+        return "This gateway access has been deleted. Contact your administrator to create a new token.";
+      }
+
+      if (normalized.includes("revoked")) {
+        return "This gateway access has been revoked. Contact your administrator to reactivate it.";
+      }
+
+      if (normalized.includes("expired")) {
+        return "This gateway access has expired. Contact your administrator to issue a new token.";
+      }
+
+      if (normalized.includes("invalid token") || normalized.includes("non-2xx")) {
+        return "This gateway access is no longer valid. Contact your administrator for a fresh embed token.";
       }
 
       return message;
@@ -134,6 +207,8 @@ const EmbedGatewayContent = () => {
   const [selectedAnalytics, setSelectedAnalytics] = useState<AnalyticsOption | null>(null);
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
+  const hasPreselection = hasPreselectionTarget(searchParams);
+  const skipSelection = hasPreselection && searchParams.get("skip_selection") !== "false";
 
   const getStepIndex = (stepName: string): number => steps.indexOf(stepName);
 
@@ -205,11 +280,21 @@ const EmbedGatewayContent = () => {
   }, [selectedAnalytics]);
 
   const handleRestart = () => {
+    const preselected = skipSelection
+      ? findPreselectedAnalytics(searchParams, softwareResources, serviceChains)
+      : null;
+
     resetSession();
+    setSelectedData(null);
+    if (preselected) {
+      setSelectedAnalytics(preselected);
+      setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
+      setCurrentStep(getStepIndex("Choose Data"));
+      return;
+    }
     setCurrentStep(0);
     setSelectedAnalytics(null);
     setAnalyticsQueryParams({});
-    setSelectedData(null);
   };
 
   const getCurrentStepName = (): string => steps[currentStep];
@@ -230,6 +315,26 @@ const EmbedGatewayContent = () => {
       orgExecutionToken,
     } : { organizationId: null, orgExecutionToken }
   ), [pdcConfig, orgExecutionToken]);
+
+  useEffect(() => {
+    if (!skipSelection || selectedAnalytics) return;
+
+    const preselected = findPreselectedAnalytics(searchParams, softwareResources, serviceChains);
+    if (!preselected) return;
+
+    resetSession();
+    setSelectedAnalytics(preselected);
+    setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
+    setCurrentStep(getStepIndex("Choose Data"));
+  }, [
+    skipSelection,
+    selectedAnalytics,
+    searchParams,
+    softwareResources,
+    serviceChains,
+    resetSession,
+    sessionId,
+  ]);
 
   if (embedError) {
     return (
@@ -261,6 +366,15 @@ const EmbedGatewayContent = () => {
           </div>
           <h1 className="text-2xl font-bold">Data Analytics</h1>
         </header>
+
+        {selectedAnalytics && (
+          <div className="text-center mb-4">
+            <p className="text-sm text-muted-foreground">
+              Selected analytics:{" "}
+              <span className="font-medium text-foreground">{getAnalyticsDisplayName()}</span>
+            </p>
+          </div>
+        )}
 
         {/* Step Indicator */}
         <StepIndicator steps={steps} currentStep={currentStep} />

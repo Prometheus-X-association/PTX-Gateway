@@ -155,7 +155,7 @@ export const exportSettingsBackup = (organizationId?: string) =>
   configApiRequest<SettingsBackupData>({ path: '/settings/export', organizationId });
 
 export const importSettingsBackup = (settings: SettingsBackupData, organizationId?: string) =>
-  configApiRequest<{ ok: boolean }>({
+  configApiRequest<{ ok: boolean; summary?: ImportSettingsSummary | null }>({
     method: 'POST',
     path: '/settings/import',
     body: { settings },
@@ -173,11 +173,24 @@ export interface CrossOrgImportOptions {
   };
 }
 
+export interface ImportSettingsSummary {
+  organizationSettingsImported?: boolean;
+  globalConfigImported?: boolean;
+  pdcConfigsCreated?: number;
+  pdcConfigsUpdated?: number;
+  pdcBearerTokenImported?: boolean;
+  resourcesCreated?: number;
+  resourcesUpdated?: number;
+  serviceChainsCreated?: number;
+  serviceChainsUpdated?: number;
+  embeddedResourcesRemapped?: number;
+}
+
 export const importSettingsFromOrganization = (
   options: CrossOrgImportOptions,
   organizationId?: string,
 ) =>
-  configApiRequest<{ ok: boolean }>({
+  configApiRequest<{ ok: boolean; summary?: ImportSettingsSummary | null }>({
     method: 'POST',
     path: '/settings/import-from-organization',
     body: options,

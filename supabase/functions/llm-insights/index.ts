@@ -6,6 +6,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-organization-id",
 };
 
+const LOCAL_SUPABASE_URL_FALLBACK = "http://kong:8000";
+const LOCAL_SUPABASE_ANON_KEY_FALLBACK =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+const LOCAL_SUPABASE_SERVICE_ROLE_KEY_FALLBACK =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
+const LOCAL_SUPABASE_JWT_FALLBACK = "super-secret-jwt-token-with-at-least-32-characters-long";
+
 interface LlmInsightsRequest {
   org_execution_token?: string;
   result: unknown;
@@ -278,16 +285,30 @@ const normalizeInsightsPayload = (raw: unknown, forcedType?: SupportedChartType 
   };
 };
 
+const getSupabaseUrl = (): string | null =>
+  Deno.env.get("SUPABASE_URL") || LOCAL_SUPABASE_URL_FALLBACK;
+
+const getSupabaseAnonKey = (): string | null =>
+  Deno.env.get("SUPABASE_ANON_KEY") || LOCAL_SUPABASE_ANON_KEY_FALLBACK;
+
+const getSupabaseServiceRoleKey = (): string | null =>
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || LOCAL_SUPABASE_SERVICE_ROLE_KEY_FALLBACK;
+
+const getExecutionTokenSecret = (): string | null =>
+  Deno.env.get("PDC_EXECUTE_TOKEN_SECRET") ||
+  Deno.env.get("SUPABASE_INTERNAL_JWT_SECRET") ||
+  LOCAL_SUPABASE_JWT_FALLBACK;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY");
-    const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const executeTokenSecret = Deno.env.get("PDC_EXECUTE_TOKEN_SECRET");
+    const supabaseUrl = getSupabaseUrl();
+    const supabaseAnonKey = getSupabaseAnonKey();
+    const supabaseServiceRoleKey = getSupabaseServiceRoleKey();
+    const executeTokenSecret = getExecutionTokenSecret();
 
     if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey || !executeTokenSecret) {
       return new Response(JSON.stringify({ error: "Server not configured" }), {
