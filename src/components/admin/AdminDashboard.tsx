@@ -27,7 +27,13 @@ import OrganizationManagementSection from "./OrganizationManagementSection";
 import VisualizationConfigSection from "./VisualizationConfigSection";
 import EmbedAccessSection from "./EmbedAccessSection";
 import LlmSettingsSection from "./LlmSettingsSection";
-import { exportSettingsBackup, importSettingsBackup, importSettingsFromOrganization, SettingsBackupData } from "@/services/configApi";
+import {
+  exportSettingsBackup,
+  importSettingsBackup,
+  importSettingsFromOrganization,
+  ImportSettingsSummary,
+  SettingsBackupData,
+} from "@/services/configApi";
 import { toast } from "sonner";
 
 const AdminDashboard = () => {
@@ -46,6 +52,24 @@ const AdminDashboard = () => {
     globalConfig: false,
     organizationSettings: false,
   });
+
+  const formatImportSummary = (summary?: ImportSettingsSummary | null) => {
+    if (!summary) return "";
+
+    const parts: string[] = [];
+    if (summary.organizationSettingsImported) parts.push("organization settings updated");
+    if (summary.globalConfigImported) parts.push("global config updated");
+    if (summary.pdcConfigsCreated) parts.push(`${summary.pdcConfigsCreated} PDC config created`);
+    if (summary.pdcConfigsUpdated) parts.push(`${summary.pdcConfigsUpdated} PDC config updated`);
+    if (summary.pdcBearerTokenImported) parts.push("PDC bearer token imported");
+    if (summary.resourcesCreated) parts.push(`${summary.resourcesCreated} resource created`);
+    if (summary.resourcesUpdated) parts.push(`${summary.resourcesUpdated} resource updated`);
+    if (summary.serviceChainsCreated) parts.push(`${summary.serviceChainsCreated} service chain created`);
+    if (summary.serviceChainsUpdated) parts.push(`${summary.serviceChainsUpdated} service chain updated`);
+    if (summary.embeddedResourcesRemapped) parts.push(`${summary.embeddedResourcesRemapped} embedded resource remapped`);
+
+    return parts.join(", ");
+  };
 
   const sourceOrganizations = (user?.organizations || []).filter((membership) =>
     membership.organization.id !== user?.organization?.id &&
@@ -98,12 +122,13 @@ const AdminDashboard = () => {
       const text = await file.text();
       const parsed = JSON.parse(text) as SettingsBackupData;
 
-      const { error } = await importSettingsBackup(parsed, user.organization.id);
+      const { data, error } = await importSettingsBackup(parsed, user.organization.id);
       if (error) {
         throw error;
       }
 
-      toast.success("Settings imported. Reloading admin page...");
+      const summaryText = formatImportSummary(data?.summary);
+      toast.success(summaryText ? `Settings imported: ${summaryText}. Reloading admin page...` : "Settings imported. Reloading admin page...");
       window.location.reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to import settings");
@@ -134,7 +159,7 @@ const AdminDashboard = () => {
 
     setIsCopyingFromOrg(true);
     try {
-      const { error } = await importSettingsFromOrganization(
+      const { data, error } = await importSettingsFromOrganization(
         {
           sourceOrganizationId,
           sections: importSections,
@@ -146,7 +171,8 @@ const AdminDashboard = () => {
         throw error;
       }
 
-      toast.success("Settings copied from organization. Reloading admin page...");
+      const summaryText = formatImportSummary(data?.summary);
+      toast.success(summaryText ? `Settings copied: ${summaryText}. Reloading admin page...` : "Settings copied from organization. Reloading admin page...");
       setShowCrossOrgImportDialog(false);
       window.location.reload();
     } catch (err) {

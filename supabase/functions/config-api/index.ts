@@ -201,6 +201,12 @@ const sanitizeServiceChain = (value: Record<string, unknown>) => ({
   result_query_params: Array.isArray(value.result_query_params) ? value.result_query_params : [],
 });
 
+const getResourceImportSignature = (value: {
+  resource_url: string;
+  contract_url: string;
+  resource_type: string;
+}) => `${value.resource_type}::${value.contract_url}::${value.resource_url}`;
+
 const settingsErrorResponse = (message: string, status = 500) =>
   new Response(
     JSON.stringify({ error: message }),
@@ -292,6 +298,22 @@ const importSettingsIntoOrganization = async ({
   sections?: z.infer<typeof ImportSectionsSchema>;
 }) => {
   const shouldImport = (key: keyof z.infer<typeof ImportSectionsSchema>) => sections?.[key] ?? true;
+  const summary = {
+    organizationSettingsImported: false,
+    globalConfigImported: false,
+    pdcConfigsCreated: 0,
+    pdcConfigsUpdated: 0,
+    pdcBearerTokenImported: false,
+    resourcesCreated: 0,
+    resourcesUpdated: 0,
+    serviceChainsCreated: 0,
+    serviceChainsUpdated: 0,
+    embeddedResourcesRemapped: 0,
+  };
+  const fail = (message: string, status?: number) => ({
+    errorResponse: settingsErrorResponse(message, status),
+    summary: null,
+  });
 
   if (shouldImport('organizationSettings') && incoming.organization_settings !== undefined) {
     const sanitizedOrgSettings = incoming.organization_settings === null
@@ -304,8 +326,10 @@ const importSettingsIntoOrganization = async ({
       .eq('id', orgId);
 
     if (orgUpdateError) {
-      return settingsErrorResponse('Failed to import organization settings');
+      return fail('Failed to import organization settings');
     }
+
+    summary.organizationSettingsImported = true;
   }
 
   if (shouldImport('globalConfig') && isRecord(incoming.global_config)) {
@@ -329,8 +353,10 @@ const importSettingsIntoOrganization = async ({
       .upsert(globalUpsert, { onConflict: 'organization_id' });
 
     if (globalError) {
-      return settingsErrorResponse('Failed to import global config');
+      return fail('Failed to import global config');
     }
+
+    summary.globalConfigImported = true;
   }
 
   if (shouldImport('pdc')) {
@@ -342,7 +368,7 @@ const importSettingsIntoOrganization = async ({
         .eq('organization_id', orgId);
 
       if (existingPdcError) {
-        return settingsErrorResponse('Failed to load existing PDC configs');
+        return fail('Failed to load existing PDC configs');
       }
 
       const existingList = existingPdcConfigs ?? [];
@@ -379,8 +405,9 @@ const importSettingsIntoOrganization = async ({
             .select('id')
             .single();
           if (updateErr) {
-            return settingsErrorResponse('Failed to update PDC config during import');
+            return fail('Failed to update PDC config during import');
           }
+          summary.pdcConfigsUpdated += 1;
           if (cfg.is_active) importedActiveConfigId = updated.id;
         } else {
           const { data: inserted, error: insertErr } = await supabase
@@ -389,8 +416,9 @@ const importSettingsIntoOrganization = async ({
             .select('id')
             .single();
           if (insertErr) {
-            return settingsErrorResponse('Failed to create PDC config during import');
+            return fail('Failed to create PDC config during import');
           }
+          summary.pdcConfigsCreated += 1;
           if (cfg.is_active) importedActiveConfigId = inserted.id;
         }
       }
@@ -419,8 +447,10 @@ const importSettingsIntoOrganization = async ({
         }, { onConflict: 'organization_id' });
 
       if (secretError) {
-        return settingsErrorResponse('Failed to import PDC bearer token');
+        return fail('Failed to import PDC bearer token');
       }
+
+      summary.pdcBearerTokenImported = true;
     }
   }
 
@@ -431,6 +461,8 @@ const importSettingsIntoOrganization = async ({
     .eq('is_active', true)
     .maybeSingle();
 
+  const importedResourceMap = new Map<string, ReturnType<typeof sanitizeResource>>();
+
   if (shouldImport('resources')) {
     const incomingResources = Array.isArray(incoming.resources) ? incoming.resources : [];
     if (incomingResources.length > 0) {
@@ -440,7 +472,7 @@ const importSettingsIntoOrganization = async ({
         .eq('organization_id', orgId);
 
       if (existingResourcesError) {
-        return settingsErrorResponse('Failed to load existing resources');
+        return fail('Failed to load existing resources');
       }
 
       const existing = existingResources ?? [];
@@ -449,6 +481,7 @@ const importSettingsIntoOrganization = async ({
         const res = sanitizeResource(raw);
         if (!res.resource_url || !res.contract_url) continue;
 
+        const signature = getResourceImportSignature(res);
         const match = existing.find((item: any) =>
           (res.id && item.id === res.id) ||
           (
@@ -490,16 +523,20 @@ const importSettingsIntoOrganization = async ({
             .eq('id', match.id)
             .eq('organization_id', orgId);
           if (updateErr) {
-            return settingsErrorResponse('Failed to update resource during import');
+            return fail('Failed to update resource during import');
           }
+          summary.resourcesUpdated += 1;
         } else {
           const { error: insertErr } = await supabase
             .from('dataspace_params')
             .insert(payload);
           if (insertErr) {
-            return settingsErrorResponse('Failed to insert resource during import');
+            return fail('Failed to insert resource during import');
           }
+          summary.resourcesCreated += 1;
         }
+
+        importedResourceMap.set(signature, res);
       }
     }
   }
@@ -513,7 +550,7 @@ const importSettingsIntoOrganization = async ({
         .eq('organization_id', orgId);
 
       if (existingChainsError) {
-        return settingsErrorResponse('Failed to load existing service chains');
+        return fail('Failed to load existing service chains');
       }
 
       const existing = existingChains ?? [];
@@ -527,6 +564,40 @@ const importSettingsIntoOrganization = async ({
           (item.catalog_id === chain.catalog_id && item.contract_url === chain.contract_url)
         );
 
+        const normalizedEmbeddedResources = chain.embedded_resources.map((resource) => {
+          if (!isRecord(resource)) return resource;
+
+          const resourceSignature = getResourceImportSignature({
+            resource_url: typeof resource.resource_url === 'string' ? resource.resource_url : '',
+            contract_url: typeof resource.contract_url === 'string' ? resource.contract_url : '',
+            resource_type: typeof resource.resource_type === 'string' ? resource.resource_type : 'data',
+          });
+          const importedResource = importedResourceMap.get(resourceSignature);
+
+          if (!importedResource) {
+            return resource;
+          }
+
+          summary.embeddedResourcesRemapped += 1;
+
+          return {
+            ...resource,
+            resource_name: importedResource.resource_name,
+            resource_description: importedResource.resource_description,
+            provider: importedResource.provider,
+            service_offering: importedResource.service_offering,
+            parameters: importedResource.parameters,
+            api_response_representation: importedResource.api_response_representation,
+            visualization_type: importedResource.visualization_type,
+            upload_url: importedResource.upload_url,
+            upload_authorization: importedResource.upload_authorization,
+            result_url_source: importedResource.result_url_source,
+            custom_result_url: importedResource.custom_result_url,
+            result_authorization: importedResource.result_authorization,
+            result_query_params: importedResource.result_query_params,
+          };
+        });
+
         const payload = {
           organization_id: orgId,
           config_id: activeConfig?.id ?? null,
@@ -538,7 +609,7 @@ const importSettingsIntoOrganization = async ({
           status: chain.status,
           is_visible: chain.is_visible,
           visualization_type: chain.visualization_type,
-          embedded_resources: chain.embedded_resources,
+          embedded_resources: normalizedEmbeddedResources,
           result_url_source: chain.result_url_source,
           custom_result_url: chain.custom_result_url,
           result_authorization: chain.result_authorization,
@@ -552,21 +623,23 @@ const importSettingsIntoOrganization = async ({
             .eq('id', match.id)
             .eq('organization_id', orgId);
           if (updateErr) {
-            return settingsErrorResponse('Failed to update service chain during import');
+            return fail('Failed to update service chain during import');
           }
+          summary.serviceChainsUpdated += 1;
         } else {
           const { error: insertErr } = await supabase
             .from('service_chains')
             .insert(payload);
           if (insertErr) {
-            return settingsErrorResponse('Failed to insert service chain during import');
+            return fail('Failed to insert service chain during import');
           }
+          summary.serviceChainsCreated += 1;
         }
       }
     }
   }
 
-  return null;
+  return { errorResponse: null, summary };
 };
 
 // Helper to create validation error response
@@ -753,19 +826,19 @@ serve(async (req) => {
       if (!safeSettings.success) {
         return validationErrorResponse(safeSettings.error);
       }
-      const importErrorResponse = await importSettingsIntoOrganization({
+      const importResult = await importSettingsIntoOrganization({
         incoming: safeSettings.data,
         orgId,
         userId,
         supabase,
         adminClient,
       });
-      if (importErrorResponse) {
-        return importErrorResponse;
+      if (importResult?.errorResponse) {
+        return importResult.errorResponse;
       }
 
       return new Response(
-        JSON.stringify({ data: { ok: true } }),
+        JSON.stringify({ data: { ok: true, summary: importResult?.summary ?? null } }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -815,7 +888,7 @@ serve(async (req) => {
         return settingsErrorResponse(error || 'Failed to read source organization settings');
       }
 
-      const importErrorResponse = await importSettingsIntoOrganization({
+      const importResult = await importSettingsIntoOrganization({
         incoming: exported,
         orgId,
         userId,
@@ -823,12 +896,12 @@ serve(async (req) => {
         adminClient,
         sections,
       });
-      if (importErrorResponse) {
-        return importErrorResponse;
+      if (importResult?.errorResponse) {
+        return importResult.errorResponse;
       }
 
       return new Response(
-        JSON.stringify({ data: { ok: true } }),
+        JSON.stringify({ data: { ok: true, summary: importResult?.summary ?? null } }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }

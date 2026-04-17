@@ -129,6 +129,7 @@ export interface ServiceChainEmbeddedResource {
   result_url_source: ResultUrlSource;
   custom_result_url: string | null;
   result_authorization: string | null;
+  result_query_params?: ResultQueryParam[];
 }
 
 // Service Chain Service (from services JSONB array)
