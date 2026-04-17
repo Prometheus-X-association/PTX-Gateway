@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Sparkles, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import StepIndicator from "@/components/StepIndicator";
@@ -20,7 +20,7 @@ import { AnalyticsOption, DataResource, PdcConfig, SoftwareResource, ServiceChai
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { Json } from "@/integrations/supabase/types";
-import { applyVisualizationSettings, getVisualizationSettingsFromOrgSettings } from "@/utils/visualizationSettings";
+import { applyOrganizationVisualizationSettings, getVisualizationSettingsFromOrgSettings } from "@/utils/visualizationSettings";
 
 interface SelectedDataType {
   files: File[];
@@ -664,16 +664,18 @@ const OrgGateway = () => {
   const [softwareResources, setSoftwareResources] = useState<SoftwareResource[]>([]);
   const [dataResources, setDataResources] = useState<DataResource[]>([]);
   const [serviceChains, setServiceChains] = useState<ServiceChain[]>([]);
+  const themeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    if (!organization) return;
-    const cleanup = applyVisualizationSettings(
-      getVisualizationSettingsFromOrgSettings(organization.settings)
-    );
-    return cleanup;
-  }, [organization]);
+    return () => {
+      themeCleanupRef.current?.();
+      themeCleanupRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
+    let mounted = true;
+
     const fetchOrgData = async () => {
       if (!slug) {
         setError("Organization not specified");
@@ -682,6 +684,18 @@ const OrgGateway = () => {
       }
 
       try {
+        setIsLoading(true);
+        setError(null);
+        setOrganization(null);
+        setPdcConfig(null);
+        setOrgExecutionToken(null);
+        setSoftwareResources([]);
+        setDataResources([]);
+        setServiceChains([]);
+
+        themeCleanupRef.current?.();
+        themeCleanupRef.current = null;
+
         // Fetch organization
         const { data: orgData, error: orgError } = await supabase
           .from("organizations")
@@ -698,6 +712,16 @@ const OrgGateway = () => {
           return;
         }
 
+        const themeCleanup = await applyOrganizationVisualizationSettings(
+          getVisualizationSettingsFromOrgSettings(orgData.settings)
+        );
+
+        if (!mounted) {
+          themeCleanup();
+          return;
+        }
+
+        themeCleanupRef.current = themeCleanup;
         setOrganization(orgData);
 
         // Issue short-lived org execution token for public gateway processing.
@@ -832,15 +856,19 @@ const OrgGateway = () => {
       }
     };
 
-    fetchOrgData();
+    void fetchOrgData();
+
+    return () => {
+      mounted = false;
+    };
   }, [slug]);
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-white text-slate-900">
         <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
-          <p className="text-muted-foreground">Loading gateway...</p>
+          <Loader2 className="h-8 w-8 animate-spin text-slate-700 mx-auto mb-4" />
+          <p className="text-slate-500">Loading gateway...</p>
         </div>
       </div>
     );

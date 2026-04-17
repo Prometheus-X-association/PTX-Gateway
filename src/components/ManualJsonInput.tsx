@@ -137,7 +137,7 @@ const ManualJsonInput = ({
           value={value}
           onChange={(e) => handleChange(e.target.value)}
           placeholder={placeholder}
-          className="font-mono text-sm min-h-[200px] bg-secondary/30 resize-y"
+          className="theme-json-surface min-h-[200px] resize-y"
           spellCheck={false}
         />
 
@@ -152,7 +152,7 @@ const ManualJsonInput = ({
           <button
             onClick={handleFormat}
             disabled={!value.trim() || !isValid}
-            className="px-3 py-1.5 text-xs rounded-md bg-secondary hover:bg-secondary/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+            className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-xs)] disabled:cursor-not-allowed"
           >
             <Code className="w-3 h-3" />
             Format
@@ -160,20 +160,20 @@ const ManualJsonInput = ({
           <button
             onClick={handleCopy}
             disabled={!value.trim()}
-            className="px-3 py-1.5 text-xs rounded-md bg-secondary hover:bg-secondary/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+            className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-xs)] disabled:cursor-not-allowed"
           >
             <Copy className="w-3 h-3" />
             Copy
           </button>
           <button
             onClick={handlePaste}
-            className="px-3 py-1.5 text-xs rounded-md bg-secondary hover:bg-secondary/80 transition-colors flex items-center gap-1"
+            className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-xs)]"
           >
             Paste
           </button>
           <button
             onClick={loadSampleData}
-            className="px-3 py-1.5 text-xs rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+            className="theme-button primary-soft px-3 py-1.5 text-[length:var(--theme-font-size-xs)]"
           >
             Load Sample
           </button>

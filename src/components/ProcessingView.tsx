@@ -650,14 +650,14 @@ const ProcessingView = ({
             </div>
           )}
         </div>
-        <h2 className="text-2xl sm:text-3xl font-bold mb-2">
+        <h2 className="theme-section-title mb-2">
           {hasError ? (
             <>PDC Execution <span className="text-destructive">Failed</span></>
           ) : (
             <>Processing <span className="gradient-text">{analyticsType}</span></>
           )}
         </h2>
-        <p className="text-sm sm:text-base text-muted-foreground">
+        <p className="theme-subtitle">
           {hasError 
             ? "The data exchange request failed. Please review the error below."
             : "Executing data exchange via PDC connector"
@@ -740,7 +740,7 @@ const ProcessingView = ({
                 <button
                   onClick={onBack}
                   disabled={isExecuting}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-secondary hover:bg-secondary/80 text-secondary-foreground text-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-s)] disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   Back
                 </button>
@@ -754,11 +754,11 @@ const ProcessingView = ({
                   Continue to Results
                 </button>
               )}
-              <button
-                onClick={handleRetry}
-                disabled={isExecuting}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary text-sm transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-              >
+                <button
+                  onClick={handleRetry}
+                  disabled={isExecuting}
+                  className="theme-button primary-soft px-3 py-1.5 text-[length:var(--theme-font-size-s)] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
                 <RefreshCw className="w-4 h-4" />
                 {canRetryPendingAvailability ? "Retry Availability Check" : "Retry"}
               </button>

@@ -1,9 +1,12 @@
+import { loadAndApplyDesignThemeFromUrl } from "@/utils/designTheme";
+
 export interface VisualizationSettings {
   favicon_url?: string;
   primary_color?: string;
   accent_color?: string;
   background_color?: string;
   card_color?: string;
+  design_url?: string;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -71,6 +74,7 @@ export const getVisualizationSettingsFromOrgSettings = (
     background_color:
       typeof raw.background_color === "string" ? raw.background_color : undefined,
     card_color: typeof raw.card_color === "string" ? raw.card_color : undefined,
+    design_url: typeof raw.design_url === "string" ? raw.design_url : undefined,
   };
 };
 
@@ -140,5 +144,26 @@ export const applyVisualizationSettings = (
       if (prevFavicon) faviconEl.setAttribute("href", prevFavicon);
       else faviconEl.removeAttribute("href");
     }
+  };
+};
+
+export const applyOrganizationVisualizationSettings = async (
+  settings: VisualizationSettings
+): Promise<(() => void)> => {
+  const cleanups: Array<() => void> = [];
+
+  try {
+    if (settings.design_url?.trim()) {
+      const remoteCleanup = await loadAndApplyDesignThemeFromUrl(settings.design_url);
+      cleanups.push(remoteCleanup);
+    }
+  } catch (error) {
+    console.warn("Failed to load organization design theme", error);
+  }
+
+  cleanups.push(applyVisualizationSettings(settings));
+
+  return () => {
+    [...cleanups].reverse().forEach((cleanup) => cleanup());
   };
 };
