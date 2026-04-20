@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Sparkles, Loader2, AlertCircle } from "lucide-react";
 import StepIndicator from "@/components/StepIndicator";
@@ -15,6 +15,7 @@ import { AnalyticsOption, DataResource, ServiceChain, SoftwareResource, getParam
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { applyOrganizationVisualizationSettings, VisualizationSettings } from "@/utils/visualizationSettings";
 
 interface SelectedDataType {
   files: File[];
@@ -96,13 +97,14 @@ const buildPreselectedQueryParams = (
 
 const EmbedGatewayContent = () => {
   const [searchParams] = useSearchParams();
-  const theme = searchParams.get('theme') || 'dark';
+  const theme = searchParams.get('theme');
   const orgSlug = searchParams.get("org");
   const embedToken = searchParams.get("token");
   const [embedAllowed, setEmbedAllowed] = useState(false);
   const [embedError, setEmbedError] = useState<string | null>(null);
   const [validatedOrgId, setValidatedOrgId] = useState<string | undefined>(undefined);
   const [orgExecutionToken, setOrgExecutionToken] = useState<string | null>(null);
+  const themeCleanupRef = useRef<(() => void) | null>(null);
   
   const { sessionId, resetSession } = useProcessSession();
 
@@ -114,6 +116,18 @@ const EmbedGatewayContent = () => {
     serviceChains,
     isLoading 
   } = useDataspaceConfig(validatedOrgId, { enabled: embedAllowed && !!validatedOrgId });
+
+  const revealEmbedDocument = () => {
+    document.documentElement.removeAttribute("data-ptx-embed-pending");
+  };
+
+  useEffect(() => {
+    return () => {
+      themeCleanupRef.current?.();
+      themeCleanupRef.current = null;
+      revealEmbedDocument();
+    };
+  }, []);
 
   useEffect(() => {
     const toUserFriendlyEmbedError = (err: unknown): string => {
@@ -142,10 +156,12 @@ const EmbedGatewayContent = () => {
     const validateEmbedAccess = async () => {
       if (!orgSlug) {
         setEmbedError("Missing org parameter");
+        revealEmbedDocument();
         return;
       }
       if (!embedToken) {
         setEmbedError("Missing embed token");
+        revealEmbedDocument();
         return;
       }
 
@@ -171,6 +187,15 @@ const EmbedGatewayContent = () => {
           throw new Error(data?.error || error?.message || "Embed access denied");
         }
 
+        themeCleanupRef.current?.();
+        themeCleanupRef.current = null;
+
+        const themeCleanup = await applyOrganizationVisualizationSettings(
+          (data.visualization_settings || {}) as VisualizationSettings
+        );
+
+        themeCleanupRef.current = themeCleanup;
+        revealEmbedDocument();
         setValidatedOrgId(data.organization_id as string);
 
         const { data: tokenData, error: tokenError } = await supabase.functions.invoke("pdc-auth", {
@@ -189,14 +214,16 @@ const EmbedGatewayContent = () => {
         setEmbedAllowed(true);
       } catch (err) {
         setEmbedError(toUserFriendlyEmbedError(err));
+        revealEmbedDocument();
       }
     };
 
     validateEmbedAccess();
   }, [embedToken, orgSlug]);
 
-  // Apply theme
+  // Optional legacy light/dark override for hand-written embeds.
   useEffect(() => {
+    if (!theme) return;
     document.documentElement.classList.remove('light', 'dark');
     document.documentElement.classList.add(theme);
   }, [theme]);

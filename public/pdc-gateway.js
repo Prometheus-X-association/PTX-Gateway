@@ -1,7 +1,7 @@
 (function () {
   function buildEmbedUrl(element) {
     var orgSlug = element.getAttribute("org-slug");
-    var theme = element.getAttribute("theme") || "dark";
+    var theme = element.getAttribute("theme");
     var token = element.getAttribute("token");
     var gatewayOrigin = element.getAttribute("gateway-origin");
     var softwareId = element.getAttribute("software-id");
@@ -46,7 +46,7 @@
         var style = document.createElement("style");
         style.textContent = [
           ":host { display:block; width:100%; min-height:600px; }",
-          "iframe { width:100%; height:100%; min-height:600px; border:none; }",
+          "iframe { width:100%; height:100%; min-height:600px; border:none; background:transparent; }",
         ].join("");
         shadow.appendChild(style);
 

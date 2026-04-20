@@ -52,7 +52,7 @@ export class PDCGatewayElement extends HTMLElement {
     if (!this.mountPoint) return;
     
     const orgSlug = this.getAttribute('org-slug');
-    const theme = this.getAttribute('theme') || 'dark';
+    const theme = this.getAttribute('theme');
     const token = this.getAttribute('token');
     const gatewayOrigin = this.getAttribute('gateway-origin');
     const softwareId = this.getAttribute('software-id');
@@ -69,6 +69,7 @@ export class PDCGatewayElement extends HTMLElement {
       iframe.style.width = '100%';
       iframe.style.height = '100%';
       iframe.style.border = 'none';
+      iframe.style.background = 'transparent';
       this.mountPoint.appendChild(iframe);
     }
     

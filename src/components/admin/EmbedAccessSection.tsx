@@ -104,7 +104,6 @@ const EmbedAccessSection = () => {
 
     const url = new URL("/embed", normalizedGatewayOrigin);
     url.searchParams.set("org", orgSlug);
-    url.searchParams.set("theme", "dark");
     url.searchParams.set("token", issuedToken);
 
     if (preselectionType !== "none" && preselectionValue.trim()) {
@@ -423,14 +422,13 @@ const EmbedAccessSection = () => {
   const iframeSnippet = useMemo(() => {
     if (!buildEmbedUrl) return "";
     const src = buildEmbedUrl;
-    return `<iframe src="${src}" width="100%" height="800" style="border:0;" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+    return `<iframe src="${src}" width="100%" height="800" style="border:0;background:transparent;" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
   }, [buildEmbedUrl]);
 
   const webComponentSnippet = useMemo(() => {
     if (!orgSlug || !issuedToken) return "";
     const attrs = [
       `org-slug="${orgSlug}"`,
-      `theme="dark"`,
       `token="${issuedToken}"`,
       `gateway-origin="${normalizedGatewayOrigin}"`,
       `height="800"`,
@@ -1005,7 +1003,15 @@ ${webComponentSnippet}`;
             </div>
 
             <div className="space-y-2">
-              <p className="font-medium">3. Where To Get The IDs</p>
+              <p className="font-medium">3. Design Theme Loading</p>
+              <div className="rounded border bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+                <p>Embedded gateways automatically use the organization visualization settings saved in Admin → Visualization.</p>
+                <p>Do not pass design theme URLs in iframe or web component snippets. The embed should inherit the same saved theme used by the normal public gateway.</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="font-medium">4. Where To Get The IDs</p>
               <div className="rounded border bg-muted/40 p-3 text-xs text-muted-foreground space-y-2">
                 <p><code>software_id</code>: Admin → Resources → Software resources → open Details. Use the internal resource UUID for deterministic preselection.</p>
                 <p><code>software_url</code>: Admin → Resources → Software resources → open Details. Use the Resource URL field if the host system already knows the software resource URL.</p>
@@ -1016,7 +1022,7 @@ ${webComponentSnippet}`;
             </div>
 
             <div className="space-y-2">
-              <p className="font-medium">4. Iframe (Copy/Paste)</p>
+              <p className="font-medium">5. Iframe (Copy/Paste)</p>
               <div className="rounded border bg-muted/40 p-3">
                 <pre className="text-xs whitespace-pre-wrap break-all">{iframeSnippet || "<issue token first to generate snippet>"}</pre>
               </div>
@@ -1029,7 +1035,7 @@ ${webComponentSnippet}`;
             </div>
 
             <div className="space-y-2">
-              <p className="font-medium">5. Web Component (Copy/Paste)</p>
+              <p className="font-medium">6. Web Component (Copy/Paste)</p>
               <div className="rounded border bg-muted/40 p-3">
                 <pre className="text-xs whitespace-pre-wrap break-all">{fullWebComponentExample || "<issue token first to generate snippet>"}</pre>
               </div>
@@ -1047,23 +1053,23 @@ ${webComponentSnippet}`;
             </div>
 
             <div className="space-y-2">
-              <p className="font-medium">6. Preselection Examples</p>
+              <p className="font-medium">7. Preselection Examples</p>
               <div className="rounded border bg-muted/40 p-3 space-y-3 text-xs">
                 <div>
                   <p className="font-medium mb-1">Software Resource by ID</p>
-                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_id=YOUR_SOFTWARE_UUID&skip_selection=true" width="100%" height="800" style="border:0;"></iframe>`}</pre>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_id=YOUR_SOFTWARE_UUID&skip_selection=true" width="100%" height="800" style="border:0;background:transparent;"></iframe>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Software Resource by URL</p>
-                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_url=${encodeURIComponent("https://api.example.com/v1/catalog/softwareresources/...")}&skip_selection=true" width="100%" height="800" style="border:0;"></iframe>`}</pre>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_url=${encodeURIComponent("https://api.example.com/v1/catalog/softwareresources/...")}&skip_selection=true" width="100%" height="800" style="border:0;background:transparent;"></iframe>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Service Chain by ID</p>
-                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&service_chain_id=YOUR_CHAIN_UUID&skip_selection=true" width="100%" height="800" style="border:0;"></iframe>`}</pre>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&service_chain_id=YOUR_CHAIN_UUID&skip_selection=true" width="100%" height="800" style="border:0;background:transparent;"></iframe>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Service Chain by Catalog ID</p>
-                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&catalog_id=YOUR_CATALOG_ID&skip_selection=true" width="100%" height="800" style="border:0;"></iframe>`}</pre>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&catalog_id=YOUR_CATALOG_ID&skip_selection=true" width="100%" height="800" style="border:0;background:transparent;"></iframe>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Web Component with Preselected Service Chain</p>

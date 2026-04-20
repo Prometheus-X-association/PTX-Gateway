@@ -369,8 +369,9 @@ export const loadAndApplyStartupDesignTheme = async (
 
   try {
     const attempts: Array<() => Promise<Response>> = [];
+    const envDesignThemeUrl = import.meta.env.VITE_DESIGN_THEME_URL;
 
-    if (import.meta.env.DEV) {
+    if (import.meta.env.DEV && url === envDesignThemeUrl) {
       attempts.push(() => fetch("/__design-theme__"));
     }
 

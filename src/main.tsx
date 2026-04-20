@@ -3,6 +3,11 @@ import App from "./App.tsx";
 import "./index.css";
 import { loadAndApplyStartupDesignTheme } from "@/utils/designTheme";
 
-void loadAndApplyStartupDesignTheme();
+const rootElement = document.getElementById("root")!;
 
-createRoot(document.getElementById("root")!).render(<App />);
+const bootstrap = async () => {
+  await loadAndApplyStartupDesignTheme();
+  createRoot(rootElement).render(<App />);
+};
+
+void bootstrap();

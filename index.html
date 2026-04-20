@@ -26,6 +26,22 @@
       content="Operationalize PTX contracts through governed configuration, execution, and visualization."
     />
     <meta name="twitter:image" content="/ptx-og-image.svg" />
+    <script>
+      try {
+        if (window.location.pathname === "/embed") {
+          document.documentElement.setAttribute("data-ptx-embed-pending", "true");
+        }
+      } catch (_) {}
+    </script>
+    <style>
+      html[data-ptx-embed-pending="true"] body {
+        background: transparent;
+      }
+
+      html[data-ptx-embed-pending="true"] #root {
+        opacity: 0;
+      }
+    </style>
   </head>
 
   <body>

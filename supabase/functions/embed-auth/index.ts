@@ -256,6 +256,7 @@ serve(async (req) => {
       }
 
       const embedSettings = getEmbedSettings(org.settings);
+      const visualizationSettings = asRecord(asRecord(org.settings).visualization);
       const embedEnabled = embedSettings.embed_enabled !== false;
       if (!embedEnabled) {
         return new Response(JSON.stringify({ ok: false, error: "Embed is disabled for this organization" }), {
@@ -308,7 +309,13 @@ serve(async (req) => {
         }
 
         return new Response(
-          JSON.stringify({ ok: true, organization_id: payload.org_id, origin: payload.origin, token_type: "temporary" }),
+          JSON.stringify({
+            ok: true,
+            organization_id: payload.org_id,
+            origin: payload.origin,
+            token_type: "temporary",
+            visualization_settings: visualizationSettings,
+          }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -354,6 +361,7 @@ serve(async (req) => {
           origin: matched.origin,
           token_type: "persistent",
           token_id: matched.id,
+          visualization_settings: visualizationSettings,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
