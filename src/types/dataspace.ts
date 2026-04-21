@@ -13,6 +13,14 @@ export interface ExportApiConfig {
   body_template?: string;
 }
 
+export interface CustomVisualizationLibraryFile {
+  id: string;
+  file_name: string;
+  file_type: "js" | "css";
+  mime_type?: string;
+  content: string;
+}
+
 export interface CustomVisualizationConfig {
   id: string;
   name: string;
@@ -22,6 +30,7 @@ export interface CustomVisualizationConfig {
   library_url?: string;
   library_file_name?: string;
   library_code?: string;
+  library_files?: CustomVisualizationLibraryFile[];
   json_schema: string;
   render_code: string;
   target_resources: string[];

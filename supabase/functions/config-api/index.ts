@@ -89,6 +89,7 @@ const SettingsBackupSchema = z.object({
   exported_at: z.string().optional(),
   organization: z.record(z.unknown()).optional(),
   organization_settings: z.record(z.unknown()).nullable().optional(),
+  embed_settings: z.record(z.unknown()).nullable().optional(),
   pdc: z.object({
     configs: z.array(z.record(z.unknown())).optional(),
     bearer_token: z.string().max(4000).optional().nullable(),
@@ -97,6 +98,7 @@ const SettingsBackupSchema = z.object({
   service_chains: z.array(z.record(z.unknown())).optional(),
   global_config: z.record(z.unknown()).nullable().optional(),
   llm_settings: z.record(z.unknown()).nullable().optional(),
+  result_page_settings: z.record(z.unknown()).nullable().optional(),
 }).passthrough();
 
 const ImportSectionsSchema = z.object({
@@ -104,7 +106,9 @@ const ImportSectionsSchema = z.object({
   resources: z.boolean().optional(),
   serviceChains: z.boolean().optional(),
   globalConfig: z.boolean().optional(),
+  resultPageSettings: z.boolean().optional(),
   organizationSettings: z.boolean().optional(),
+  embedSettings: z.boolean().optional(),
 }).strict();
 
 const CrossOrgImportSchema = z.object({
@@ -136,6 +140,121 @@ const sanitizeOrganizationSettingsForBackup = (
 
     embedSettings.allowed_origins = allowedOrigins;
     next.embed = embedSettings;
+  }
+
+  return next;
+};
+
+const sanitizeEmbedSettingsForBackup = (settings: unknown): Record<string, unknown> | null => {
+  if (!isRecord(settings)) return null;
+  const embedSettings: Record<string, unknown> = { ...settings };
+  const allowedOrigins = Array.isArray(embedSettings.allowed_origins)
+    ? embedSettings.allowed_origins.map((origin) => String(origin)).filter((origin) => origin.trim().length > 0)
+    : [];
+
+  // Embed tokens are credentials and are intentionally not portable.
+  delete embedSettings.persistent_tokens;
+  delete embedSettings.issued_tokens;
+  delete embedSettings.issued_token_history;
+  delete embedSettings.tokens;
+
+  embedSettings.allowed_origins = allowedOrigins;
+  embedSettings.embed_enabled = embedSettings.embed_enabled !== false;
+  return embedSettings;
+};
+
+const getEmbedSettingsFromOrganizationSettings = (settings: unknown): Record<string, unknown> | null => {
+  if (!isRecord(settings) || !isRecord(settings.embed)) return null;
+  return sanitizeEmbedSettingsForBackup(settings.embed);
+};
+
+const sanitizeCustomVisualization = (value: unknown): Record<string, unknown> | null => {
+  if (!isRecord(value)) return null;
+
+  const libraryFiles = Array.isArray(value.library_files)
+    ? value.library_files
+      .filter(isRecord)
+      .map((file) => ({
+        id: typeof file.id === 'string' ? file.id : crypto.randomUUID(),
+        file_name: typeof file.file_name === 'string' ? file.file_name : 'visualization-file',
+        file_type: file.file_type === 'css' ? 'css' : 'js',
+        mime_type: typeof file.mime_type === 'string' ? file.mime_type : undefined,
+        content: typeof file.content === 'string' ? file.content : '',
+      }))
+      .filter((file) => file.content.trim().length > 0)
+    : [];
+
+  return {
+    id: typeof value.id === 'string' ? value.id : crypto.randomUUID(),
+    name: typeof value.name === 'string' ? value.name : '',
+    description: typeof value.description === 'string' ? value.description : '',
+    is_active: typeof value.is_active === 'boolean' ? value.is_active : false,
+    library_source: value.library_source === 'upload' ? 'upload' : 'url',
+    library_url: typeof value.library_url === 'string' ? value.library_url : '',
+    library_file_name: typeof value.library_file_name === 'string' ? value.library_file_name : '',
+    library_code: typeof value.library_code === 'string' ? value.library_code : '',
+    library_files: libraryFiles,
+    json_schema: typeof value.json_schema === 'string' ? value.json_schema : '',
+    render_code: typeof value.render_code === 'string' ? value.render_code : '',
+    target_resources: Array.isArray(value.target_resources)
+      ? value.target_resources.map((target) => String(target)).filter((target) => target.trim().length > 0)
+      : [],
+  };
+};
+
+const sanitizeResultPageSettingsForBackup = (settings: unknown): Record<string, unknown> | null => {
+  if (!isRecord(settings)) return null;
+
+  const exportApiConfigs = Array.isArray(settings.exportApiConfigs)
+    ? settings.exportApiConfigs.filter(isRecord)
+    : [];
+  const customVisualizations = Array.isArray(settings.customVisualizations)
+    ? settings.customVisualizations.map(sanitizeCustomVisualization).filter(isRecord)
+    : [];
+
+  return {
+    ...settings,
+    exportApiConfigs,
+    customVisualizations,
+  };
+};
+
+const getResultPageSettingsFromGlobalConfig = (globalConfig: unknown): Record<string, unknown> | null => {
+  if (!isRecord(globalConfig) || !isRecord(globalConfig.features)) return null;
+  const resultPage = isRecord(globalConfig.features.resultPage) ? globalConfig.features.resultPage : null;
+  return sanitizeResultPageSettingsForBackup(resultPage);
+};
+
+const mergeOrganizationSettingsForImport = (
+  currentSettings: unknown,
+  incomingSettings: unknown,
+  incomingEmbedSettings: unknown,
+): Record<string, unknown> | null => {
+  const current = isRecord(currentSettings) ? currentSettings : {};
+  const sanitizedIncoming = incomingSettings === null
+    ? null
+    : sanitizeOrganizationSettingsForBackup(incomingSettings);
+  const sanitizedEmbed = sanitizeEmbedSettingsForBackup(incomingEmbedSettings);
+
+  if (sanitizedIncoming === null && sanitizedEmbed === null) {
+    return null;
+  }
+
+  const next: Record<string, unknown> = {
+    ...current,
+    ...(sanitizedIncoming ?? {}),
+  };
+
+  const currentEmbed = isRecord(current.embed) ? current.embed : {};
+  const incomingEmbed = isRecord(sanitizedIncoming?.embed) ? sanitizedIncoming.embed : {};
+  const mergedEmbed = {
+    ...currentEmbed,
+    ...incomingEmbed,
+    ...(sanitizedEmbed ?? {}),
+  };
+
+  if (Object.keys(mergedEmbed).length > 0) {
+    next.embed = mergedEmbed;
   }
 
   return next;
@@ -253,18 +372,30 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
     return { data: null, error: 'Failed to export PDC secrets' };
   }
 
+  const organizationSettings = sanitizeOrganizationSettingsForBackup(
+    (orgResult.data?.settings as Record<string, unknown> | null) ?? null,
+  );
+  const embedSettings = getEmbedSettingsFromOrganizationSettings(
+    (orgResult.data?.settings as Record<string, unknown> | null) ?? null,
+  );
+  const resultPageSettings = getResultPageSettingsFromGlobalConfig(globalResult.data ?? null);
+  const llmSettings =
+    isRecord(globalResult.data?.features) &&
+    isRecord((globalResult.data?.features as Record<string, unknown>).llmInsights)
+      ? ((globalResult.data?.features as Record<string, unknown>).llmInsights as Record<string, unknown>)
+      : null;
+
   return {
     data: {
-      schema_version: 1,
+      schema_version: 2,
       exported_at: new Date().toISOString(),
       organization: {
         id: orgResult.data?.id ?? organizationId,
         name: orgResult.data?.name ?? null,
         slug: orgResult.data?.slug ?? null,
       },
-      organization_settings: sanitizeOrganizationSettingsForBackup(
-        (orgResult.data?.settings as Record<string, unknown> | null) ?? null,
-      ),
+      organization_settings: organizationSettings,
+      embed_settings: embedSettings,
       pdc: {
         configs: pdcResult.data ?? [],
         bearer_token: secretRow?.bearer_token ?? null,
@@ -272,11 +403,8 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
       resources: resourcesResult.data ?? [],
       service_chains: chainsResult.data ?? [],
       global_config: globalResult.data ?? null,
-      llm_settings:
-        isRecord(globalResult.data?.features) &&
-        isRecord((globalResult.data?.features as Record<string, unknown>).llmInsights)
-          ? ((globalResult.data?.features as Record<string, unknown>).llmInsights as Record<string, unknown>)
-          : null,
+      llm_settings: llmSettings,
+      result_page_settings: resultPageSettings,
     },
     error: null,
   };
@@ -298,9 +426,15 @@ const importSettingsIntoOrganization = async ({
   sections?: z.infer<typeof ImportSectionsSchema>;
 }) => {
   const shouldImport = (key: keyof z.infer<typeof ImportSectionsSchema>) => sections?.[key] ?? true;
+  const shouldImportOrganizationSettings = shouldImport('organizationSettings');
+  const shouldImportEmbedSettings = shouldImport('embedSettings');
+  const shouldImportGlobalConfig = shouldImport('globalConfig');
+  const shouldImportResultPageSettings = shouldImport('resultPageSettings');
   const summary = {
     organizationSettingsImported: false,
     globalConfigImported: false,
+    resultPageSettingsImported: false,
+    embedSettingsImported: false,
     pdcConfigsCreated: 0,
     pdcConfigsUpdated: 0,
     pdcBearerTokenImported: false,
@@ -315,29 +449,101 @@ const importSettingsIntoOrganization = async ({
     summary: null,
   });
 
-  if (shouldImport('organizationSettings') && incoming.organization_settings !== undefined) {
-    const sanitizedOrgSettings = incoming.organization_settings === null
-      ? null
-      : sanitizeOrganizationSettingsForBackup(incoming.organization_settings);
-
-    const { error: orgUpdateError } = await supabase
+  if (
+    (shouldImportOrganizationSettings && incoming.organization_settings !== undefined) ||
+    (shouldImportEmbedSettings && (incoming.embed_settings !== undefined || incoming.organization_settings !== undefined))
+  ) {
+    const { data: currentOrg, error: currentOrgError } = await supabase
       .from('organizations')
-      .update({ settings: sanitizedOrgSettings })
-      .eq('id', orgId);
+      .select('settings')
+      .eq('id', orgId)
+      .single();
 
-    if (orgUpdateError) {
-      return fail('Failed to import organization settings');
+    if (currentOrgError) {
+      return fail('Failed to load current organization settings');
     }
 
-    summary.organizationSettingsImported = true;
+    let incomingOrganizationSettings = shouldImportOrganizationSettings
+      ? incoming.organization_settings
+      : undefined;
+
+    if (
+      !shouldImportEmbedSettings &&
+      isRecord(incomingOrganizationSettings) &&
+      isRecord(incomingOrganizationSettings.embed)
+    ) {
+      incomingOrganizationSettings = { ...incomingOrganizationSettings };
+      delete (incomingOrganizationSettings as Record<string, unknown>).embed;
+    }
+
+    const legacyEmbedSettings =
+      shouldImportEmbedSettings && incoming.embed_settings === undefined
+        ? getEmbedSettingsFromOrganizationSettings(incoming.organization_settings)
+        : null;
+    const incomingEmbedSettings = shouldImportEmbedSettings
+      ? incoming.embed_settings ?? legacyEmbedSettings
+      : undefined;
+
+    const hasOrganizationSettingsToImport = incomingOrganizationSettings !== undefined;
+    const hasEmbedSettingsToImport = incomingEmbedSettings !== undefined && incomingEmbedSettings !== null;
+
+    if (hasOrganizationSettingsToImport || hasEmbedSettingsToImport) {
+      const mergedOrgSettings = mergeOrganizationSettingsForImport(
+        currentOrg?.settings,
+        incomingOrganizationSettings,
+        incomingEmbedSettings,
+      );
+
+      const { error: orgUpdateError } = await supabase
+        .from('organizations')
+        .update({ settings: mergedOrgSettings })
+        .eq('id', orgId);
+
+      if (orgUpdateError) {
+        return fail('Failed to import organization settings');
+      }
+
+      if (shouldImportOrganizationSettings && hasOrganizationSettingsToImport) {
+        summary.organizationSettingsImported = true;
+      }
+      if (shouldImportEmbedSettings && hasEmbedSettingsToImport) {
+        summary.embedSettingsImported = true;
+      }
+    }
   }
 
-  if (shouldImport('globalConfig') && isRecord(incoming.global_config)) {
+  if (shouldImportGlobalConfig && isRecord(incoming.global_config)) {
     const globalInput = incoming.global_config;
     const incomingFeatures = isRecord(globalInput.features) ? { ...globalInput.features } : {};
     const incomingLlmSettings = isRecord(incoming.llm_settings) ? incoming.llm_settings : null;
     if (incomingLlmSettings) {
       incomingFeatures.llmInsights = incomingLlmSettings;
+    }
+    let importedResultPageSettings: Record<string, unknown> | null = null;
+    if (shouldImportResultPageSettings) {
+      importedResultPageSettings =
+        sanitizeResultPageSettingsForBackup(incoming.result_page_settings) ??
+        sanitizeResultPageSettingsForBackup(incomingFeatures.resultPage);
+      if (importedResultPageSettings) {
+        incomingFeatures.resultPage = importedResultPageSettings;
+      }
+    } else {
+      const { data: currentGlobal, error: currentGlobalError } = await supabase
+        .from('global_configs')
+        .select('features')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (currentGlobalError) {
+        return fail('Failed to load current result page settings');
+      }
+
+      const currentFeatures = isRecord(currentGlobal?.features) ? currentGlobal.features : {};
+      if (isRecord(currentFeatures.resultPage)) {
+        incomingFeatures.resultPage = currentFeatures.resultPage;
+      } else {
+        delete incomingFeatures.resultPage;
+      }
     }
     const globalUpsert = {
       organization_id: orgId,
@@ -357,6 +563,46 @@ const importSettingsIntoOrganization = async ({
     }
 
     summary.globalConfigImported = true;
+    if (importedResultPageSettings) {
+      summary.resultPageSettingsImported = true;
+    }
+  } else if (shouldImportResultPageSettings) {
+    const incomingResultPageSettings =
+      sanitizeResultPageSettingsForBackup(incoming.result_page_settings) ??
+      getResultPageSettingsFromGlobalConfig(incoming.global_config);
+
+    if (incomingResultPageSettings) {
+      const { data: currentGlobal, error: currentGlobalError } = await supabase
+        .from('global_configs')
+        .select('*')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (currentGlobalError) {
+        return fail('Failed to load current global config');
+      }
+
+      const currentFeatures = isRecord(currentGlobal?.features) ? currentGlobal.features : {};
+      const { error: globalError } = await supabase
+        .from('global_configs')
+        .upsert({
+          organization_id: orgId,
+          app_name: typeof currentGlobal?.app_name === 'string' ? currentGlobal.app_name : null,
+          app_version: typeof currentGlobal?.app_version === 'string' ? currentGlobal.app_version : null,
+          environment: typeof currentGlobal?.environment === 'string' ? currentGlobal.environment : null,
+          features: {
+            ...currentFeatures,
+            resultPage: incomingResultPageSettings,
+          },
+          logging: isRecord(currentGlobal?.logging) ? currentGlobal.logging : {},
+        }, { onConflict: 'organization_id' });
+
+      if (globalError) {
+        return fail('Failed to import result page settings');
+      }
+
+      summary.resultPageSettingsImported = true;
+    }
   }
 
   if (shouldImport('pdc')) {

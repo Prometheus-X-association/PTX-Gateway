@@ -47,6 +47,87 @@ interface TemplateTagHelp {
   example: string;
 }
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const schemaTypeMatches = (schemaType: unknown, value: unknown): boolean => {
+  const types = Array.isArray(schemaType) ? schemaType.map(String) : [String(schemaType)];
+  return types.some((type) => {
+    if (type === "null") return value === null;
+    if (type === "array") return Array.isArray(value);
+    if (type === "object") return isPlainObject(value);
+    if (type === "integer") return typeof value === "number" && Number.isInteger(value);
+    if (type === "number") return typeof value === "number";
+    if (type === "string") return typeof value === "string";
+    if (type === "boolean") return typeof value === "boolean";
+    return true;
+  });
+};
+
+const validateJsonAgainstSchema = (
+  value: unknown,
+  schema: unknown,
+  path = "resultData",
+): string[] => {
+  if (!isPlainObject(schema)) return [];
+
+  if (Array.isArray(schema.anyOf)) {
+    const hasMatch = schema.anyOf.some((candidate) => validateJsonAgainstSchema(value, candidate, path).length === 0);
+    return hasMatch ? [] : [`${path} does not match any allowed schema option`];
+  }
+
+  const errors: string[] = [];
+  if (schema.type && !schemaTypeMatches(schema.type, value)) {
+    errors.push(`${path} expected ${Array.isArray(schema.type) ? schema.type.join(" or ") : String(schema.type)}`);
+    return errors;
+  }
+
+  if (schema.type === "object" && isPlainObject(value)) {
+    const properties = isPlainObject(schema.properties) ? schema.properties : {};
+    const required = Array.isArray(schema.required) ? schema.required.map(String) : [];
+
+    required.forEach((key) => {
+      if (!(key in value)) {
+        errors.push(`${path}.${key} is required`);
+      }
+    });
+
+    Object.entries(properties).forEach(([key, propertySchema]) => {
+      if (key in value) {
+        errors.push(...validateJsonAgainstSchema(value[key], propertySchema, `${path}.${key}`));
+      }
+    });
+  }
+
+  if (schema.type === "array" && Array.isArray(value) && schema.items) {
+    value.slice(0, 50).forEach((item, index) => {
+      errors.push(...validateJsonAgainstSchema(item, schema.items, `${path}[${index}]`));
+    });
+  }
+
+  return errors;
+};
+
+const escapeHtml = (value: string): string =>
+  value.replace(/[<>&]/g, (char) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[char] || char));
+
+const CUSTOM_VISUALIZATION_ELEMENT = "ptx-custom-visualization";
+
+const ensureCustomVisualizationElement = () => {
+  if (typeof window === "undefined" || !window.customElements) return;
+  if (window.customElements.get(CUSTOM_VISUALIZATION_ELEMENT)) return;
+
+  window.customElements.define(
+    CUSTOM_VISUALIZATION_ELEMENT,
+    class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({ mode: "open" });
+      }
+    },
+  );
+};
+
 // Fallback data when no result URL is available or fetch fails
 const fallbackResultData = {
   message: "No result data available",
@@ -1644,79 +1725,186 @@ const LoadingJsonSkeleton = () => {
 interface CustomVisualizationRuntimeProps {
   visualization: CustomVisualizationConfig;
   resultData: unknown;
+  onResultDataChange: (nextData: unknown) => void;
 }
 
-const CustomVisualizationRuntime = ({ visualization, resultData }: CustomVisualizationRuntimeProps) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataChange }: CustomVisualizationRuntimeProps) => {
+  const mountRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const mount = mountRef.current;
+    if (!mount) return;
 
     let disposed = false;
-    let blobUrl: string | null = null;
-    let scriptElement: HTMLScriptElement | null = null;
+    const blobUrls: string[] = [];
+    const scriptElements: HTMLScriptElement[] = [];
+    let hostElement: HTMLElement | null = null;
+
+    ensureCustomVisualizationElement();
+    mount.innerHTML = "";
+
+    hostElement = document.createElement(CUSTOM_VISUALIZATION_ELEMENT);
+    hostElement.style.display = "block";
+    hostElement.style.width = "100%";
+    hostElement.style.maxWidth = "100%";
+    hostElement.style.minHeight = "360px";
+    mount.appendChild(hostElement);
+
+    const shadowRoot = hostElement.shadowRoot ?? hostElement.attachShadow({ mode: "open" });
+    shadowRoot.innerHTML = "";
+
+    const baseStyle = document.createElement("style");
+    baseStyle.textContent = `
+      :host {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        min-height: 360px;
+        color: inherit;
+        font: inherit;
+      }
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+      .ptx-custom-visualization-container {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        min-height: 360px;
+        overflow: auto;
+        color: inherit;
+        font: inherit;
+      }
+      .ptx-custom-visualization-error {
+        padding: 16px;
+        border: 1px solid rgba(239, 68, 68, 0.35);
+        border-radius: 12px;
+        color: #ef4444;
+        background: rgba(239, 68, 68, 0.06);
+      }
+      .ptx-custom-visualization-error p {
+        margin: 8px 0 0;
+        font-size: 13px;
+      }
+    `;
+    shadowRoot.appendChild(baseStyle);
+
+    const container = document.createElement("div");
+    container.className = "ptx-custom-visualization-container";
+    shadowRoot.appendChild(container);
 
     const cleanup = () => {
       disposed = true;
-      if (scriptElement?.parentNode) {
-        scriptElement.parentNode.removeChild(scriptElement);
-      }
-      if (blobUrl) {
-        URL.revokeObjectURL(blobUrl);
+      scriptElements.forEach((scriptElement) => {
+        if (scriptElement.parentNode) {
+          scriptElement.parentNode.removeChild(scriptElement);
+        }
+      });
+      blobUrls.forEach((blobUrl) => URL.revokeObjectURL(blobUrl));
+      if (hostElement?.parentNode) {
+        hostElement.parentNode.removeChild(hostElement);
       }
     };
 
-    const loadScript = () =>
-      new Promise<void>((resolve, reject) => {
-        const scriptSource = visualization.library_source === "upload"
-          ? visualization.library_code
-          : visualization.library_url;
+    const appendCss = (content: string, fileName?: string) => {
+      if (!content.trim()) return;
+      const styleElement = document.createElement("style");
+      styleElement.setAttribute("data-ptx-custom-visualization-file", fileName || "uploaded-css");
+      styleElement.textContent = content;
+      shadowRoot.appendChild(styleElement);
+    };
 
+    const loadScriptSource = (scriptSource: string, sourceType: "upload" | "url", fileName?: string) =>
+      new Promise<void>((resolve, reject) => {
         if (!scriptSource?.trim()) {
           resolve();
           return;
         }
 
-        scriptElement = document.createElement("script");
+        const stylesBeforeLoad = new Set(
+          Array.from(document.head.querySelectorAll("style, link[rel='stylesheet']")),
+        );
+
+        const scriptElement = document.createElement("script");
         scriptElement.async = true;
         scriptElement.crossOrigin = "anonymous";
-        scriptElement.onload = () => resolve();
+        scriptElement.setAttribute("data-ptx-custom-visualization-file", fileName || sourceType);
+        scriptElement.onload = () => {
+          const injectedStyles = Array.from(document.head.querySelectorAll("style, link[rel='stylesheet']"))
+            .filter((node) => !stylesBeforeLoad.has(node));
+
+          injectedStyles.forEach((node) => {
+            shadowRoot.appendChild(node);
+          });
+
+          resolve();
+        };
         scriptElement.onerror = () => reject(new Error("Failed to load custom visualization library"));
 
-        if (visualization.library_source === "upload") {
-          blobUrl = URL.createObjectURL(new Blob([scriptSource], { type: "text/javascript" }));
+        if (sourceType === "upload") {
+          const blobUrl = URL.createObjectURL(new Blob([scriptSource], { type: "text/javascript" }));
+          blobUrls.push(blobUrl);
           scriptElement.src = blobUrl;
         } else {
           scriptElement.src = scriptSource;
         }
 
+        scriptElements.push(scriptElement);
         document.head.appendChild(scriptElement);
       });
+
+    const loadLibraries = async () => {
+      const uploadedFiles = visualization.library_files || [];
+
+      uploadedFiles
+        .filter((file) => file.file_type === "css")
+        .forEach((file) => appendCss(file.content, file.file_name));
+
+      for (const file of uploadedFiles.filter((item) => item.file_type === "js")) {
+        await loadScriptSource(file.content, "upload", file.file_name);
+      }
+
+      if (uploadedFiles.length > 0) return;
+
+      if (visualization.library_source === "upload") {
+        await loadScriptSource(visualization.library_code || "", "upload", visualization.library_file_name);
+      } else {
+        await loadScriptSource(visualization.library_url || "", "url");
+      }
+    };
 
     const runVisualization = async () => {
       container.innerHTML = "";
       try {
-        await loadScript();
+        await loadLibraries();
         if (disposed) return;
 
-        const jsonSchema = visualization.json_schema?.trim()
-          ? JSON.parse(visualization.json_schema)
-          : {};
+        const hasInputSchema = Boolean(visualization.json_schema?.trim());
+        const jsonSchema = hasInputSchema ? JSON.parse(visualization.json_schema) : null;
+        if (hasInputSchema) {
+          const schemaErrors = validateJsonAgainstSchema(resultData, jsonSchema);
+          if (schemaErrors.length > 0) {
+            throw new Error(
+              `Fetched result JSON does not match this custom visualization schema: ${schemaErrors.slice(0, 5).join("; ")}`
+            );
+          }
+        }
         const render = new Function(
           "container",
           "resultData",
           "jsonSchema",
           "config",
+          "shadowRoot",
+          "updateResultData",
           `"use strict";\n${visualization.render_code || ""}`
         );
-        await render(container, resultData, jsonSchema, visualization);
+        await render(container, resultData, jsonSchema, visualization, shadowRoot, onResultDataChange);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Custom visualization failed";
         container.innerHTML = `
-          <div style="padding:16px;border:1px solid rgba(239,68,68,.35);border-radius:12px;color:#ef4444;">
+          <div class="ptx-custom-visualization-error">
             <strong>Custom visualization error</strong>
-            <p style="margin:8px 0 0;font-size:13px;">${message.replace(/[<>&]/g, (char) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[char] || char))}</p>
+            <p>${escapeHtml(message)}</p>
           </div>
         `;
       }
@@ -1724,7 +1912,7 @@ const CustomVisualizationRuntime = ({ visualization, resultData }: CustomVisuali
 
     void runVisualization();
     return cleanup;
-  }, [visualization, resultData]);
+  }, [visualization, resultData, onResultDataChange]);
 
   return (
     <div className="space-y-3">
@@ -1734,7 +1922,7 @@ const CustomVisualizationRuntime = ({ visualization, resultData }: CustomVisuali
           <p className="text-sm text-muted-foreground mt-1">{visualization.description}</p>
         )}
       </div>
-      <div ref={containerRef} className="min-h-[360px] rounded-lg border border-border bg-background/40 p-4 overflow-auto" />
+      <div ref={mountRef} className="min-h-[360px] rounded-lg border border-border bg-background/40 p-4 overflow-auto" />
     </div>
   );
 };
@@ -2371,6 +2559,7 @@ const ResultsView = ({
                 <CustomVisualizationRuntime
                   visualization={activeCustomVisualization}
                   resultData={resultData}
+                  onResultDataChange={setResultData}
                 />
               </TabsContent>
             )}

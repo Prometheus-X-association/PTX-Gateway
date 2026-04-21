@@ -51,7 +51,9 @@ const AdminDashboard = () => {
     resources: true,
     serviceChains: true,
     globalConfig: false,
+    resultPageSettings: true,
     organizationSettings: false,
+    embedSettings: false,
   });
 
   const formatImportSummary = (summary?: ImportSettingsSummary | null) => {
@@ -60,6 +62,8 @@ const AdminDashboard = () => {
     const parts: string[] = [];
     if (summary.organizationSettingsImported) parts.push("organization settings updated");
     if (summary.globalConfigImported) parts.push("global config updated");
+    if (summary.resultPageSettingsImported) parts.push("result page settings updated");
+    if (summary.embedSettingsImported) parts.push("embed settings updated");
     if (summary.pdcConfigsCreated) parts.push(`${summary.pdcConfigsCreated} PDC config created`);
     if (summary.pdcConfigsUpdated) parts.push(`${summary.pdcConfigsUpdated} PDC config updated`);
     if (summary.pdcBearerTokenImported) parts.push("PDC bearer token imported");
@@ -393,6 +397,7 @@ const AdminDashboard = () => {
               <Info className="h-4 w-4" />
               <AlertDescription>
                 Matching records are updated in the current organization. New records are created when no match exists.
+                Embed issued tokens are never copied; only allowed origins and non-token embed settings are portable.
               </AlertDescription>
             </Alert>
 
@@ -455,6 +460,26 @@ const AdminDashboard = () => {
                     <p className="text-sm text-muted-foreground">Feature flags, environment, and LLM settings.</p>
                   </div>
                 </label>
+                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+                  <Checkbox
+                    checked={importSections.resultPageSettings}
+                    onCheckedChange={(checked) => handleToggleImportSection("resultPageSettings", checked === true)}
+                  />
+                  <div>
+                    <p className="font-medium">Result Page Settings</p>
+                    <p className="text-sm text-muted-foreground">Export API endpoints and custom visualizations.</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+                  <Checkbox
+                    checked={importSections.embedSettings}
+                    onCheckedChange={(checked) => handleToggleImportSection("embedSettings", checked === true)}
+                  />
+                  <div>
+                    <p className="font-medium">Embed Settings</p>
+                    <p className="text-sm text-muted-foreground">Embed enabled state and allowed origins. Tokens are excluded.</p>
+                  </div>
+                </label>
                 <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer sm:col-span-2">
                   <Checkbox
                     checked={importSections.organizationSettings}
@@ -462,7 +487,7 @@ const AdminDashboard = () => {
                   />
                   <div>
                     <p className="font-medium">Organization Settings</p>
-                    <p className="text-sm text-muted-foreground">Gateway-level organization settings such as embed configuration.</p>
+                    <p className="text-sm text-muted-foreground">Gateway-level organization metadata and presentation settings.</p>
                   </div>
                 </label>
               </div>

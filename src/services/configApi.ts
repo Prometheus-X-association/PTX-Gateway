@@ -141,6 +141,7 @@ export interface SettingsBackupData {
     slug: string | null;
   };
   organization_settings: Record<string, unknown> | null;
+  embed_settings?: Record<string, unknown> | null;
   pdc: {
     configs: Array<Record<string, unknown>>;
     bearer_token: string | null;
@@ -149,6 +150,7 @@ export interface SettingsBackupData {
   service_chains: Array<Record<string, unknown>>;
   global_config: Record<string, unknown> | null;
   llm_settings?: Record<string, unknown> | null;
+  result_page_settings?: Record<string, unknown> | null;
 }
 
 export const exportSettingsBackup = (organizationId?: string) =>
@@ -169,13 +171,17 @@ export interface CrossOrgImportOptions {
     resources?: boolean;
     serviceChains?: boolean;
     globalConfig?: boolean;
+    resultPageSettings?: boolean;
     organizationSettings?: boolean;
+    embedSettings?: boolean;
   };
 }
 
 export interface ImportSettingsSummary {
   organizationSettingsImported?: boolean;
   globalConfigImported?: boolean;
+  resultPageSettingsImported?: boolean;
+  embedSettingsImported?: boolean;
   pdcConfigsCreated?: number;
   pdcConfigsUpdated?: number;
   pdcBearerTokenImported?: boolean;
