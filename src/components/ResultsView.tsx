@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
-import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { ResultUrlInfo, formatResultUrlWithParams, buildResultRequestBody } from "@/utils/resultUrlResolver";
 import { isDebugMode } from "@/config/global.config";
 import { supabase } from "@/integrations/supabase/client";
-import { ExportApiConfig } from "@/types/dataspace";
+import { AnalyticsOption, CustomVisualizationConfig, ExportApiConfig } from "@/types/dataspace";
 import D3InsightChart, { LlmVisualizationSpec } from "@/components/results/D3InsightChart";
 
 interface ResultsViewProps {
@@ -22,6 +22,8 @@ interface ResultsViewProps {
   organizationId?: string | null;
   orgExecutionToken?: string | null;
   llmPromptContext?: string | null;
+  selectedAnalytics?: AnalyticsOption | null;
+  customVisualizations?: CustomVisualizationConfig[];
 }
 
 interface LlmInsightPayload {
@@ -1639,6 +1641,104 @@ const LoadingJsonSkeleton = () => {
   );
 };
 
+interface CustomVisualizationRuntimeProps {
+  visualization: CustomVisualizationConfig;
+  resultData: unknown;
+}
+
+const CustomVisualizationRuntime = ({ visualization, resultData }: CustomVisualizationRuntimeProps) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let disposed = false;
+    let blobUrl: string | null = null;
+    let scriptElement: HTMLScriptElement | null = null;
+
+    const cleanup = () => {
+      disposed = true;
+      if (scriptElement?.parentNode) {
+        scriptElement.parentNode.removeChild(scriptElement);
+      }
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
+    };
+
+    const loadScript = () =>
+      new Promise<void>((resolve, reject) => {
+        const scriptSource = visualization.library_source === "upload"
+          ? visualization.library_code
+          : visualization.library_url;
+
+        if (!scriptSource?.trim()) {
+          resolve();
+          return;
+        }
+
+        scriptElement = document.createElement("script");
+        scriptElement.async = true;
+        scriptElement.crossOrigin = "anonymous";
+        scriptElement.onload = () => resolve();
+        scriptElement.onerror = () => reject(new Error("Failed to load custom visualization library"));
+
+        if (visualization.library_source === "upload") {
+          blobUrl = URL.createObjectURL(new Blob([scriptSource], { type: "text/javascript" }));
+          scriptElement.src = blobUrl;
+        } else {
+          scriptElement.src = scriptSource;
+        }
+
+        document.head.appendChild(scriptElement);
+      });
+
+    const runVisualization = async () => {
+      container.innerHTML = "";
+      try {
+        await loadScript();
+        if (disposed) return;
+
+        const jsonSchema = visualization.json_schema?.trim()
+          ? JSON.parse(visualization.json_schema)
+          : {};
+        const render = new Function(
+          "container",
+          "resultData",
+          "jsonSchema",
+          "config",
+          `"use strict";\n${visualization.render_code || ""}`
+        );
+        await render(container, resultData, jsonSchema, visualization);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Custom visualization failed";
+        container.innerHTML = `
+          <div style="padding:16px;border:1px solid rgba(239,68,68,.35);border-radius:12px;color:#ef4444;">
+            <strong>Custom visualization error</strong>
+            <p style="margin:8px 0 0;font-size:13px;">${message.replace(/[<>&]/g, (char) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[char] || char))}</p>
+          </div>
+        `;
+      }
+    };
+
+    void runVisualization();
+    return cleanup;
+  }, [visualization, resultData]);
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h4 className="font-medium">{visualization.name}</h4>
+        {visualization.description && (
+          <p className="text-sm text-muted-foreground mt-1">{visualization.description}</p>
+        )}
+      </div>
+      <div ref={containerRef} className="min-h-[360px] rounded-lg border border-border bg-background/40 p-4 overflow-auto" />
+    </div>
+  );
+};
+
 const ResultsView = ({
   analyticsType,
   onRestart,
@@ -1649,6 +1749,8 @@ const ResultsView = ({
   organizationId,
   orgExecutionToken,
   llmPromptContext,
+  selectedAnalytics,
+  customVisualizations = [],
 }: ResultsViewProps) => {
   const [resultData, setResultData] = useState<unknown>(fallbackResultData);
   const [isLoading, setIsLoading] = useState(false);
@@ -1664,6 +1766,7 @@ const ResultsView = ({
   const [isTagHelpOpen, setIsTagHelpOpen] = useState(false);
   const [selectedTagHelp, setSelectedTagHelp] = useState<TemplateTagHelp | null>(null);
   const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
+  const [llmInsightsEnabled, setLlmInsightsEnabled] = useState(false);
   const [insightError, setInsightError] = useState<string | null>(null);
   const [llmInsight, setLlmInsight] = useState<LlmInsightPayload | null>(null);
   const compatibleExportApiConfigs = useMemo(() => {
@@ -1681,6 +1784,15 @@ const ResultsView = ({
       }
     });
   }, [exportApiConfigs, resultData]);
+  const activeCustomVisualization = useMemo(() => {
+    if (!selectedAnalytics) return null;
+    const targetId = selectedAnalytics.type === "software"
+      ? `software:${selectedAnalytics.data.id}`
+      : `serviceChain:${selectedAnalytics.data.id}`;
+    return customVisualizations.find((visualization) =>
+      visualization.is_active && (visualization.target_resources || []).includes(targetId)
+    ) || null;
+  }, [customVisualizations, selectedAnalytics]);
 
   const fetchResultDataInternal = useCallback(async (): Promise<"ready" | "error"> => {
     if (forcedResultData !== undefined) {
@@ -1766,6 +1878,8 @@ const ResultsView = ({
   }, [forcedResultData, resultUrlInfo]);
 
   const generateLlmInsight = useCallback(async () => {
+    if (!llmInsightsEnabled) return;
+
     setIsGeneratingInsight(true);
     setInsightError(null);
 
@@ -1802,7 +1916,46 @@ const ResultsView = ({
     } finally {
       setIsGeneratingInsight(false);
     }
-  }, [organizationId, orgExecutionToken, resultData, llmPromptContext]);
+  }, [organizationId, orgExecutionToken, resultData, llmPromptContext, llmInsightsEnabled]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchLlmInsightStatus = async () => {
+      if (!organizationId && !orgExecutionToken) {
+        setLlmInsightsEnabled(false);
+        return;
+      }
+
+      try {
+        const headers: Record<string, string> = {};
+        if (organizationId) {
+          headers["x-organization-id"] = organizationId;
+        }
+
+        const { data, error } = await supabase.functions.invoke("llm-insights", {
+          headers,
+          body: {
+            action: "status",
+            org_execution_token: orgExecutionToken || undefined,
+          },
+        });
+
+        if (!isMounted) return;
+        setLlmInsightsEnabled(!error && Boolean(data?.ok) && Boolean(data?.enabled));
+      } catch {
+        if (isMounted) {
+          setLlmInsightsEnabled(false);
+        }
+      }
+    };
+
+    void fetchLlmInsightStatus();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [organizationId, orgExecutionToken]);
 
   // Fetch result data automatically for normal flow.
   useEffect(() => {
@@ -1837,6 +1990,13 @@ const ResultsView = ({
     setLlmInsight(null);
     setInsightError(null);
   }, [resultData]);
+
+  useEffect(() => {
+    if (!llmInsightsEnabled) {
+      setLlmInsight(null);
+      setInsightError(null);
+    }
+  }, [llmInsightsEnabled]);
 
   const setNestedValue = useCallback((obj: unknown, path: string, value: unknown): unknown => {
     const keys = path.split('.').filter(k => k);
@@ -2133,41 +2293,43 @@ const ResultsView = ({
         </div>
       )}
 
-      <div className="glass-card p-6 mb-8">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-          <div>
-            <h3 className="font-semibold">AI Insight + Dynamic D3 Visualization</h3>
-            <p className="text-sm text-muted-foreground">
-              Uses organization LLM settings to interpret any JSON result and build a D3 chart.
-            </p>
+      {llmInsightsEnabled && (
+        <div className="glass-card p-6 mb-8">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+            <div>
+              <h3 className="font-semibold">AI Insight + Dynamic D3 Visualization</h3>
+              <p className="text-sm text-muted-foreground">
+                Uses organization LLM Settings to interpret any JSON result and build a D3 chart.
+              </p>
+            </div>
+            <button
+              onClick={generateLlmInsight}
+              disabled={isGeneratingInsight || isLoading}
+              className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isGeneratingInsight ? "Generating..." : "Generate AI Insight"}
+            </button>
           </div>
-          <button
-            onClick={generateLlmInsight}
-            disabled={isGeneratingInsight || isLoading}
-            className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {isGeneratingInsight ? "Generating..." : "Generate AI Insight"}
-          </button>
+
+          {insightError && (
+            <p className="text-sm text-destructive mb-3">{insightError}</p>
+          )}
+
+          {llmInsight?.summary && (
+            <p className="text-sm mb-3">{llmInsight.summary}</p>
+          )}
+
+          {llmInsight?.insights && llmInsight.insights.length > 0 && (
+            <ul className="list-disc list-inside text-sm text-muted-foreground mb-4 space-y-1">
+              {llmInsight.insights.map((item, idx) => (
+                <li key={`${item}-${idx}`}>{item}</li>
+              ))}
+            </ul>
+          )}
+
+          <D3InsightChart spec={llmInsight?.visualization || null} />
         </div>
-
-        {insightError && (
-          <p className="text-sm text-destructive mb-3">{insightError}</p>
-        )}
-
-        {llmInsight?.summary && (
-          <p className="text-sm mb-3">{llmInsight.summary}</p>
-        )}
-
-        {llmInsight?.insights && llmInsight.insights.length > 0 && (
-          <ul className="list-disc list-inside text-sm text-muted-foreground mb-4 space-y-1">
-            {llmInsight.insights.map((item, idx) => (
-              <li key={`${item}-${idx}`}>{item}</li>
-            ))}
-          </ul>
-        )}
-
-        <D3InsightChart spec={llmInsight?.visualization || null} />
-      </div>
+      )}
 
       {/* Data Result - JSON/Table Views */}
       <div className="glass-card p-6 mb-8">
@@ -2182,8 +2344,14 @@ const ResultsView = ({
         {isLoading ? (
           <LoadingJsonSkeleton />
         ) : (
-          <Tabs defaultValue="json" className="w-full">
-            <TabsList className="grid w-full grid-cols-3 mb-4">
+          <Tabs defaultValue={activeCustomVisualization ? "custom" : "json"} className="w-full">
+            <TabsList className={`grid w-full ${activeCustomVisualization ? "grid-cols-4" : "grid-cols-3"} mb-4`}>
+              {activeCustomVisualization && (
+                <TabsTrigger value="custom" className="flex items-center gap-2">
+                  <Palette className="w-4 h-4" />
+                  Custom Visualization
+                </TabsTrigger>
+              )}
               <TabsTrigger value="json" className="flex items-center gap-2">
                 <Code className="w-4 h-4" />
                 JSON View
@@ -2197,6 +2365,15 @@ const ResultsView = ({
                 Array Table
               </TabsTrigger>
             </TabsList>
+
+            {activeCustomVisualization && (
+              <TabsContent value="custom">
+                <CustomVisualizationRuntime
+                  visualization={activeCustomVisualization}
+                  resultData={resultData}
+                />
+              </TabsContent>
+            )}
             
             <TabsContent value="json">
               <CollapsibleJson data={resultData} onChange={setResultData} />
@@ -2268,7 +2445,7 @@ const ResultsView = ({
                   No compatible API presets for this result structure. Edit the result JSON or choose a different template.
                 </p>
               ) : (
-                <p className="text-xs text-muted-foreground italic">No preconfigured APIs available. Admins can add export presets in the PDC configuration settings.</p>
+                <p className="text-xs text-muted-foreground italic">No preconfigured APIs available. Admins can add export presets in Result Page settings.</p>
               )}
             </div>
             <div>

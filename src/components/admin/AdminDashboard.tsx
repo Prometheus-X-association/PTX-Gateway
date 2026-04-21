@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { Settings, Database, Globe, Users, Shield, ArrowLeft, Building2, Palette, Link2, Brain } from "lucide-react";
+import { Settings, Database, Globe, Users, Shield, ArrowLeft, Building2, Palette, Link2, Brain, FileJson } from "lucide-react";
 import { Download, Upload, Loader2, Copy, Info } from "lucide-react";
 import PdcConfigSection from "./PdcConfigSection";
 import ResourcesConfigSection from "./ResourcesConfigSection";
@@ -27,6 +27,7 @@ import OrganizationManagementSection from "./OrganizationManagementSection";
 import VisualizationConfigSection from "./VisualizationConfigSection";
 import EmbedAccessSection from "./EmbedAccessSection";
 import LlmSettingsSection from "./LlmSettingsSection";
+import ResultPageSettingsSection from "./ResultPageSettingsSection";
 import {
   exportSettingsBackup,
   importSettingsBackup,
@@ -283,7 +284,7 @@ const AdminDashboard = () => {
         </header>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className={`grid w-full ${isSuperAdmin ? "grid-cols-8" : "grid-cols-6"} lg:w-auto lg:inline-flex`}>
+          <TabsList className={`grid w-full ${isSuperAdmin ? "grid-cols-9" : "grid-cols-7"} lg:w-auto lg:inline-flex`}>
             <TabsTrigger value="pdc" className="flex items-center gap-2">
               <Globe className="h-4 w-4" />
               <span className="hidden sm:inline">PDC Config</span>
@@ -303,6 +304,11 @@ const AdminDashboard = () => {
               <Brain className="h-4 w-4" />
               <span className="hidden sm:inline">LLM Settings</span>
               <span className="sm:hidden">LLM</span>
+            </TabsTrigger>
+            <TabsTrigger value="result" className="flex items-center gap-2">
+              <FileJson className="h-4 w-4" />
+              <span className="hidden sm:inline">Result Page</span>
+              <span className="sm:hidden">Result</span>
             </TabsTrigger>
             <TabsTrigger value="visualization" className="flex items-center gap-2">
               <Palette className="h-4 w-4" />
@@ -344,6 +350,10 @@ const AdminDashboard = () => {
 
           <TabsContent value="llm">
             <LlmSettingsSection />
+          </TabsContent>
+
+          <TabsContent value="result">
+            <ResultPageSettingsSection />
           </TabsContent>
 
           <TabsContent value="visualization">

@@ -13,6 +13,20 @@ export interface ExportApiConfig {
   body_template?: string;
 }
 
+export interface CustomVisualizationConfig {
+  id: string;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  library_source: "upload" | "url";
+  library_url?: string;
+  library_file_name?: string;
+  library_code?: string;
+  json_schema: string;
+  render_code: string;
+  target_resources: string[];
+}
+
 export interface PdcConfig {
   id: string;
   name: string;
@@ -185,6 +199,7 @@ export interface DataspaceConfig {
   softwareResources: SoftwareResource[];
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
+  customVisualizations: CustomVisualizationConfig[];
   isLoading: boolean;
   error: string | null;
 }

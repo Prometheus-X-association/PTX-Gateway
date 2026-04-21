@@ -114,6 +114,7 @@ const EmbedGatewayContent = () => {
     softwareResources, 
     dataResources, 
     serviceChains,
+    customVisualizations,
     isLoading 
   } = useDataspaceConfig(validatedOrgId, { enabled: embedAllowed && !!validatedOrgId });
 
@@ -447,6 +448,8 @@ const EmbedGatewayContent = () => {
               organizationId={validatedOrgId}
               orgExecutionToken={orgExecutionToken}
               llmPromptContext={llmPromptContext}
+              selectedAnalytics={selectedAnalytics}
+              customVisualizations={customVisualizations}
             />
           )}
         </main>

@@ -14,8 +14,9 @@ const LOCAL_SUPABASE_SERVICE_ROLE_KEY_FALLBACK =
 const LOCAL_SUPABASE_JWT_FALLBACK = "super-secret-jwt-token-with-at-least-32-characters-long";
 
 interface LlmInsightsRequest {
+  action?: "status" | "generate";
   org_execution_token?: string;
-  result: unknown;
+  result?: unknown;
   prompt_context?: string;
 }
 
@@ -367,20 +368,31 @@ serve(async (req) => {
 
     const features = toObject(globalConfig.features);
     const llmConfig = toObject(features.llmInsights) as LlmInsightsConfig;
+    const apiKey = llmConfig.apiKey?.trim();
+    const model = llmConfig.model?.trim();
+
+    if (body.action === "status") {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          enabled: Boolean(llmConfig.enabled),
+          configured: Boolean(apiKey && model),
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (!llmConfig.enabled) {
-      return new Response(JSON.stringify({ error: "LLM insights are disabled in Global Settings" }), {
+      return new Response(JSON.stringify({ error: "LLM insights are disabled in LLM Settings" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const apiKey = llmConfig.apiKey?.trim();
-    const model = llmConfig.model?.trim();
     const baseUrl = llmConfig.apiBaseUrl?.trim() || "https://api.openai.com/v1";
 
     if (!apiKey || !model) {
-      return new Response(JSON.stringify({ error: "LLM API key or model is missing in Global Settings" }), {
+      return new Response(JSON.stringify({ error: "LLM API key or model is missing in LLM Settings" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });

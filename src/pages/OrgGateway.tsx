@@ -16,7 +16,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import UserMenu from "@/components/UserMenu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AnalyticsOption, DataResource, PdcConfig, SoftwareResource, ServiceChain } from "@/types/dataspace";
+import { AnalyticsOption, CustomVisualizationConfig, DataResource, ExportApiConfig, PdcConfig, SoftwareResource, ServiceChain } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { Json } from "@/integrations/supabase/types";
@@ -259,6 +259,25 @@ const isEmbeddedFrame = (): boolean => {
   }
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const getResultPageExportApiConfigs = (features: unknown): ExportApiConfig[] => {
+  if (!isRecord(features)) return [];
+  const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  return Array.isArray(resultPage.exportApiConfigs)
+    ? (resultPage.exportApiConfigs as unknown as ExportApiConfig[])
+    : [];
+};
+
+const getResultPageCustomVisualizations = (features: unknown): CustomVisualizationConfig[] => {
+  if (!isRecord(features)) return [];
+  const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  return Array.isArray(resultPage.customVisualizations)
+    ? (resultPage.customVisualizations as unknown as CustomVisualizationConfig[])
+    : [];
+};
+
 const buildDummySkillResult = (error: unknown, organizationName: string) => {
   const categories = [
     "Data Management",
@@ -316,6 +335,7 @@ const OrgGatewayContent = ({
   organization,
   pdcConfig,
   orgExecutionToken,
+  customVisualizations,
   softwareResources,
   dataResources,
   serviceChains,
@@ -323,6 +343,7 @@ const OrgGatewayContent = ({
   organization: Organization;
   pdcConfig: PdcConfig | null;
   orgExecutionToken: string | null;
+  customVisualizations: CustomVisualizationConfig[];
   softwareResources: SoftwareResource[];
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
@@ -770,6 +791,8 @@ const OrgGatewayContent = ({
               organizationId={organization.id}
               orgExecutionToken={orgExecutionToken}
               llmPromptContext={activeLlmPromptContext}
+              selectedAnalytics={selectedAnalytics}
+              customVisualizations={customVisualizations}
             />
           )}
         </main>
@@ -794,6 +817,7 @@ const OrgGateway = () => {
   const [softwareResources, setSoftwareResources] = useState<SoftwareResource[]>([]);
   const [dataResources, setDataResources] = useState<DataResource[]>([]);
   const [serviceChains, setServiceChains] = useState<ServiceChain[]>([]);
+  const [customVisualizations, setCustomVisualizations] = useState<CustomVisualizationConfig[]>([]);
   const themeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -828,6 +852,7 @@ const OrgGateway = () => {
         setSoftwareResources([]);
         setDataResources([]);
         setServiceChains([]);
+        setCustomVisualizations([]);
 
         themeCleanupRef.current?.();
         themeCleanupRef.current = null;
@@ -875,6 +900,15 @@ const OrgGateway = () => {
         }
         setOrgExecutionToken(tokenData.token as string);
 
+        const { data: globalConfigData } = await supabase
+          .from("global_configs")
+          .select("features")
+          .eq("organization_id", orgData.id)
+          .maybeSingle();
+        const resultPageExportConfigs = getResultPageExportApiConfigs(globalConfigData?.features);
+        const resultPageCustomVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
+        setCustomVisualizations(resultPageCustomVisualizations);
+
         // Fetch PDC config for this organization
         const { data: pdcData } = await supabase
           .from("dataspace_configs")
@@ -884,9 +918,10 @@ const OrgGateway = () => {
           .maybeSingle();
 
         if (pdcData) {
-          const exportConfigs = Array.isArray((pdcData as any).export_api_configs) 
+          const legacyExportConfigs = Array.isArray((pdcData as any).export_api_configs) 
             ? (pdcData as any).export_api_configs 
             : [];
+          const exportConfigs = resultPageExportConfigs.length > 0 ? resultPageExportConfigs : legacyExportConfigs;
           setPdcConfig({
             id: pdcData.id,
             name: pdcData.name,
@@ -1071,6 +1106,7 @@ const OrgGateway = () => {
         softwareResources={softwareResources}
         dataResources={dataResources}
         serviceChains={serviceChains}
+        customVisualizations={customVisualizations}
       />
     </ProcessSessionProvider>
   );

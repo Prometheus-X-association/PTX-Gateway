@@ -12,6 +12,8 @@ import {
   BasisInformation,
   ServiceChainService,
   ServiceChainEmbeddedResource,
+  ExportApiConfig,
+  CustomVisualizationConfig,
 } from "@/types/dataspace";
 import { Json } from "@/integrations/supabase/types";
 
@@ -122,6 +124,25 @@ const parseEmbeddedResources = (data: Json | null): ServiceChainEmbeddedResource
   }).filter(r => r.resource_url);
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const getResultPageExportApiConfigs = (features: unknown): ExportApiConfig[] => {
+  if (!isRecord(features)) return [];
+  const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  return Array.isArray(resultPage.exportApiConfigs)
+    ? (resultPage.exportApiConfigs as unknown as ExportApiConfig[])
+    : [];
+};
+
+const getResultPageCustomVisualizations = (features: unknown): CustomVisualizationConfig[] => {
+  if (!isRecord(features)) return [];
+  const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  return Array.isArray(resultPage.customVisualizations)
+    ? (resultPage.customVisualizations as unknown as CustomVisualizationConfig[])
+    : [];
+};
+
 export const useDataspaceConfig = (
   organizationId?: string,
   options?: { enabled?: boolean }
@@ -132,6 +153,7 @@ export const useDataspaceConfig = (
     softwareResources: [],
     dataResources: [],
     serviceChains: [],
+    customVisualizations: [],
     isLoading: true,
     error: null,
   });
@@ -145,7 +167,7 @@ export const useDataspaceConfig = (
     setConfig((prev) => ({ ...prev, isLoading: true, error: null }));
 
     try {
-      // Fetch all active PDC configs to aggregate export_api_configs
+      // Fetch all active PDC configs for execution settings.
       let pdcQuery = supabase
         .from("dataspace_configs")
         .select("*")
@@ -159,7 +181,18 @@ export const useDataspaceConfig = (
         console.error("Error fetching PDC config:", pdcError);
       }
 
-      // Use the first config for PDC settings, but merge export_api_configs from all
+      const { data: globalConfigData, error: globalConfigError } = organizationId
+        ? await supabase
+          .from("global_configs")
+          .select("features")
+          .eq("organization_id", organizationId)
+          .maybeSingle()
+        : { data: null, error: null };
+      if (globalConfigError) {
+        console.error("Error fetching result page settings:", globalConfigError);
+      }
+
+      // Use the first config for PDC settings.
       const pdcData = allPdcData && allPdcData.length > 0 ? allPdcData[0] : null;
 
       // Fetch visible resources (software and data)
@@ -190,10 +223,14 @@ export const useDataspaceConfig = (
         throw new Error(`Failed to fetch service chains: ${chainsError.message}`);
       }
 
-      // Aggregate export_api_configs from all active PDC configs
-      const allExportApiConfigs = (allPdcData || []).flatMap((d: any) =>
+      const legacyExportApiConfigs = (allPdcData || []).flatMap((d: any) =>
         Array.isArray(d.export_api_configs) ? d.export_api_configs : []
       );
+      const resultPageExportApiConfigs = getResultPageExportApiConfigs(globalConfigData?.features);
+      const exportApiConfigs = resultPageExportApiConfigs.length > 0
+        ? resultPageExportApiConfigs
+        : legacyExportApiConfigs;
+      const customVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
 
       // Parse PDC config
       const pdcConfig: PdcConfig | null = pdcData
@@ -206,7 +243,7 @@ export const useDataspaceConfig = (
             fallback_result_authorization: (pdcData as unknown as { fallback_result_authorization?: string }).fallback_result_authorization ?? null,
             is_active: pdcData.is_active ?? true,
             organization_id: pdcData.organization_id,
-            export_api_configs: allExportApiConfigs,
+            export_api_configs: exportApiConfigs,
           }
         : null;
 
@@ -281,6 +318,7 @@ export const useDataspaceConfig = (
         softwareResources,
         dataResources,
         serviceChains,
+        customVisualizations,
         isLoading: false,
         error: null,
       });
