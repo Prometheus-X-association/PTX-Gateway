@@ -166,30 +166,16 @@ const DDV_RENDER_CODE_EXAMPLE = `return (async () => {
 })();`;
 
 const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
-  const loadScriptOnce = (src, globalCheck) =>
-    new Promise((resolve, reject) => {
-      if (globalCheck?.()) return resolve();
-      const existing = Array.from(document.scripts).find((script) => script.src === src);
-      if (existing) {
-        existing.addEventListener("load", () => resolve(), { once: true });
-        existing.addEventListener("error", () => reject(new Error("Failed to load " + src)), { once: true });
-        return;
-      }
-      const script = document.createElement("script");
-      script.src = src;
-      script.async = true;
-      script.crossOrigin = "anonymous";
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error("Failed to load " + src));
-      document.head.appendChild(script);
-    });
-
-  await loadScriptOnce("https://d3js.org/d3.v6.min.js", () => Boolean(window.d3));
-  await loadScriptOnce("https://d3js.org/d3-hexbin.v0.2.min.js", () => Boolean(window.d3?.hexbin));
-
-  if (!window.ddv?.visualizers?.VisualizationSeries) {
-    throw new Error("DDV library is not available. Upload ptx-ddv.js as this visualization JS library file.");
-  }
+  const startedAt = performance.now();
+  const elapsed = () => Math.round(performance.now() - startedAt);
+  const logStage = (message) => {
+    console.info("[DDV Courses render] " + message + " +" + elapsed() + "ms");
+  };
+  const bridgeMessageType = "ptx-ddv-course-render-log";
+  const parentLogListener = (event) => {
+    if (event.source !== iframe?.contentWindow || event.data?.type !== bridgeMessageType) return;
+    console.info(event.data.message, event.data.detail || "");
+  };
 
   const source =
     resultData?.data?.content?.data ||
@@ -201,38 +187,524 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
   const normalizeList = (value) => (Array.isArray(value) ? value : []);
   const courseRecommendations = normalizeList(source?.recommendations_based_on_matching_skills);
   const extensiveRecommendations = normalizeList(source?.recommendations_based_on_extensive_skills);
-  const recommendations = courseRecommendations.length > 0 ? courseRecommendations : extensiveRecommendations;
+  const selectedRecommendationSource = courseRecommendations.length > 0 ? "matching" : "extensive";
+  const recommendations = selectedRecommendationSource === "matching" ? courseRecommendations : extensiveRecommendations;
 
   if (recommendations.length === 0) {
     throw new Error("Expected course recommendations in recommendations_based_on_matching_skills or recommendations_based_on_extensive_skills.");
   }
 
-  const headaiResponse = {
-    recommendations_based_on_extensive_skills: recommendations,
-    recommendations_based_on_matching_skills: courseRecommendations,
-    recommendations_based_on_match: normalizeList(source?.recommendations_based_on_match),
-    recommendations_based_on_learning_paths: normalizeList(source?.recommendations_based_on_learning_paths),
-    recommendations_based_on_skills_demand: normalizeList(source?.recommendations_based_on_skills_demand),
+  container.innerHTML = "";
+  container.style.overflow = "visible";
+
+  const iframe = document.createElement("iframe");
+  iframe.title = "Course recommendations";
+  iframe.style.display = "block";
+  iframe.style.width = "100%";
+  iframe.style.minHeight = "760px";
+  iframe.style.border = "0";
+  iframe.style.background = "transparent";
+  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups allow-modals");
+  window.addEventListener("message", parentLogListener);
+  container.appendChild(iframe);
+
+  const iframeCss = [
+    "html, body { margin: 0; min-height: 100%; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 16px; color: #212529; background: transparent; }",
+    "*, *::before, *::after { box-sizing: border-box; }",
+    "body { overflow-x: hidden; }",
+    "#ddv { width: 100%; min-height: 720px; padding: 0; }",
+    ".visualTitle { margin: 0 0 6px; color: #0891b2; font-size: 20px; font-weight: 800; line-height: 1.2; }",
+    ".visualSubtitle { margin: 0 0 18px; color: #6c757d; font-size: 14px; }",
+    ".listElement { cursor: pointer; }",
+    ".modal { z-index: 2147483647 !important; }",
+    ".modal-backdrop { z-index: 2147483646 !important; }",
+    ".ptx-course-modal-backdrop { position: fixed; inset: 0; z-index: 2147483646; background: rgba(15, 23, 42, 0.52); }",
+    ".ptx-course-modal { position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: start center; overflow: auto; padding: 32px 16px; }",
+    ".ptx-course-modal-dialog { width: min(920px, 100%); border-radius: 10px; background: #fff; color: #1f2937; box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28); }",
+    ".ptx-course-modal-header { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; padding: 20px 24px 14px; border-bottom: 1px solid #e5e7eb; }",
+    ".ptx-course-modal-title { margin: 0; font-size: 22px; line-height: 1.25; color: #0f172a; }",
+    ".ptx-course-modal-close { flex: 0 0 auto; border: 0; border-radius: 6px; padding: 4px 10px; background: #f1f5f9; color: #0f172a; font-size: 22px; line-height: 1; cursor: pointer; }",
+    ".ptx-course-modal-body { display: grid; gap: 16px; padding: 20px 24px 24px; font-size: 14px; line-height: 1.55; }",
+    ".ptx-course-modal-meta { display: flex; flex-wrap: wrap; gap: 8px; color: #475569; }",
+    ".ptx-course-modal-pill { display: inline-flex; align-items: center; border-radius: 999px; background: #e0f2fe; color: #075985; padding: 4px 10px; font-size: 12px; font-weight: 700; }",
+    ".ptx-course-modal-section h4 { margin: 0 0 8px; color: #0f172a; font-size: 15px; }",
+    ".ptx-course-modal-section p { margin: 0; }",
+    ".ptx-course-modal-skills { display: flex; flex-wrap: wrap; gap: 6px; }",
+    ".ptx-course-modal-skill { border-radius: 999px; padding: 3px 8px; font-size: 12px; font-weight: 600; }",
+    ".ptx-course-modal-skill-new { background: #dbeafe; color: #1d4ed8; }",
+    ".ptx-course-modal-skill-strengthened { background: #ffedd5; color: #c2410c; }",
+    ".ptx-course-modal-actions { display: flex; justify-content: flex-end; }",
+    ".ptx-course-modal-link { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #0369a1; border-radius: 6px; background: #0369a1; color: #fff; font-weight: 700; text-decoration: none; padding: 8px 14px; }",
+    ".ptx-course-modal-link:hover { background: #075985; border-color: #075985; color: #fff; }"
+  ].join("\\n");
+
+  const iframeReady = new Promise((resolve, reject) => {
+    iframe.onload = resolve;
+    iframe.onerror = () => reject(new Error("Failed to initialize DDV iframe."));
+  });
+  iframe.srcdoc = [
+    "<!doctype html>",
+    "<html>",
+    "  <head>",
+    "    <meta charset=\\"utf-8\\">",
+    "    <meta name=\\"viewport\\" content=\\"width=device-width, initial-scale=1\\">",
+    "    <style>" + iframeCss + "</style>",
+    "  </head>",
+    "  <body>",
+    "    <div id=\\"ddv\\"></div>",
+    "  </body>",
+    "</html>"
+  ].join("\\n");
+
+  await iframeReady;
+
+  const frameWindow = iframe.contentWindow;
+  const frameDocument = iframe.contentDocument;
+  if (!frameWindow || !frameDocument) {
+    throw new Error("Could not access DDV iframe document.");
+  }
+
+  const root = frameDocument.getElementById("ddv");
+  const getFrameDdv = () => {
+    const candidates = [
+      frameWindow.ddv,
+      frameWindow.self?.ddv,
+      frameWindow.globalThis?.ddv
+    ];
+    return candidates.find((candidate) => candidate?.visualizers) || candidates.find(Boolean);
+  };
+  const hasDdvVisualizers = () => Boolean(getFrameDdv()?.visualizers);
+  const describeDdvCandidate = (candidate) => {
+    if (!candidate) return "missing";
+    if (typeof candidate !== "object" && typeof candidate !== "function") return typeof candidate;
+    const keys = Object.keys(candidate).slice(0, 12).join(", ") || "no enumerable keys";
+    const visualizerKeys = Object.keys(candidate.visualizers || {}).slice(0, 12).join(", ") || "none";
+    return "keys: " + keys + "; visualizers: " + visualizerKeys;
   };
 
-  container.innerHTML = "";
+  const updateIframeHeight = () => {
+    const nextHeight = Math.max(
+      760,
+      frameDocument.documentElement?.scrollHeight || 0,
+      frameDocument.body?.scrollHeight || 0
+    );
+    iframe.style.height = nextHeight + "px";
+  };
 
-  const style = document.createElement("style");
-  style.textContent = [
-    "#ddv { width: 100%; min-height: 620px; font-family: inherit; color: inherit; }",
-    "#ddv .visualTitle, #ddv [class*=visualTitle], #ddv [class*=VisualTitle] { color: hsl(var(--primary, 187 85% 53%)) !important; fill: hsl(var(--primary, 187 85% 53%)) !important; font-size: 20px !important; font-weight: 800 !important; }",
-    "#ddv [class*=navButton], #ddv [class*=NavButton] { display: none !important; }",
-    "#ddv .listElement { cursor: pointer; font-size: 14px; line-height: 1.45; }",
-    "#ddv .modal { position: fixed !important; inset: 0 !important; z-index: 1050 !important; overflow: auto; padding: 24px; background: rgba(15, 23, 42, 0.45); }",
-    "#ddv .modal-dialog { width: min(920px, calc(100vw - 32px)); max-width: min(920px, calc(100vw - 32px)); margin: 32px auto; }",
-    "#ddv .modal-content { max-height: calc(100vh - 64px); overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 10px; background: #fff; color: #0f172a; box-shadow: 0 24px 64px rgba(15, 23, 42, 0.24); }",
-    "#ddv .modal-description { max-height: calc(100vh - 180px); overflow: auto; font-size: 14px; line-height: 1.5; }",
-  ].join("\\n");
-  shadowRoot.appendChild(style);
+  const appendCss = (cssText, sourceName) => {
+    if (!cssText?.trim()) return;
+    const style = frameDocument.createElement("style");
+    style.textContent = cssText;
+    style.setAttribute("data-uploaded-library-file", sourceName || "uploaded.css");
+    frameDocument.head.appendChild(style);
+  };
 
-  const ddvContainer = document.createElement("div");
-  ddvContainer.id = "ddv";
-  container.appendChild(ddvContainer);
+  const loadFrameScript = (src, globalCheck) =>
+    new Promise((resolve, reject) => {
+      if (globalCheck?.()) return resolve();
+      const script = frameDocument.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = () => {
+        if (!globalCheck || globalCheck()) return resolve();
+        reject(new Error("Loaded " + src + " but expected global was not available."));
+      };
+      script.onerror = () => reject(new Error("Failed to load " + src));
+      frameDocument.head.appendChild(script);
+    });
+
+  const loadFrameScriptBlob = (scriptText, sourceName, globalCheck) => {
+    if (globalCheck?.()) return Promise.resolve();
+    if (!scriptText?.trim() || scriptText.trim().startsWith("<")) {
+      return Promise.reject(new Error("Uploaded " + sourceName + " does not look like JavaScript."));
+    }
+
+    return new Promise((resolve, reject) => {
+      const blobUrl = URL.createObjectURL(new Blob([scriptText], { type: "text/javascript" }));
+      const cleanup = () => {
+        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+        frameWindow.removeEventListener("error", onError);
+      };
+      const onError = (event) => {
+        cleanup();
+        reject(new Error("Failed to execute " + sourceName + ": " + (event.message || "unknown script error")));
+      };
+
+      frameWindow.module = undefined;
+      frameWindow.exports = undefined;
+      frameWindow.define = undefined;
+      frameWindow.addEventListener("error", onError, { once: true });
+
+      const script = frameDocument.createElement("script");
+      script.src = blobUrl;
+      script.async = false;
+      script.setAttribute("data-uploaded-library-file", sourceName || "uploaded-visualization-library.js");
+      script.onload = () => {
+        cleanup();
+        if (!globalCheck || globalCheck()) return resolve();
+        reject(new Error("Loaded " + sourceName + " but DDV visualizers were not available. " + describeDdvCandidate(getFrameDdv())));
+      };
+      script.onerror = () => {
+        cleanup();
+        reject(new Error("Failed to load " + sourceName));
+      };
+      frameDocument.head.appendChild(script);
+    });
+  };
+
+  const loadUploadedDdvLibrary = async () => {
+    if (hasDdvVisualizers()) return;
+
+    const uploadedFiles = config?.library_files || [];
+    uploadedFiles
+      .filter((file) => file.file_type === "css")
+      .forEach((file) => appendCss(file.content, file.file_name));
+
+    const uploadedJsFiles = uploadedFiles.filter((file) => file.file_type === "js" && file.content?.trim());
+    const ddvFile =
+      uploadedJsFiles.find((file) => /ddv/i.test(file.file_name || "")) ||
+      uploadedJsFiles.find((file) => /visual/i.test(file.file_name || "")) ||
+      uploadedJsFiles[0];
+
+    if (ddvFile) {
+      await loadFrameScriptBlob(ddvFile.content, ddvFile.file_name || "uploaded-visualization-library.js", hasDdvVisualizers);
+      return;
+    }
+
+    if (config?.library_code?.trim()) {
+      await loadFrameScriptBlob(config.library_code, config.library_file_name || "uploaded-visualization-library.js", hasDdvVisualizers);
+      return;
+    }
+
+    if (config?.library_url?.trim()) {
+      await loadFrameScript(config.library_url, hasDdvVisualizers);
+      return;
+    }
+
+    throw new Error("DDV library is missing. Upload ptx-ddv.js as a JS library file for this visualization.");
+  };
+
+  const emitBridgeLog = (message, detail) => {
+    console.info(message, detail || "");
+    try {
+      frameWindow.parent?.postMessage({ type: bridgeMessageType, message, detail }, "*");
+    } catch (error) {
+      console.warn("[DDV Courses render] failed to forward iframe log", error);
+    }
+  };
+
+  const describeTarget = (target) => {
+    if (!target) return "";
+    const element = target.nodeType === 1 ? target : target.parentElement;
+    if (!element) return "";
+    const tag = element.tagName?.toLowerCase?.() || "";
+    const id = element.id ? "#" + element.id : "";
+    const className = typeof element.className === "string" && element.className ? "." + element.className.trim().replace(/\\s+/g, ".") : "";
+    return tag + id + className;
+  };
+
+  const findCourseListItem = (target) => {
+    if (!target?.closest) return null;
+    const item = target.closest("li.listElement, .listElement, li.list-group-item, [data-course-index], li");
+    if (!item || !ddvMount?.contains?.(item)) return null;
+    return item;
+  };
+
+  const hasVisibleDdvModal = () =>
+    Boolean(frameDocument.querySelector(".modal.show, .modal[style*='display: block'], .modal[style*='display:block']"));
+
+  const describeDdvModalState = () => {
+    const modals = Array.from(frameDocument.querySelectorAll(".modal"));
+    return {
+      modalCount: modals.length,
+      visibleModalCount: modals.filter((modal) =>
+        modal.classList.contains("show") || /display:\\s*block/i.test(modal.getAttribute("style") || "")
+      ).length,
+      bodyClass: frameDocument.body.className || ""
+    };
+  };
+
+  const clearFallbackCourseModal = () => {
+    frameDocument.querySelectorAll(".ptx-course-modal, .ptx-course-modal-backdrop").forEach((node) => node.remove());
+    frameDocument.body.style.overflow = "";
+    frameDocument.body.classList.remove("modal-open");
+  };
+
+  const appendFallbackText = (parent, tagName, className, text) => {
+    if (!text) return null;
+    const element = frameDocument.createElement(tagName);
+    if (className) element.className = className;
+    element.textContent = text;
+    parent.appendChild(element);
+    return element;
+  };
+
+  const appendFallbackSection = (parent, title, content) => {
+    if (!content) return;
+    const section = frameDocument.createElement("section");
+    section.className = "ptx-course-modal-section";
+    appendFallbackText(section, "h4", "", title);
+    appendFallbackText(section, "p", "", content);
+    parent.appendChild(section);
+  };
+
+  const appendFallbackSkills = (parent, title, skills, variant) => {
+    if (!skills?.length) return;
+    const section = frameDocument.createElement("section");
+    section.className = "ptx-course-modal-section";
+    appendFallbackText(section, "h4", "", title);
+    const list = frameDocument.createElement("div");
+    list.className = "ptx-course-modal-skills";
+    skills.slice(0, 80).forEach((skill) => {
+      appendFallbackText(list, "span", "ptx-course-modal-skill ptx-course-modal-skill-" + variant, String(skill).replaceAll("_", " "));
+    });
+    section.appendChild(list);
+    parent.appendChild(section);
+  };
+
+  const openFallbackCourseModal = (course) => {
+    if (!course) return;
+    clearFallbackCourseModal();
+
+    const backdrop = frameDocument.createElement("div");
+    backdrop.className = "ptx-course-modal-backdrop";
+
+    const modal = frameDocument.createElement("div");
+    modal.className = "ptx-course-modal";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+
+    const dialog = frameDocument.createElement("article");
+    dialog.className = "ptx-course-modal-dialog";
+
+    const header = frameDocument.createElement("header");
+    header.className = "ptx-course-modal-header";
+    appendFallbackText(header, "h3", "ptx-course-modal-title", course.title || "Course details");
+    const closeButton = frameDocument.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "ptx-course-modal-close";
+    closeButton.setAttribute("aria-label", "Close course details");
+    closeButton.textContent = "×";
+    header.appendChild(closeButton);
+
+    const body = frameDocument.createElement("div");
+    body.className = "ptx-course-modal-body";
+
+    const meta = frameDocument.createElement("div");
+    meta.className = "ptx-course-modal-meta";
+    [
+      course.code ? "Code: " + course.code : "",
+      course.quality_index != null ? "Quality: " + course.quality_index : "",
+      course.score != null ? "Score: " + Math.round(Number(course.score)) : ""
+    ].filter(Boolean).forEach((value) => appendFallbackText(meta, "span", "ptx-course-modal-pill", value));
+    if (meta.childNodes.length > 0) body.appendChild(meta);
+
+    appendFallbackSection(body, "Description", course.description || course.short_description || course.shortDescription);
+    appendFallbackSkills(body, "New Skills", course.newSkills || course.new_skills, "new");
+    appendFallbackSkills(body, "Strengthened Skills", course.existingSkills || course.existing_skills, "strengthened");
+
+    const url = course.url || course.link || course.course_url;
+    if (url) {
+      const linkSection = frameDocument.createElement("section");
+      linkSection.className = "ptx-course-modal-actions";
+      const link = frameDocument.createElement("a");
+      link.className = "ptx-course-modal-link";
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Read more";
+      linkSection.appendChild(link);
+      body.appendChild(linkSection);
+    }
+
+    dialog.appendChild(header);
+    dialog.appendChild(body);
+    modal.appendChild(dialog);
+    frameDocument.body.appendChild(backdrop);
+    frameDocument.body.appendChild(modal);
+    frameDocument.body.style.overflow = "hidden";
+    frameDocument.body.classList.add("modal-open");
+
+    const closeModal = () => clearFallbackCourseModal();
+    closeButton.addEventListener("click", closeModal);
+    backdrop.addEventListener("click", closeModal);
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) closeModal();
+    });
+    frameWindow.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeModal();
+    }, { once: true });
+    closeButton.focus();
+    updateIframeHeight();
+  };
+
+  let lastFallbackInteractionStamp = -1;
+  const scheduleFallbackCourseModal = (event, item) => {
+    if (!["pointerdown", "mousedown", "touchstart", "click"].includes(event.type)) return;
+    if (lastFallbackInteractionStamp === event.timeStamp) return;
+    lastFallbackInteractionStamp = event.timeStamp;
+
+    window.setTimeout(() => {
+      const ddvModalState = describeDdvModalState();
+      if (hasVisibleDdvModal() || frameDocument.querySelector(".ptx-course-modal")) return;
+      const items = Array.from(ddvMount.querySelectorAll("li.listElement, .listElement, li.list-group-item, li"));
+      const indexFromAttribute = Number(item.getAttribute("data-course-index"));
+      const rawIndex = Number.isFinite(indexFromAttribute) && indexFromAttribute >= 0 ? indexFromAttribute : items.indexOf(item);
+      const index = courses.length > 0 ? rawIndex % courses.length : rawIndex;
+      const course = courses[index];
+      if (!course) {
+        emitBridgeLog("[DDV Courses render] fallback modal skipped because no course was found +" + elapsed() + "ms", {
+          index,
+          rawIndex,
+          itemCount: items.length,
+          courseCount: courses.length,
+          eventType: event.type,
+          itemText: item.textContent?.trim()?.slice(0, 120) || ""
+        });
+        return;
+      }
+      emitBridgeLog("[DDV Courses render] opening fallback course modal +" + elapsed() + "ms", {
+        index,
+        rawIndex,
+        title: course.title || "",
+        eventType: event.type,
+        ddvModalState
+      });
+      openFallbackCourseModal(course);
+    }, event.type === "click" ? 120 : 220);
+  };
+
+  const handleCourseClickCapture = (event) => {
+    const item = findCourseListItem(event.target);
+    if (!item) return;
+    emitBridgeLog("[DDV Courses render] course " + event.type + " captured +" + elapsed() + "ms", {
+      className: item.className,
+      title: item.textContent?.trim()?.slice(0, 120) || ""
+    });
+    scheduleFallbackCourseModal(event, item);
+  };
+
+  const handleCourseKeydown = (event, item) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    item.click();
+  };
+
+  const handleAnyIframeInteraction = (event) => {
+    const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
+    if (!target || !ddvMount?.contains?.(target)) return;
+    emitBridgeLog("[DDV Courses render] iframe " + event.type + " reached DDV mount +" + elapsed() + "ms", {
+      target: describeTarget(target)
+    });
+  };
+
+  ["pointerdown", "mousedown", "click", "touchstart"].forEach((eventName) => {
+    frameWindow.addEventListener(eventName, handleAnyIframeInteraction, true);
+    frameWindow.addEventListener(eventName, handleCourseClickCapture, true);
+    frameDocument.addEventListener(eventName, handleAnyIframeInteraction, true);
+    frameDocument.addEventListener(eventName, handleCourseClickCapture, true);
+  });
+
+  await loadUploadedDdvLibrary();
+  logStage("iframe DDV loaded");
+  await loadFrameScript("https://d3js.org/d3.v6.min.js", () => Boolean(frameWindow.d3));
+  await loadFrameScript("https://d3js.org/d3-hexbin.v0.2.min.js", () => Boolean(frameWindow.d3?.hexbin));
+  logStage("iframe D3 loaded");
+
+  const ddv = getFrameDdv();
+  const VisualizationSeries = ddv?.visualizers?.VisualizationSeries;
+  if (!frameWindow.d3 || !VisualizationSeries) {
+    const visualizerKeys = Object.keys(ddv?.visualizers || {}).join(", ") || "none";
+    throw new Error("DDV VisualizationSeries is not available in the iframe. Available DDV visualizers: " + visualizerKeys + ". DDV export detail: " + describeDdvCandidate(ddv));
+  }
+
+  const listValue = (value) => (Array.isArray(value) ? value : []);
+  const textValue = (...values) => {
+    for (const value of values) {
+      if (value == null) continue;
+      if (typeof value === "string" && value.trim()) return value;
+      if (typeof value === "number" || typeof value === "boolean") return String(value);
+      if (typeof value === "object") {
+        const nested = textValue(
+          value.text,
+          value.value,
+          value.label,
+          value.name,
+          value.title,
+          value.description,
+          value.short_description,
+          value.shortDescription
+        );
+        if (nested) return nested;
+      }
+    }
+    return "";
+  };
+
+  const normalizeCourse = (course, index) => {
+    const description = textValue(
+      course?.description,
+      course?.short_description,
+      course?.shortDescription,
+      course?.summary,
+      course?.course_description,
+      course?.courseDescription,
+      course?.details,
+      course?.explanation?.description,
+      course?.explanation?.short_description,
+      course?.explanation?.shortDescription
+    );
+
+    return {
+      ...course,
+      raw: course,
+      title: textValue(course?.title, course?.name, course?.course_name, "Course " + (index + 1)),
+      description,
+      short_description: description,
+      shortDescription: description,
+      url: textValue(course?.url, course?.link, course?.course_url),
+      newSkills: listValue(course?.newSkills || course?.new_skills || course?.missingSkills || course?.missing_skills),
+      existingSkills: listValue(course?.existingSkills || course?.existing_skills || course?.matchingSkills || course?.matching_skills),
+      score: course?.score ?? course?.scoring_index,
+      normalizedScore: course?.normalizedScore ?? course?.normalized_score ?? course?.quality_index
+    };
+  };
+
+  const courses = recommendations.map(normalizeCourse);
+
+  const headaiResponse = {
+    recommendations_based_on_extensive_skills: selectedRecommendationSource === "extensive" ? recommendations : [],
+    recommendations_based_on_matching_skills: selectedRecommendationSource === "matching" ? recommendations : [],
+    recommendations_based_on_match: normalizeList(source?.recommendations_based_on_match),
+    recommendations_based_on_learning_paths: normalizeList(source?.recommendations_based_on_learning_paths),
+    recommendations_based_on_skills_demand: normalizeList(source?.recommendations_based_on_skills_demand)
+  };
+
+  const appendText = (parent, tagName, className, text) => {
+    const element = frameDocument.createElement(tagName);
+    element.className = className;
+    element.textContent = text;
+    parent.appendChild(element);
+    return element;
+  };
+
+  root.textContent = "";
+  appendText(root, "h2", "visualTitle", "Course Recommendations");
+  appendText(root, "p", "visualSubtitle", courses.length + " recommended course" + (courses.length === 1 ? "" : "s"));
+
+  const ddvMount = frameDocument.createElement("div");
+  ddvMount.id = "ddv-series";
+  root.appendChild(ddvMount);
+  ["pointerdown", "mousedown", "click", "touchstart"].forEach((eventName) => {
+    ddvMount.addEventListener(eventName, handleAnyIframeInteraction, true);
+    ddvMount.addEventListener(eventName, handleCourseClickCapture, true);
+  });
+
+  const visualizerProperties = {
+    width: Math.max(320, root.clientWidth || container.clientWidth || 1000),
+    height: Math.max(520, courses.length * 120)
+  };
 
   const rules = {
     visuals: [
@@ -241,19 +713,58 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
         data: headaiResponse,
         title: "Course Recommendations",
         buttonTitle: "Courses",
-        provider: "headai",
-      },
+        provider: "headai"
+      }
     ],
     properties: {
       showButtons: false,
-      showTitle: true,
-    },
+      showTitle: false,
+      ...visualizerProperties
+    }
   };
 
-  const visualization = new window.ddv.visualizers.VisualizationSeries(rules);
-  visualization.attachOnSelection(window.d3.select(ddvContainer));
-  window.ddv.visualizers.responsive?.enableResponsivenessToSeries?.(visualization);
+  const visualization = new VisualizationSeries(rules);
+  visualization.attachOn("div#ddv-series");
+  ddv.visualizers.responsive?.enableResponsivenessToSeries?.(visualization);
   visualization.refresh();
+
+  const enhanceCourseItems = () => {
+    const items = ddvMount.querySelectorAll("li.listElement, .listElement, li.list-group-item, li");
+    items.forEach((item, index) => {
+      if (item.dataset.ddvClickBridge === "true") return;
+      item.dataset.ddvClickBridge = "true";
+      item.setAttribute("tabindex", item.getAttribute("tabindex") || "0");
+      item.setAttribute("role", item.getAttribute("role") || "button");
+      item.setAttribute("data-course-index", item.getAttribute("data-course-index") || String(index));
+      ["pointerdown", "mousedown", "click", "touchstart"].forEach((eventName) => {
+        item.addEventListener(eventName, handleCourseClickCapture, true);
+      });
+      item.addEventListener("keydown", (event) => handleCourseKeydown(event, item));
+    });
+    return items.length;
+  };
+
+  const initialCourseItemCount = enhanceCourseItems();
+  logStage("course click bridge attached to " + initialCourseItemCount + " item" + (initialCourseItemCount === 1 ? "" : "s"));
+
+  const courseListObserver = new frameWindow.MutationObserver(() => {
+    enhanceCourseItems();
+    updateIframeHeight();
+  });
+  courseListObserver.observe(ddvMount, { childList: true, subtree: true });
+  window.setTimeout(() => {
+    const delayedCourseItemCount = enhanceCourseItems();
+    logStage("course click bridge verified on " + delayedCourseItemCount + " item" + (delayedCourseItemCount === 1 ? "" : "s"));
+  }, 500);
+
+  if (frameWindow.ResizeObserver) {
+    const observer = new frameWindow.ResizeObserver(updateIframeHeight);
+    observer.observe(frameDocument.body);
+  }
+  updateIframeHeight();
+  window.setTimeout(updateIframeHeight, 250);
+
+  logStage("Rendered DDV CourseVisualizer in iframe");
 })();`;
 
 const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
