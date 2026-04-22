@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Download, Loader2, Plus, Save, Send, Trash2, Eye, EyeOff, Upload, Palette, Pencil, Table as TableIcon } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ChevronDown, Download, GraduationCap, Loader2, Plus, Save, Send, Trash2, Eye, EyeOff, Upload, Palette, Pencil, Table as TableIcon } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -164,6 +165,97 @@ const DDV_RENDER_CODE_EXAMPLE = `return (async () => {
   visualization.refresh();
 })();`;
 
+const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
+  const loadScriptOnce = (src, globalCheck) =>
+    new Promise((resolve, reject) => {
+      if (globalCheck?.()) return resolve();
+      const existing = Array.from(document.scripts).find((script) => script.src === src);
+      if (existing) {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error("Failed to load " + src)), { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.crossOrigin = "anonymous";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Failed to load " + src));
+      document.head.appendChild(script);
+    });
+
+  await loadScriptOnce("https://d3js.org/d3.v6.min.js", () => Boolean(window.d3));
+  await loadScriptOnce("https://d3js.org/d3-hexbin.v0.2.min.js", () => Boolean(window.d3?.hexbin));
+
+  if (!window.ddv?.visualizers?.VisualizationSeries) {
+    throw new Error("DDV library is not available. Upload ptx-ddv.js as this visualization JS library file.");
+  }
+
+  const source =
+    resultData?.data?.content?.data ||
+    resultData?.content?.data ||
+    resultData?.data?.data ||
+    resultData?.data ||
+    resultData;
+
+  const normalizeList = (value) => (Array.isArray(value) ? value : []);
+  const courseRecommendations = normalizeList(source?.recommendations_based_on_matching_skills);
+  const extensiveRecommendations = normalizeList(source?.recommendations_based_on_extensive_skills);
+  const recommendations = courseRecommendations.length > 0 ? courseRecommendations : extensiveRecommendations;
+
+  if (recommendations.length === 0) {
+    throw new Error("Expected course recommendations in recommendations_based_on_matching_skills or recommendations_based_on_extensive_skills.");
+  }
+
+  const headaiResponse = {
+    recommendations_based_on_extensive_skills: recommendations,
+    recommendations_based_on_matching_skills: courseRecommendations,
+    recommendations_based_on_match: normalizeList(source?.recommendations_based_on_match),
+    recommendations_based_on_learning_paths: normalizeList(source?.recommendations_based_on_learning_paths),
+    recommendations_based_on_skills_demand: normalizeList(source?.recommendations_based_on_skills_demand),
+  };
+
+  container.innerHTML = "";
+
+  const style = document.createElement("style");
+  style.textContent = [
+    "#ddv { width: 100%; min-height: 620px; font-family: inherit; color: inherit; }",
+    "#ddv .visualTitle, #ddv [class*=visualTitle], #ddv [class*=VisualTitle] { color: hsl(var(--primary, 187 85% 53%)) !important; fill: hsl(var(--primary, 187 85% 53%)) !important; font-size: 20px !important; font-weight: 800 !important; }",
+    "#ddv [class*=navButton], #ddv [class*=NavButton] { display: none !important; }",
+    "#ddv .listElement { cursor: pointer; font-size: 14px; line-height: 1.45; }",
+    "#ddv .modal { position: fixed !important; inset: 0 !important; z-index: 1050 !important; overflow: auto; padding: 24px; background: rgba(15, 23, 42, 0.45); }",
+    "#ddv .modal-dialog { width: min(920px, calc(100vw - 32px)); max-width: min(920px, calc(100vw - 32px)); margin: 32px auto; }",
+    "#ddv .modal-content { max-height: calc(100vh - 64px); overflow: hidden; border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 10px; background: #fff; color: #0f172a; box-shadow: 0 24px 64px rgba(15, 23, 42, 0.24); }",
+    "#ddv .modal-description { max-height: calc(100vh - 180px); overflow: auto; font-size: 14px; line-height: 1.5; }",
+  ].join("\\n");
+  shadowRoot.appendChild(style);
+
+  const ddvContainer = document.createElement("div");
+  ddvContainer.id = "ddv";
+  container.appendChild(ddvContainer);
+
+  const rules = {
+    visuals: [
+      {
+        type: "Courses",
+        data: headaiResponse,
+        title: "Course Recommendations",
+        buttonTitle: "Courses",
+        provider: "headai",
+      },
+    ],
+    properties: {
+      showButtons: false,
+      showTitle: true,
+    },
+  };
+
+  const visualization = new window.ddv.visualizers.VisualizationSeries(rules);
+  visualization.attachOnSelection(window.d3.select(ddvContainer));
+  window.ddv.visualizers.responsive?.enableResponsivenessToSeries?.(visualization);
+  visualization.refresh();
+})();`;
+
 const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   const loadScriptOnce = (src, globalCheck) =>
     new Promise((resolve, reject) => {
@@ -229,17 +321,12 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     const skills = Array.isArray(record.skills) ? record.skills : [];
     const firstSkill = skills[0] && typeof skills[0] === "object" ? skills[0] : {};
     const description = firstSkill?.description?.literal || "";
-    const alternativeLabels = Array.isArray(firstSkill?.alternative_labels)
-      ? firstSkill.alternative_labels.join(", ")
-      : "";
 
     return {
       id: skillKey,
       original_key: skillKey,
       skill_name: toDisplayName(skillKey),
       skill_description: description,
-      count: Number(record.count || 0),
-      alternative_labels: alternativeLabels,
     };
   });
 
@@ -326,6 +413,15 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       background: #0f172a;
       color: white;
     }
+    .tabulator .tabulator-header .tabulator-col {
+      background: #0f172a;
+      border-right-color: rgba(255, 255, 255, 0.18);
+      color: white;
+    }
+    .tabulator .tabulator-header .tabulator-col .tabulator-col-title {
+      color: white;
+      font-weight: 700;
+    }
     .tabulator-row .tabulator-cell {
       white-space: normal;
     }
@@ -340,7 +436,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
   const searchInput = document.createElement("input");
   searchInput.type = "search";
-  searchInput.placeholder = "Search skills, descriptions, or alternative labels...";
+  searchInput.placeholder = "Search skills or descriptions...";
 
   const toolbarActions = document.createElement("div");
   toolbarActions.className = "tabulator-toolbar-actions";
@@ -398,18 +494,16 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       usedKeys.add(nextKey);
 
       const originalRecord = mutableRoot[previousKey] || {
-        count: rowData.count || 0,
-        skills: [{ description: { literal: "", mimetype: "plain/text" }, alternative_labels: [] }],
+        skills: [{ description: { literal: "", mimetype: "plain/text" } }],
       };
 
       const record = JSON.parse(JSON.stringify(originalRecord));
-      record.count = Number(rowData.count || 0);
 
       if (!Array.isArray(record.skills)) {
-        record.skills = [{ description: { literal: "", mimetype: "plain/text" }, alternative_labels: [] }];
+        record.skills = [{ description: { literal: "", mimetype: "plain/text" } }];
       }
       if (!record.skills[0] || typeof record.skills[0] !== "object") {
-        record.skills[0] = { description: { literal: "", mimetype: "plain/text" }, alternative_labels: [] };
+        record.skills[0] = { description: { literal: "", mimetype: "plain/text" } };
       }
       if (!record.skills[0].description || typeof record.skills[0].description !== "object") {
         record.skills[0].description = { mimetype: "plain/text" };
@@ -417,10 +511,6 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
       record.skills[0].description.literal = rowData.skill_description || "";
       record.skills[0].description.mimetype = record.skills[0].description.mimetype || "plain/text";
-      record.skills[0].alternative_labels = String(rowData.alternative_labels || "")
-        .split(",")
-        .map((label) => label.trim())
-        .filter(Boolean);
 
       nextRoot[nextKey] = record;
       rowData.id = nextKey;
@@ -460,21 +550,6 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
         formatter: "textarea",
         minWidth: 420,
       },
-      {
-        title: "Count",
-        field: "count",
-        editor: "number",
-        sorter: "number",
-        width: 110,
-      },
-      {
-        title: "Alternative Labels",
-        field: "alternative_labels",
-        editor: "textarea",
-        sorter: "string",
-        formatter: "textarea",
-        minWidth: 260,
-      },
     ],
     cellEdited: () => setDirty(true),
   });
@@ -501,7 +576,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     }
 
     table.setFilter((row) =>
-      ["skill_name", "skill_description", "alternative_labels"].some((field) =>
+      ["skill_name", "skill_description"].some((field) =>
         String(row[field] || "").toLowerCase().includes(query)
       )
     );
@@ -645,6 +720,7 @@ const getCustomVisualizationsFromFeatures = (features: unknown): CustomVisualiza
 
 const ResultPageSettingsSection = () => {
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState("export-api");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [globalFeatures, setGlobalFeatures] = useState<Record<string, unknown>>({});
@@ -835,7 +911,7 @@ const ResultPageSettingsSection = () => {
     updateCustomVisualization(index, {
       library_files: (visualization.library_files || []).filter((file) => file.id !== fileId),
     });
-    toast.success("Visualization library file removed. Save the settings to persist this change.");
+    toast.success("Visualization library file removed. Click Apply Changes to save this update.");
   };
 
   const handleApplyDdvExample = (index: number) => {
@@ -844,21 +920,16 @@ const ResultPageSettingsSection = () => {
     toast.success("DDV knowledge graph example applied to render code");
   };
 
+  const handleApplyDdvCourseRecommendationExample = (index: number) => {
+    if (!customVisualizations[index]) return;
+    updateCustomVisualization(index, { render_code: DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE });
+    toast.success("DDV course recommendation example applied to render code");
+  };
+
   const handleApplyTabulatorExample = (index: number) => {
     if (!customVisualizations[index]) return;
     updateCustomVisualization(index, { render_code: TABULATOR_RENDER_CODE_EXAMPLE });
     toast.success("Tabulator interactive table example applied to render code");
-  };
-
-  const handleAddTabulatorVisualization = () => {
-    const visualization: CustomVisualizationConfig = {
-      ...emptyCustomVisualization(),
-      name: "Interactive Skills Table",
-      description: "Editable Tabulator table for resultData.data.content.data.result skill descriptions.",
-      render_code: TABULATOR_RENDER_CODE_EXAMPLE,
-    };
-    setCustomVisualizations((current) => [...current, visualization]);
-    setEditingVisualizationId(visualization.id);
   };
 
   const getVisualizationLibrarySummary = (visualization: CustomVisualizationConfig) => {
@@ -920,17 +991,25 @@ const ResultPageSettingsSection = () => {
     setIsTagHelpOpen(true);
   };
 
-  const saveResultPageSettings = async (successMessage: string) => {
-    if (!user?.organization?.id) return;
+  const saveResultPageSettings = async (
+    successMessage: string,
+    overrides?: {
+      exportApis?: ExportApiConfig[];
+      customVisualizations?: CustomVisualizationConfig[];
+    },
+  ) => {
+    if (!user?.organization?.id) return false;
 
     setIsSaving(true);
     try {
+      const nextExportApis = overrides?.exportApis ?? exportApis;
+      const nextCustomVisualizations = overrides?.customVisualizations ?? customVisualizations;
       const nextFeatures = {
         ...globalFeatures,
         resultPage: {
           ...(isRecord(globalFeatures.resultPage) ? globalFeatures.resultPage : {}),
-          exportApiConfigs: exportApis,
-          customVisualizations,
+          exportApiConfigs: nextExportApis,
+          customVisualizations: nextCustomVisualizations,
         },
       };
 
@@ -945,8 +1024,10 @@ const ResultPageSettingsSection = () => {
       toast.success(successMessage);
       setIsUsingLegacyExportApis(false);
       await fetchSettings();
+      return true;
     } catch {
       toast.error("Failed to save result page settings");
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -956,25 +1037,47 @@ const ResultPageSettingsSection = () => {
     await saveResultPageSettings("Export API endpoints saved");
   };
 
-  const handleSaveCustomVisualizations = async () => {
-    await saveResultPageSettings("Custom visualizations saved");
-  };
-
   const handleAddCustomVisualization = () => {
     const visualization = emptyCustomVisualization();
+    setActiveTab("custom-visualization");
     setCustomVisualizations((current) => [...current, visualization]);
     setEditingVisualizationId(visualization.id);
   };
 
-  const handleConfirmDeleteVisualization = () => {
+  const handleToggleCustomVisualizationActive = async (index: number) => {
+    const visualization = customVisualizations[index];
+    if (!visualization) return;
+
+    setActiveTab("custom-visualization");
+    const updated = [...customVisualizations];
+    updated[index] = { ...visualization, is_active: !visualization.is_active };
+    setCustomVisualizations(updated);
+
+    await saveResultPageSettings(
+      updated[index].is_active ? "Custom visualization activated" : "Custom visualization deactivated",
+      { customVisualizations: updated },
+    );
+  };
+
+  const handleApplyVisualizationChanges = async () => {
+    setActiveTab("custom-visualization");
+    const saved = await saveResultPageSettings("Custom visualization saved");
+    if (saved) {
+      setEditingVisualizationId(null);
+    }
+  };
+
+  const handleConfirmDeleteVisualization = async () => {
     if (!deleteVisualizationId) return;
 
-    setCustomVisualizations((current) => current.filter((visualization) => visualization.id !== deleteVisualizationId));
+    setActiveTab("custom-visualization");
+    const updated = customVisualizations.filter((visualization) => visualization.id !== deleteVisualizationId);
+    setCustomVisualizations(updated);
     if (editingVisualizationId === deleteVisualizationId) {
       setEditingVisualizationId(null);
     }
     setDeleteVisualizationId(null);
-    toast.success("Custom visualization deleted. Save the settings to persist this change.");
+    await saveResultPageSettings("Custom visualization deleted", { customVisualizations: updated });
   };
 
   if (isLoading) {
@@ -996,7 +1099,7 @@ const ResultPageSettingsSection = () => {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <Tabs defaultValue="export-api" className="space-y-4">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
           <TabsList>
             <TabsTrigger value="export-api" className="gap-2">
               <Send className="h-4 w-4" />
@@ -1205,15 +1308,6 @@ const ResultPageSettingsSection = () => {
                   <Plus className="h-4 w-4 mr-1" />
                   Add Visualization
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleAddTabulatorVisualization}
-                >
-                  <TableIcon className="h-4 w-4 mr-1" />
-                  Add Tabulator Table
-                </Button>
               </div>
 
               {customVisualizations.length === 0 ? (
@@ -1264,7 +1358,7 @@ const ResultPageSettingsSection = () => {
                                 type="button"
                                 variant={visualization.is_active ? "secondary" : "outline"}
                                 size="sm"
-                                onClick={() => updateCustomVisualization(index, { is_active: !visualization.is_active })}
+                                onClick={() => void handleToggleCustomVisualizationActive(index)}
                               >
                                 {visualization.is_active ? (
                                   <>
@@ -1303,22 +1397,6 @@ const ResultPageSettingsSection = () => {
                   </Table>
                 </div>
               )}
-            </div>
-
-            <div className="flex justify-end">
-              <Button onClick={handleSaveCustomVisualizations} disabled={isSaving}>
-                {isSaving ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save Custom Visualizations
-                  </>
-                )}
-              </Button>
             </div>
 
             <Dialog open={Boolean(editingVisualization)} onOpenChange={(open) => !open && setEditingVisualizationId(null)}>
@@ -1441,60 +1519,6 @@ const ResultPageSettingsSection = () => {
                       )}
                     </div>
 
-                    <div className="rounded-md border bg-emerald-500/5 p-3 space-y-3">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <Label className="text-xs">Tabulator Editable Skills Table Example</Label>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Use this for a searchable, sortable, filterable, editable table powered by Tabulator 6.4. It reads <code>resultData.data.content.data.result</code>, displays skill keys with spaces, and writes edited names back to JSON with underscores.
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleApplyTabulatorExample(editingVisualizationIndex)}
-                        >
-                          Use Tabulator Example
-                        </Button>
-                      </div>
-                      <details className="rounded-md border bg-background/60 p-3">
-                        <summary className="cursor-pointer text-xs font-medium">
-                          Show Tabulator render code
-                        </summary>
-                        <pre className="mt-3 max-h-72 overflow-auto rounded bg-secondary/50 p-3 text-xs">
-{TABULATOR_RENDER_CODE_EXAMPLE}
-                        </pre>
-                      </details>
-                    </div>
-
-                    <div className="rounded-md border bg-blue-500/5 p-3 space-y-3">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <Label className="text-xs">DDV / Distributed Data Visualization Example</Label>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            Use this as a starting point for <code>ptx-ddv.js</code>. It expects knowledge graph data at <code>resultData.data.content.data</code> with <code>nodes[]</code> and <code>edges[]</code>, then renders a DDV HexagonMap inside the Shadow DOM container.
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleApplyDdvExample(editingVisualizationIndex)}
-                        >
-                          Use DDV Example
-                        </Button>
-                      </div>
-                      <details className="rounded-md border bg-background/60 p-3">
-                        <summary className="cursor-pointer text-xs font-medium">
-                          Show example render code
-                        </summary>
-                        <pre className="mt-3 max-h-72 overflow-auto rounded bg-secondary/50 p-3 text-xs">
-{DDV_RENDER_CODE_EXAMPLE}
-                        </pre>
-                      </details>
-                    </div>
-
                     <div className="rounded-md border bg-background/40 p-3 space-y-3">
                       <div>
                         <Label className="text-xs">Sample Result JSON From Fetch Result</Label>
@@ -1542,7 +1566,31 @@ const ResultPageSettingsSection = () => {
                     </div>
 
                     <div className="space-y-1">
-                      <Label className="text-xs">Custom JavaScript Render Code</Label>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <Label className="text-xs">Custom JavaScript Render Code</Label>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button type="button" variant="outline" size="sm" className="w-fit">
+                              Use example
+                              <ChevronDown className="ml-2 h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-64">
+                            <DropdownMenuItem onClick={() => handleApplyTabulatorExample(editingVisualizationIndex)}>
+                              <TableIcon className="mr-2 h-4 w-4" />
+                              Tabulator editable skills table
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleApplyDdvExample(editingVisualizationIndex)}>
+                              <Palette className="mr-2 h-4 w-4" />
+                              DDV knowledge graph
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleApplyDdvCourseRecommendationExample(editingVisualizationIndex)}>
+                              <GraduationCap className="mr-2 h-4 w-4" />
+                              DDV course recommendation
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
                       <Textarea
                         value={editingVisualization.render_code}
                         onChange={(event) => updateCustomVisualization(editingVisualizationIndex, { render_code: event.target.value })}
@@ -1586,8 +1634,15 @@ const ResultPageSettingsSection = () => {
                   <Button variant="outline" onClick={() => setEditingVisualizationId(null)}>
                     Close
                   </Button>
-                  <Button onClick={() => setEditingVisualizationId(null)}>
-                    Apply Changes
+                  <Button onClick={() => void handleApplyVisualizationChanges()} disabled={isSaving}>
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      "Apply Changes"
+                    )}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -1598,7 +1653,7 @@ const ResultPageSettingsSection = () => {
                 <DialogHeader>
                   <DialogTitle>Delete Custom Visualization?</DialogTitle>
                   <DialogDescription>
-                    This removes "{deleteVisualization?.name || "this custom visualization"}" from the list. The deletion is only persisted after you click Save Custom Visualizations.
+                    This removes "{deleteVisualization?.name || "this custom visualization"}" from the list and saves the change immediately.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
@@ -1608,8 +1663,15 @@ const ResultPageSettingsSection = () => {
                   <Button variant="outline" onClick={() => setDeleteVisualizationId(null)}>
                     Cancel
                   </Button>
-                  <Button variant="destructive" onClick={handleConfirmDeleteVisualization}>
-                    Delete Visualization
+                  <Button variant="destructive" onClick={() => void handleConfirmDeleteVisualization()} disabled={isSaving}>
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Deleting...
+                      </>
+                    ) : (
+                      "Delete Visualization"
+                    )}
                   </Button>
                 </DialogFooter>
               </DialogContent>
