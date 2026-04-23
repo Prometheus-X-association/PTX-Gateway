@@ -16,7 +16,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import UserMenu from "@/components/UserMenu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AnalyticsOption, CustomVisualizationConfig, DataResource, ExportApiConfig, PdcConfig, SoftwareResource, ServiceChain } from "@/types/dataspace";
+import { AnalyticsOption, CustomVisualizationConfig, CustomVisualizationLibraryBundle, DataResource, ExportApiConfig, PdcConfig, SoftwareResource, ServiceChain } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { Json } from "@/integrations/supabase/types";
@@ -219,6 +219,7 @@ interface PersistedOrgFlowState {
   step: OrgFlowStep;
   sessionId: string;
   analyticsType: string;
+  analyticsTargetId?: string | null;
   pdcPayload: PdcPayload | null;
   resultUrlInfo: ResultUrlInfo | null;
   llmPromptContext?: string | null;
@@ -250,6 +251,35 @@ const clearPersistedOrgFlow = (slug: string): void => {
   localStorage.removeItem(getOrgFlowStorageKey(slug));
 };
 
+const getAnalyticsTargetId = (option: AnalyticsOption | null): string | null => {
+  if (!option) return null;
+  return option.type === "software"
+    ? `software:${option.data.id}`
+    : `serviceChain:${option.data.id}`;
+};
+
+const inferAnalyticsTargetIdFromPayload = (
+  payload: PdcPayload | null | undefined,
+  softwareResources: SoftwareResource[],
+  serviceChains: ServiceChain[],
+): string | null => {
+  if (!payload) return null;
+
+  if (payload.serviceChainId) {
+    const serviceChain = serviceChains.find((item) =>
+      item.catalog_id === payload.serviceChainId || item.contract_url === payload.contract
+    );
+    if (serviceChain) return `serviceChain:${serviceChain.id}`;
+  }
+
+  const purposeResource = payload.purposes?.[0]?.resource;
+  const software = softwareResources.find((item) =>
+    item.contract_url === payload.contract &&
+    (!purposeResource || item.resource_url === purposeResource)
+  );
+  return software ? `software:${software.id}` : null;
+};
+
 const isEmbeddedFrame = (): boolean => {
   if (typeof window === "undefined") return false;
   try {
@@ -273,8 +303,16 @@ const getResultPageExportApiConfigs = (features: unknown): ExportApiConfig[] => 
 const getResultPageCustomVisualizations = (features: unknown): CustomVisualizationConfig[] => {
   if (!isRecord(features)) return [];
   const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  const bundles = Array.isArray(resultPage.customVisualizationLibraryBundles)
+    ? (resultPage.customVisualizationLibraryBundles as unknown as CustomVisualizationLibraryBundle[])
+    : [];
   return Array.isArray(resultPage.customVisualizations)
-    ? (resultPage.customVisualizations as unknown as CustomVisualizationConfig[])
+    ? (resultPage.customVisualizations as unknown as CustomVisualizationConfig[]).map((visualization) => ({
+      ...visualization,
+      library_bundle_files: visualization.library_source === "bundle"
+        ? bundles.find((bundle) => bundle.id === visualization.library_bundle_id)?.library_files || []
+        : visualization.library_bundle_files || [],
+    }))
     : [];
 };
 
@@ -511,6 +549,11 @@ const OrgGatewayContent = ({
     getStepIndex,
   ]);
 
+  const analyticsTargetId = useMemo(
+    () => getAnalyticsTargetId(selectedAnalytics),
+    [selectedAnalytics],
+  );
+
   // Generate PDC payload when we have analytics and data selected
   const pdcPayload: PdcPayload | null = useMemo(() => {
     if (!selectedAnalytics || !selectedData) return null;
@@ -613,6 +656,7 @@ const OrgGatewayContent = ({
             step: "processing",
             sessionId,
             analyticsType: analyticsDisplayName || persistedFlow?.analyticsType || "Analytics",
+            analyticsTargetId: analyticsTargetId ?? persistedFlow?.analyticsTargetId ?? null,
             pdcPayload,
             resultUrlInfo,
             llmPromptContext,
@@ -625,6 +669,7 @@ const OrgGatewayContent = ({
               step: "results",
               sessionId,
               analyticsType: analyticsDisplayName || persistedFlow?.analyticsType || "Analytics",
+              analyticsTargetId: analyticsTargetId ?? persistedFlow?.analyticsTargetId ?? null,
               pdcPayload: pdcPayload ?? persistedFlow?.pdcPayload ?? null,
               resultUrlInfo: resultUrlInfo ?? persistedFlow?.resultUrlInfo ?? null,
               llmPromptContext: llmPromptContext ?? persistedFlow?.llmPromptContext ?? null,
@@ -641,6 +686,7 @@ const OrgGatewayContent = ({
       existing?.step === flowToPersist.step &&
       existing?.sessionId === flowToPersist.sessionId &&
       existing?.analyticsType === flowToPersist.analyticsType &&
+      (existing?.analyticsTargetId ?? null) === (flowToPersist.analyticsTargetId ?? null) &&
       JSON.stringify(existing?.pdcPayload ?? null) === JSON.stringify(flowToPersist.pdcPayload ?? null) &&
       JSON.stringify(existing?.resultUrlInfo ?? null) === JSON.stringify(flowToPersist.resultUrlInfo ?? null) &&
       (existing?.llmPromptContext ?? null) === (flowToPersist.llmPromptContext ?? null) &&
@@ -665,9 +711,11 @@ const OrgGatewayContent = ({
     organization.slug,
     sessionId,
     analyticsDisplayName,
+    analyticsTargetId,
     pdcPayload,
     resultUrlInfo,
     persistedFlow?.analyticsType,
+    persistedFlow?.analyticsTargetId,
     persistedFlow?.pdcPayload,
     persistedFlow?.resultUrlInfo,
     persistedFlow?.llmPromptContext,
@@ -687,6 +735,9 @@ const OrgGatewayContent = ({
   const activeLlmPromptContext = llmPromptContext ?? persistedFlow?.llmPromptContext ?? null;
   const activeForcedResultData = forcedResultData ?? persistedFlow?.forcedResultData ?? null;
   const activeForcedResultNotice = forcedResultNotice ?? persistedFlow?.forcedResultNotice ?? null;
+  const activeAnalyticsTargetId = analyticsTargetId
+    ?? persistedFlow?.analyticsTargetId
+    ?? inferAnalyticsTargetIdFromPayload(activePdcPayload, softwareResources, serviceChains);
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
@@ -792,6 +843,7 @@ const OrgGatewayContent = ({
               orgExecutionToken={orgExecutionToken}
               llmPromptContext={activeLlmPromptContext}
               selectedAnalytics={selectedAnalytics}
+              selectedAnalyticsTargetId={activeAnalyticsTargetId}
               customVisualizations={customVisualizations}
             />
           )}

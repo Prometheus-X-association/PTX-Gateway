@@ -24,18 +24,23 @@ const DebugModePage = () => {
     navigate("/admin");
   };
 
-  const handleOpenGateway = async () => {
-    // Enable debug mode if not already enabled, then go to gateway with org slug
+  const getGatewayPath = () => {
+    const orgSlug = user?.organization?.slug;
+    return orgSlug ? `/${encodeURIComponent(orgSlug)}` : "/";
+  };
+
+  const handleOpenGatewayEndUser = async () => {
+    if (user?.isDebugMode) {
+      await toggleDebugMode();
+    }
+    navigate(getGatewayPath());
+  };
+
+  const handleOpenGatewayDebug = async () => {
     if (!user?.isDebugMode) {
       await toggleDebugMode();
     }
-    // Navigate to organization's public gateway using slug
-    const orgSlug = user?.organization?.slug;
-    if (orgSlug) {
-      navigate(`/${orgSlug}`);
-    } else {
-      navigate("/");
-    }
+    navigate(getGatewayPath());
   };
 
   const handleSignOut = async () => {
@@ -133,23 +138,28 @@ const DebugModePage = () => {
             </Card>
           )}
 
-          <Card className="glass-card hover:border-primary/50 transition-colors cursor-pointer" onClick={handleOpenGateway}>
+          <Card className="glass-card">
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
                   <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
                     <Play className="h-5 w-5 text-primary" />
                   </div>
                   <div>
-                    <CardTitle className="text-base">Gateway (Debug Mode)</CardTitle>
+                    <CardTitle className="text-base">Gateway</CardTitle>
                     <CardDescription className="text-sm">
-                      Access the gateway with debug features enabled
+                      Open the current organization gateway as an end user or with admin debug tools.
                     </CardDescription>
                   </div>
                 </div>
-                <Button variant="outline" size="sm">
-                  Open
-                </Button>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button variant="outline" size="sm" onClick={() => void handleOpenGatewayEndUser()}>
+                    End User View
+                  </Button>
+                  <Button variant="default" size="sm" onClick={() => void handleOpenGatewayDebug()}>
+                    Debug View
+                  </Button>
+                </div>
               </div>
             </CardHeader>
           </Card>

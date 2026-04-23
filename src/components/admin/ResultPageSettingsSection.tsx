@@ -10,11 +10,12 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { ChevronDown, Download, GraduationCap, Loader2, Plus, Save, Send, Trash2, Eye, EyeOff, Upload, Palette, Pencil, Table as TableIcon } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ChevronDown, Download, Files, GraduationCap, LinkIcon, Loader2, Plus, Save, Send, Trash2, Eye, EyeOff, Upload, Palette, Pencil, Table as TableIcon } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { CustomVisualizationConfig, CustomVisualizationLibraryFile, ExportApiConfig } from "@/types/dataspace";
+import { CustomVisualizationConfig, CustomVisualizationLibraryBundle, CustomVisualizationLibraryFile, ExportApiConfig } from "@/types/dataspace";
 
 interface TemplateTagHelp {
   tag: string;
@@ -166,17 +167,6 @@ const DDV_RENDER_CODE_EXAMPLE = `return (async () => {
 })();`;
 
 const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
-  const startedAt = performance.now();
-  const elapsed = () => Math.round(performance.now() - startedAt);
-  const logStage = (message) => {
-    console.info("[DDV Courses render] " + message + " +" + elapsed() + "ms");
-  };
-  const bridgeMessageType = "ptx-ddv-course-render-log";
-  const parentLogListener = (event) => {
-    if (event.source !== iframe?.contentWindow || event.data?.type !== bridgeMessageType) return;
-    console.info(event.data.message, event.data.detail || "");
-  };
-
   const source =
     resultData?.data?.content?.data ||
     resultData?.content?.data ||
@@ -184,18 +174,19 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
     resultData?.data ||
     resultData;
 
-  const normalizeList = (value) => (Array.isArray(value) ? value : []);
-  const courseRecommendations = normalizeList(source?.recommendations_based_on_matching_skills);
-  const extensiveRecommendations = normalizeList(source?.recommendations_based_on_extensive_skills);
-  const selectedRecommendationSource = courseRecommendations.length > 0 ? "matching" : "extensive";
-  const recommendations = selectedRecommendationSource === "matching" ? courseRecommendations : extensiveRecommendations;
+  const asList = (value) => (Array.isArray(value) ? value : []);
+  const matchingRecommendations = asList(source?.recommendations_based_on_matching_skills);
+  const extensiveRecommendations = asList(source?.recommendations_based_on_extensive_skills);
+  const selectedRecommendationSource = matchingRecommendations.length > 0 ? "matching" : "extensive";
+  const recommendations = selectedRecommendationSource === "matching"
+    ? matchingRecommendations
+    : extensiveRecommendations;
 
   if (recommendations.length === 0) {
-    throw new Error("Expected course recommendations in recommendations_based_on_matching_skills or recommendations_based_on_extensive_skills.");
+    throw new Error("Expected recommendations_based_on_matching_skills or recommendations_based_on_extensive_skills in resultData.");
   }
 
   container.innerHTML = "";
-  container.style.overflow = "visible";
 
   const iframe = document.createElement("iframe");
   iframe.title = "Course recommendations";
@@ -205,51 +196,30 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
   iframe.style.border = "0";
   iframe.style.background = "transparent";
   iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-popups allow-modals");
-  window.addEventListener("message", parentLogListener);
   container.appendChild(iframe);
-
-  const iframeCss = [
-    "html, body { margin: 0; min-height: 100%; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 16px; color: #212529; background: transparent; }",
-    "*, *::before, *::after { box-sizing: border-box; }",
-    "body { overflow-x: hidden; }",
-    "#ddv { width: 100%; min-height: 720px; padding: 0; }",
-    ".visualTitle { margin: 0 0 6px; color: #0891b2; font-size: 20px; font-weight: 800; line-height: 1.2; }",
-    ".visualSubtitle { margin: 0 0 18px; color: #6c757d; font-size: 14px; }",
-    ".listElement { cursor: pointer; }",
-    ".modal { z-index: 2147483647 !important; }",
-    ".modal-backdrop { z-index: 2147483646 !important; }",
-    ".ptx-course-modal-backdrop { position: fixed; inset: 0; z-index: 2147483646; background: rgba(15, 23, 42, 0.52); }",
-    ".ptx-course-modal { position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: flex-start; justify-content: center; overflow-x: hidden; overflow-y: auto; padding: 32px 0; }",
-    ".ptx-course-modal-dialog { width: auto; min-width: min(500px, 80vw); max-width: min(920px, 80vw); margin: 0 auto; border-radius: 10px; background: #fff; color: #1f2937; box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28); }",
-    "@media (max-width: 640px) { .ptx-course-modal { padding: 16px 0; } .ptx-course-modal-dialog { min-width: auto; width: calc(100vw - 32px); max-width: calc(100vw - 32px); } }",
-    ".ptx-course-modal-header { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; padding: 20px 24px 14px; border-bottom: 1px solid #e5e7eb; }",
-    ".ptx-course-modal-title { margin: 0; font-size: 22px; line-height: 1.25; color: #0f172a; }",
-    ".ptx-course-modal-close { flex: 0 0 auto; border: 0; border-radius: 6px; padding: 4px 10px; background: #f1f5f9; color: #0f172a; font-size: 22px; line-height: 1; cursor: pointer; }",
-    ".ptx-course-modal-body { display: grid; gap: 16px; padding: 20px 24px 24px; font-size: 14px; line-height: 1.55; }",
-    ".ptx-course-modal-meta { display: flex; flex-wrap: wrap; gap: 8px; color: #475569; }",
-    ".ptx-course-modal-pill { display: inline-flex; align-items: center; border-radius: 999px; background: #e0f2fe; color: #075985; padding: 4px 10px; font-size: 12px; font-weight: 700; }",
-    ".ptx-course-modal-section h4 { margin: 0 0 8px; color: #0f172a; font-size: 15px; }",
-    ".ptx-course-modal-section p { margin: 0; }",
-    ".ptx-course-modal-skills { display: flex; flex-wrap: wrap; gap: 6px; }",
-    ".ptx-course-modal-skill { border-radius: 999px; padding: 3px 8px; font-size: 12px; font-weight: 600; }",
-    ".ptx-course-modal-skill-new { background: #dbeafe; color: #1d4ed8; }",
-    ".ptx-course-modal-skill-strengthened { background: #ffedd5; color: #c2410c; }",
-    ".ptx-course-modal-actions { display: flex; justify-content: flex-end; }",
-    ".ptx-course-modal-link { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #0369a1; border-radius: 6px; background: #0369a1; color: #fff; font-weight: 700; text-decoration: none; padding: 8px 14px; }",
-    ".ptx-course-modal-link:hover { background: #075985; border-color: #075985; color: #fff; }"
-  ].join("\\n");
 
   const iframeReady = new Promise((resolve, reject) => {
     iframe.onload = resolve;
     iframe.onerror = () => reject(new Error("Failed to initialize DDV iframe."));
   });
+
   iframe.srcdoc = [
     "<!doctype html>",
     "<html>",
     "  <head>",
     "    <meta charset=\\"utf-8\\">",
     "    <meta name=\\"viewport\\" content=\\"width=device-width, initial-scale=1\\">",
-    "    <style>" + iframeCss + "</style>",
+    "    <style>",
+    "      html, body { margin: 0; min-height: 100%; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #212529; background: transparent; }",
+    "      *, *::before, *::after { box-sizing: border-box; }",
+    "      body { overflow-x: hidden; }",
+    "      #ddv { width: 100%; min-height: 720px; }",
+    "      .visualTitle { margin: 0 0 6px; color: #0891b2; font-size: 20px; font-weight: 800; line-height: 1.2; }",
+    "      .visualSubtitle { margin: 0 0 18px; color: #6c757d; font-size: 14px; }",
+    "      .listElement { cursor: pointer; }",
+    "      .modal { z-index: 2147483647 !important; }",
+    "      .modal-backdrop { z-index: 2147483646 !important; }",
+    "    </style>",
     "  </head>",
     "  <body>",
     "    <div id=\\"ddv\\"></div>",
@@ -267,30 +237,10 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
 
   const root = frameDocument.getElementById("ddv");
   const getFrameDdv = () => {
-    const candidates = [
-      frameWindow.ddv,
-      frameWindow.self?.ddv,
-      frameWindow.globalThis?.ddv
-    ];
+    const candidates = [frameWindow.ddv, frameWindow.self?.ddv, frameWindow.globalThis?.ddv];
     return candidates.find((candidate) => candidate?.visualizers) || candidates.find(Boolean);
   };
   const hasDdvVisualizers = () => Boolean(getFrameDdv()?.visualizers);
-  const describeDdvCandidate = (candidate) => {
-    if (!candidate) return "missing";
-    if (typeof candidate !== "object" && typeof candidate !== "function") return typeof candidate;
-    const keys = Object.keys(candidate).slice(0, 12).join(", ") || "no enumerable keys";
-    const visualizerKeys = Object.keys(candidate.visualizers || {}).slice(0, 12).join(", ") || "none";
-    return "keys: " + keys + "; visualizers: " + visualizerKeys;
-  };
-
-  const updateIframeHeight = () => {
-    const nextHeight = Math.max(
-      760,
-      frameDocument.documentElement?.scrollHeight || 0,
-      frameDocument.body?.scrollHeight || 0
-    );
-    iframe.style.height = nextHeight + "px";
-  };
 
   const appendCss = (cssText, sourceName) => {
     if (!cssText?.trim()) return;
@@ -299,6 +249,17 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
     style.setAttribute("data-uploaded-library-file", sourceName || "uploaded.css");
     frameDocument.head.appendChild(style);
   };
+
+  const appendCssUrl = (href) =>
+    new Promise((resolve, reject) => {
+      if (!href?.trim()) return resolve();
+      const link = frameDocument.createElement("link");
+      link.rel = "stylesheet";
+      link.href = href;
+      link.onload = resolve;
+      link.onerror = () => reject(new Error("Failed to load " + href));
+      frameDocument.head.appendChild(link);
+    });
 
   const loadFrameScript = (src, globalCheck) =>
     new Promise((resolve, reject) => {
@@ -323,28 +284,14 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
 
     return new Promise((resolve, reject) => {
       const blobUrl = URL.createObjectURL(new Blob([scriptText], { type: "text/javascript" }));
-      const cleanup = () => {
-        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
-        frameWindow.removeEventListener("error", onError);
-      };
-      const onError = (event) => {
-        cleanup();
-        reject(new Error("Failed to execute " + sourceName + ": " + (event.message || "unknown script error")));
-      };
-
-      frameWindow.module = undefined;
-      frameWindow.exports = undefined;
-      frameWindow.define = undefined;
-      frameWindow.addEventListener("error", onError, { once: true });
-
+      const cleanup = () => window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
       const script = frameDocument.createElement("script");
       script.src = blobUrl;
       script.async = false;
-      script.setAttribute("data-uploaded-library-file", sourceName || "uploaded-visualization-library.js");
       script.onload = () => {
         cleanup();
         if (!globalCheck || globalCheck()) return resolve();
-        reject(new Error("Loaded " + sourceName + " but DDV visualizers were not available. " + describeDdvCandidate(getFrameDdv())));
+        reject(new Error("Loaded " + sourceName + " but DDV visualizers were not available."));
       };
       script.onerror = () => {
         cleanup();
@@ -354,364 +301,79 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
     });
   };
 
-  const loadUploadedDdvLibrary = async () => {
+  const loadDdvLibrary = async () => {
     if (hasDdvVisualizers()) return;
 
-    const uploadedFiles = config?.library_files || [];
+    const uploadedFiles = config?.library_source === "bundle"
+      ? config?.library_bundle_files || []
+      : config?.library_files || [];
+
     uploadedFiles
       .filter((file) => file.file_type === "css")
       .forEach((file) => appendCss(file.content, file.file_name));
 
-    const uploadedJsFiles = uploadedFiles.filter((file) => file.file_type === "js" && file.content?.trim());
+    const jsFiles = uploadedFiles.filter((file) => file.file_type === "js" && file.content?.trim());
     const ddvFile =
-      uploadedJsFiles.find((file) => /ddv/i.test(file.file_name || "")) ||
-      uploadedJsFiles.find((file) => /visual/i.test(file.file_name || "")) ||
-      uploadedJsFiles[0];
+      jsFiles.find((file) => /ddv/i.test(file.file_name || "")) ||
+      jsFiles.find((file) => /visual/i.test(file.file_name || "")) ||
+      jsFiles[0];
 
     if (ddvFile) {
       await loadFrameScriptBlob(ddvFile.content, ddvFile.file_name || "uploaded-visualization-library.js", hasDdvVisualizers);
       return;
     }
 
-    if (config?.library_code?.trim()) {
-      await loadFrameScriptBlob(config.library_code, config.library_file_name || "uploaded-visualization-library.js", hasDdvVisualizers);
-      return;
-    }
-
-    if (config?.library_url?.trim()) {
-      await loadFrameScript(config.library_url, hasDdvVisualizers);
-      return;
-    }
-
-    throw new Error("DDV library is missing. Upload ptx-ddv.js as a JS library file for this visualization.");
-  };
-
-  const emitBridgeLog = (message, detail) => {
-    console.info(message, detail || "");
-    try {
-      frameWindow.parent?.postMessage({ type: bridgeMessageType, message, detail }, "*");
-    } catch (error) {
-      console.warn("[DDV Courses render] failed to forward iframe log", error);
-    }
-  };
-
-  const describeTarget = (target) => {
-    if (!target) return "";
-    const element = target.nodeType === 1 ? target : target.parentElement;
-    if (!element) return "";
-    const tag = element.tagName?.toLowerCase?.() || "";
-    const id = element.id ? "#" + element.id : "";
-    const className = typeof element.className === "string" && element.className ? "." + element.className.trim().replace(/\\s+/g, ".") : "";
-    return tag + id + className;
-  };
-
-  const findCourseListItem = (target) => {
-    if (!target?.closest) return null;
-    const item = target.closest("li.listElement, .listElement, li.list-group-item, [data-course-index], li");
-    if (!item || !ddvMount?.contains?.(item)) return null;
-    return item;
-  };
-
-  const hasVisibleDdvModal = () =>
-    Boolean(frameDocument.querySelector(".modal.show, .modal[style*='display: block'], .modal[style*='display:block']"));
-
-  const describeDdvModalState = () => {
-    const modals = Array.from(frameDocument.querySelectorAll(".modal"));
-    return {
-      modalCount: modals.length,
-      visibleModalCount: modals.filter((modal) =>
-        modal.classList.contains("show") || /display:\\s*block/i.test(modal.getAttribute("style") || "")
-      ).length,
-      bodyClass: frameDocument.body.className || ""
-    };
-  };
-
-  const clearFallbackCourseModal = () => {
-    frameDocument.querySelectorAll(".ptx-course-modal, .ptx-course-modal-backdrop").forEach((node) => node.remove());
-    frameDocument.body.style.overflow = "";
-    frameDocument.body.classList.remove("modal-open");
-  };
-
-  const appendFallbackText = (parent, tagName, className, text) => {
-    if (!text) return null;
-    const element = frameDocument.createElement(tagName);
-    if (className) element.className = className;
-    element.textContent = text;
-    parent.appendChild(element);
-    return element;
-  };
-
-  const appendFallbackSection = (parent, title, content) => {
-    if (!content) return;
-    const section = frameDocument.createElement("section");
-    section.className = "ptx-course-modal-section";
-    appendFallbackText(section, "h4", "", title);
-    appendFallbackText(section, "p", "", content);
-    parent.appendChild(section);
-  };
-
-  const appendFallbackSkills = (parent, title, skills, variant) => {
-    if (!skills?.length) return;
-    const section = frameDocument.createElement("section");
-    section.className = "ptx-course-modal-section";
-    appendFallbackText(section, "h4", "", title);
-    const list = frameDocument.createElement("div");
-    list.className = "ptx-course-modal-skills";
-    skills.slice(0, 80).forEach((skill) => {
-      appendFallbackText(list, "span", "ptx-course-modal-skill ptx-course-modal-skill-" + variant, String(skill).replaceAll("_", " "));
-    });
-    section.appendChild(list);
-    parent.appendChild(section);
-  };
-
-  const openFallbackCourseModal = (course) => {
-    if (!course) return;
-    clearFallbackCourseModal();
-
-    const backdrop = frameDocument.createElement("div");
-    backdrop.className = "ptx-course-modal-backdrop";
-
-    const modal = frameDocument.createElement("div");
-    modal.className = "ptx-course-modal";
-    modal.setAttribute("role", "dialog");
-    modal.setAttribute("aria-modal", "true");
-
-    const dialog = frameDocument.createElement("article");
-    dialog.className = "ptx-course-modal-dialog";
-
-    const header = frameDocument.createElement("header");
-    header.className = "ptx-course-modal-header";
-    appendFallbackText(header, "h3", "ptx-course-modal-title", course.title || "Course details");
-    const closeButton = frameDocument.createElement("button");
-    closeButton.type = "button";
-    closeButton.className = "ptx-course-modal-close";
-    closeButton.setAttribute("aria-label", "Close course details");
-    closeButton.textContent = "×";
-    header.appendChild(closeButton);
-
-    const body = frameDocument.createElement("div");
-    body.className = "ptx-course-modal-body";
-
-    const meta = frameDocument.createElement("div");
-    meta.className = "ptx-course-modal-meta";
-    [
-      course.code ? "Code: " + course.code : "",
-      course.quality_index != null ? "Quality: " + course.quality_index : "",
-      course.score != null ? "Score: " + Math.round(Number(course.score)) : ""
-    ].filter(Boolean).forEach((value) => appendFallbackText(meta, "span", "ptx-course-modal-pill", value));
-    if (meta.childNodes.length > 0) body.appendChild(meta);
-
-    appendFallbackSection(body, "Description", course.description || course.short_description || course.shortDescription);
-    appendFallbackSkills(body, "New Skills", course.newSkills || course.new_skills, "new");
-    appendFallbackSkills(body, "Strengthened Skills", course.existingSkills || course.existing_skills, "strengthened");
-
-    const url = course.url || course.link || course.course_url;
-    if (url) {
-      const linkSection = frameDocument.createElement("section");
-      linkSection.className = "ptx-course-modal-actions";
-      const link = frameDocument.createElement("a");
-      link.className = "ptx-course-modal-link";
-      link.href = url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.textContent = "Read more";
-      linkSection.appendChild(link);
-      body.appendChild(linkSection);
-    }
-
-    dialog.appendChild(header);
-    dialog.appendChild(body);
-    modal.appendChild(dialog);
-    frameDocument.body.appendChild(backdrop);
-    frameDocument.body.appendChild(modal);
-    frameDocument.body.style.overflow = "hidden";
-    frameDocument.body.classList.add("modal-open");
-
-    const closeModal = () => clearFallbackCourseModal();
-    closeButton.addEventListener("click", closeModal);
-    backdrop.addEventListener("click", closeModal);
-    modal.addEventListener("click", (event) => {
-      if (event.target === modal) closeModal();
-    });
-    frameWindow.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeModal();
-    }, { once: true });
-    closeButton.focus();
-    updateIframeHeight();
-  };
-
-  let lastFallbackInteractionStamp = -1;
-  const scheduleFallbackCourseModal = (event, item) => {
-    if (!["pointerdown", "mousedown", "touchstart", "click"].includes(event.type)) return;
-    if (lastFallbackInteractionStamp === event.timeStamp) return;
-    lastFallbackInteractionStamp = event.timeStamp;
-
-    window.setTimeout(() => {
-      const ddvModalState = describeDdvModalState();
-      if (hasVisibleDdvModal() || frameDocument.querySelector(".ptx-course-modal")) return;
-      const items = Array.from(ddvMount.querySelectorAll("li.listElement, .listElement, li.list-group-item, li"));
-      const indexFromAttribute = Number(item.getAttribute("data-course-index"));
-      const rawIndex = Number.isFinite(indexFromAttribute) && indexFromAttribute >= 0 ? indexFromAttribute : items.indexOf(item);
-      const index = courses.length > 0 ? rawIndex % courses.length : rawIndex;
-      const course = courses[index];
-      if (!course) {
-        emitBridgeLog("[DDV Courses render] fallback modal skipped because no course was found +" + elapsed() + "ms", {
-          index,
-          rawIndex,
-          itemCount: items.length,
-          courseCount: courses.length,
-          eventType: event.type,
-          itemText: item.textContent?.trim()?.slice(0, 120) || ""
-        });
-        return;
+    const urls = (config?.library_url || "").split(/\\s+/).filter(Boolean);
+    for (const url of urls) {
+      if (/\\.css($|[?#])/.test(url)) {
+        await appendCssUrl(url);
+      } else {
+        await loadFrameScript(url, hasDdvVisualizers);
       }
-      emitBridgeLog("[DDV Courses render] opening fallback course modal +" + elapsed() + "ms", {
-        index,
-        rawIndex,
-        title: course.title || "",
-        eventType: event.type,
-        ddvModalState
-      });
-      openFallbackCourseModal(course);
-    }, event.type === "click" ? 120 : 220);
+      if (hasDdvVisualizers()) return;
+    }
+
+    throw new Error("DDV library is missing. Upload ptx-ddv.js or select a bundle containing it.");
   };
 
-  const handleCourseClickCapture = (event) => {
-    const item = findCourseListItem(event.target);
-    if (!item) return;
-    emitBridgeLog("[DDV Courses render] course " + event.type + " captured +" + elapsed() + "ms", {
-      className: item.className,
-      title: item.textContent?.trim()?.slice(0, 120) || ""
-    });
-    scheduleFallbackCourseModal(event, item);
-  };
-
-  const handleCourseKeydown = (event, item) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    item.click();
-  };
-
-  const handleAnyIframeInteraction = (event) => {
-    const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
-    if (!target || !ddvMount?.contains?.(target)) return;
-    emitBridgeLog("[DDV Courses render] iframe " + event.type + " reached DDV mount +" + elapsed() + "ms", {
-      target: describeTarget(target)
-    });
-  };
-
-  ["pointerdown", "mousedown", "click", "touchstart"].forEach((eventName) => {
-    frameWindow.addEventListener(eventName, handleAnyIframeInteraction, true);
-    frameWindow.addEventListener(eventName, handleCourseClickCapture, true);
-    frameDocument.addEventListener(eventName, handleAnyIframeInteraction, true);
-    frameDocument.addEventListener(eventName, handleCourseClickCapture, true);
-  });
-
-  await loadUploadedDdvLibrary();
-  logStage("iframe DDV loaded");
+  await loadDdvLibrary();
   await loadFrameScript("https://d3js.org/d3.v6.min.js", () => Boolean(frameWindow.d3));
   await loadFrameScript("https://d3js.org/d3-hexbin.v0.2.min.js", () => Boolean(frameWindow.d3?.hexbin));
-  logStage("iframe D3 loaded");
 
   const ddv = getFrameDdv();
   const VisualizationSeries = ddv?.visualizers?.VisualizationSeries;
-  if (!frameWindow.d3 || !VisualizationSeries) {
-    const visualizerKeys = Object.keys(ddv?.visualizers || {}).join(", ") || "none";
-    throw new Error("DDV VisualizationSeries is not available in the iframe. Available DDV visualizers: " + visualizerKeys + ". DDV export detail: " + describeDdvCandidate(ddv));
+  if (!VisualizationSeries) {
+    throw new Error("DDV VisualizationSeries is not available.");
   }
-
-  const listValue = (value) => (Array.isArray(value) ? value : []);
-  const textValue = (...values) => {
-    for (const value of values) {
-      if (value == null) continue;
-      if (typeof value === "string" && value.trim()) return value;
-      if (typeof value === "number" || typeof value === "boolean") return String(value);
-      if (typeof value === "object") {
-        const nested = textValue(
-          value.text,
-          value.value,
-          value.label,
-          value.name,
-          value.title,
-          value.description,
-          value.short_description,
-          value.shortDescription
-        );
-        if (nested) return nested;
-      }
-    }
-    return "";
-  };
-
-  const normalizeCourse = (course, index) => {
-    const description = textValue(
-      course?.description,
-      course?.short_description,
-      course?.shortDescription,
-      course?.summary,
-      course?.course_description,
-      course?.courseDescription,
-      course?.details,
-      course?.explanation?.description,
-      course?.explanation?.short_description,
-      course?.explanation?.shortDescription
-    );
-
-    return {
-      ...course,
-      raw: course,
-      title: textValue(course?.title, course?.name, course?.course_name, "Course " + (index + 1)),
-      description,
-      short_description: description,
-      shortDescription: description,
-      url: textValue(course?.url, course?.link, course?.course_url),
-      newSkills: listValue(course?.newSkills || course?.new_skills || course?.missingSkills || course?.missing_skills),
-      existingSkills: listValue(course?.existingSkills || course?.existing_skills || course?.matchingSkills || course?.matching_skills),
-      score: course?.score ?? course?.scoring_index,
-      normalizedScore: course?.normalizedScore ?? course?.normalized_score ?? course?.quality_index
-    };
-  };
-
-  const courses = recommendations.map(normalizeCourse);
-
-  const headaiResponse = {
-    recommendations_based_on_extensive_skills: selectedRecommendationSource === "extensive" ? recommendations : [],
-    recommendations_based_on_matching_skills: selectedRecommendationSource === "matching" ? recommendations : [],
-    recommendations_based_on_match: normalizeList(source?.recommendations_based_on_match),
-    recommendations_based_on_learning_paths: normalizeList(source?.recommendations_based_on_learning_paths),
-    recommendations_based_on_skills_demand: normalizeList(source?.recommendations_based_on_skills_demand)
-  };
 
   const appendText = (parent, tagName, className, text) => {
     const element = frameDocument.createElement(tagName);
     element.className = className;
     element.textContent = text;
     parent.appendChild(element);
-    return element;
+  };
+
+  const ddvData = {
+    recommendations_based_on_extensive_skills: selectedRecommendationSource === "extensive" ? recommendations : [],
+    recommendations_based_on_matching_skills: selectedRecommendationSource === "matching" ? recommendations : [],
+    recommendations_based_on_match: asList(source?.recommendations_based_on_match),
+    recommendations_based_on_learning_paths: asList(source?.recommendations_based_on_learning_paths),
+    recommendations_based_on_skills_demand: asList(source?.recommendations_based_on_skills_demand)
   };
 
   root.textContent = "";
   appendText(root, "h2", "visualTitle", "Course Recommendations");
-  appendText(root, "p", "visualSubtitle", courses.length + " recommended course" + (courses.length === 1 ? "" : "s"));
+  appendText(root, "p", "visualSubtitle", recommendations.length + " recommended course" + (recommendations.length === 1 ? "" : "s"));
 
   const ddvMount = frameDocument.createElement("div");
   ddvMount.id = "ddv-series";
   root.appendChild(ddvMount);
-  ["pointerdown", "mousedown", "click", "touchstart"].forEach((eventName) => {
-    ddvMount.addEventListener(eventName, handleAnyIframeInteraction, true);
-    ddvMount.addEventListener(eventName, handleCourseClickCapture, true);
-  });
 
-  const visualizerProperties = {
-    width: Math.max(320, root.clientWidth || container.clientWidth || 1000),
-    height: Math.max(520, courses.length * 120)
-  };
-
-  const rules = {
+  const visualization = new VisualizationSeries({
     visuals: [
       {
         type: "Courses",
-        data: headaiResponse,
+        data: ddvData,
         title: "Course Recommendations",
         buttonTitle: "Courses",
         provider: "headai"
@@ -720,52 +382,28 @@ const DDV_COURSE_RECOMMENDATION_RENDER_CODE_EXAMPLE = `return (async () => {
     properties: {
       showButtons: false,
       showTitle: false,
-      ...visualizerProperties
+      width: Math.max(320, root.clientWidth || container.clientWidth || 1000),
+      height: Math.max(520, recommendations.length * 120)
     }
-  };
+  });
 
-  const visualization = new VisualizationSeries(rules);
   visualization.attachOn("div#ddv-series");
   ddv.visualizers.responsive?.enableResponsivenessToSeries?.(visualization);
   visualization.refresh();
 
-  const enhanceCourseItems = () => {
-    const items = ddvMount.querySelectorAll("li.listElement, .listElement, li.list-group-item, li");
-    items.forEach((item, index) => {
-      if (item.dataset.ddvClickBridge === "true") return;
-      item.dataset.ddvClickBridge = "true";
-      item.setAttribute("tabindex", item.getAttribute("tabindex") || "0");
-      item.setAttribute("role", item.getAttribute("role") || "button");
-      item.setAttribute("data-course-index", item.getAttribute("data-course-index") || String(index));
-      ["pointerdown", "mousedown", "click", "touchstart"].forEach((eventName) => {
-        item.addEventListener(eventName, handleCourseClickCapture, true);
-      });
-      item.addEventListener("keydown", (event) => handleCourseKeydown(event, item));
-    });
-    return items.length;
+  const updateIframeHeight = () => {
+    iframe.style.height = Math.max(
+      760,
+      frameDocument.documentElement?.scrollHeight || 0,
+      frameDocument.body?.scrollHeight || 0
+    ) + "px";
   };
 
-  const initialCourseItemCount = enhanceCourseItems();
-  logStage("course click bridge attached to " + initialCourseItemCount + " item" + (initialCourseItemCount === 1 ? "" : "s"));
-
-  const courseListObserver = new frameWindow.MutationObserver(() => {
-    enhanceCourseItems();
-    updateIframeHeight();
-  });
-  courseListObserver.observe(ddvMount, { childList: true, subtree: true });
-  window.setTimeout(() => {
-    const delayedCourseItemCount = enhanceCourseItems();
-    logStage("course click bridge verified on " + delayedCourseItemCount + " item" + (delayedCourseItemCount === 1 ? "" : "s"));
-  }, 500);
-
   if (frameWindow.ResizeObserver) {
-    const observer = new frameWindow.ResizeObserver(updateIframeHeight);
-    observer.observe(frameDocument.body);
+    new frameWindow.ResizeObserver(updateIframeHeight).observe(frameDocument.body);
   }
   updateIframeHeight();
   window.setTimeout(updateIframeHeight, 250);
-
-  logStage("Rendered DDV CourseVisualizer in iframe");
 })();`;
 
 const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
@@ -1109,6 +747,8 @@ const emptyCustomVisualization = (): CustomVisualizationConfig => ({
   description: "",
   is_active: false,
   library_source: "url",
+  library_bundle_id: "",
+  library_bundle_files: [],
   library_url: "",
   library_file_name: "",
   library_code: "",
@@ -1119,6 +759,13 @@ const emptyCustomVisualization = (): CustomVisualizationConfig => ({
     "// The visualization library is loaded before this code runs.\n" +
     "container.innerHTML = `<pre style=\"white-space:pre-wrap;font:12px monospace;\">${JSON.stringify(resultData, null, 2)}</pre>`;",
   target_resources: [],
+});
+
+const emptyCustomVisualizationLibraryBundle = (): CustomVisualizationLibraryBundle => ({
+  id: crypto.randomUUID(),
+  name: "",
+  description: "",
+  library_files: [],
 });
 
 const inferJsonSchema = (value: unknown): Record<string, unknown> => {
@@ -1225,8 +872,22 @@ const getExportApisFromFeatures = (features: unknown): ExportApiConfig[] => {
 const getCustomVisualizationsFromFeatures = (features: unknown): CustomVisualizationConfig[] => {
   if (!isRecord(features)) return [];
   const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  const bundles = getCustomVisualizationLibraryBundlesFromFeatures(features);
   return Array.isArray(resultPage.customVisualizations)
-    ? (resultPage.customVisualizations as unknown as CustomVisualizationConfig[])
+    ? (resultPage.customVisualizations as unknown as CustomVisualizationConfig[]).map((visualization) => ({
+      ...visualization,
+      library_bundle_files: visualization.library_source === "bundle"
+        ? bundles.find((bundle) => bundle.id === visualization.library_bundle_id)?.library_files || []
+        : visualization.library_bundle_files || [],
+    }))
+    : [];
+};
+
+const getCustomVisualizationLibraryBundlesFromFeatures = (features: unknown): CustomVisualizationLibraryBundle[] => {
+  if (!isRecord(features)) return [];
+  const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  return Array.isArray(resultPage.customVisualizationLibraryBundles)
+    ? (resultPage.customVisualizationLibraryBundles as unknown as CustomVisualizationLibraryBundle[])
     : [];
 };
 
@@ -1238,6 +899,7 @@ const ResultPageSettingsSection = () => {
   const [globalFeatures, setGlobalFeatures] = useState<Record<string, unknown>>({});
   const [exportApis, setExportApis] = useState<ExportApiConfig[]>([]);
   const [customVisualizations, setCustomVisualizations] = useState<CustomVisualizationConfig[]>([]);
+  const [customVisualizationLibraryBundles, setCustomVisualizationLibraryBundles] = useState<CustomVisualizationLibraryBundle[]>([]);
   const [visualizationTargets, setVisualizationTargets] = useState<VisualizationTargetOption[]>([]);
   const [schemaSampleInputs, setSchemaSampleInputs] = useState<Record<string, string>>({});
   const [isUsingLegacyExportApis, setIsUsingLegacyExportApis] = useState(false);
@@ -1245,6 +907,9 @@ const ResultPageSettingsSection = () => {
   const [selectedTagHelp, setSelectedTagHelp] = useState<TemplateTagHelp | null>(null);
   const [editingVisualizationId, setEditingVisualizationId] = useState<string | null>(null);
   const [deleteVisualizationId, setDeleteVisualizationId] = useState<string | null>(null);
+  const [isLibraryBundlesOpen, setIsLibraryBundlesOpen] = useState(false);
+  const [editingLibraryBundleId, setEditingLibraryBundleId] = useState<string | null>(null);
+  const [deleteLibraryBundleId, setDeleteLibraryBundleId] = useState<string | null>(null);
 
   const editingVisualizationIndex = customVisualizations.findIndex(
     (visualization) => visualization.id === editingVisualizationId
@@ -1255,6 +920,13 @@ const ResultPageSettingsSection = () => {
   const deleteVisualization = customVisualizations.find(
     (visualization) => visualization.id === deleteVisualizationId
   );
+  const editingLibraryBundleIndex = customVisualizationLibraryBundles.findIndex(
+    (bundle) => bundle.id === editingLibraryBundleId
+  );
+  const editingLibraryBundle = editingLibraryBundleIndex >= 0
+    ? customVisualizationLibraryBundles[editingLibraryBundleIndex]
+    : null;
+  const deleteLibraryBundle = customVisualizationLibraryBundles.find((bundle) => bundle.id === deleteLibraryBundleId);
 
   const fetchSettings = async () => {
     if (!user?.organization?.id) return;
@@ -1295,6 +967,7 @@ const ResultPageSettingsSection = () => {
       const features = isRecord(globalData?.features) ? globalData.features : {};
       const storedExportApis = getExportApisFromFeatures(features);
       const storedCustomVisualizations = getCustomVisualizationsFromFeatures(features);
+      const storedLibraryBundles = getCustomVisualizationLibraryBundlesFromFeatures(features);
       const legacyExportApis = (legacyData || []).flatMap((config) =>
         Array.isArray(config.export_api_configs)
           ? (config.export_api_configs as unknown as ExportApiConfig[])
@@ -1317,6 +990,7 @@ const ResultPageSettingsSection = () => {
       setGlobalFeatures(features);
       setExportApis(storedExportApis.length > 0 ? storedExportApis : legacyExportApis);
       setCustomVisualizations(storedCustomVisualizations);
+      setCustomVisualizationLibraryBundles(storedLibraryBundles);
       setVisualizationTargets([...softwareTargets, ...serviceChainTargets]);
       setIsUsingLegacyExportApis(storedExportApis.length === 0 && legacyExportApis.length > 0);
     } catch {
@@ -1340,6 +1014,14 @@ const ResultPageSettingsSection = () => {
 
   const updateCustomVisualization = (index: number, next: Partial<CustomVisualizationConfig>) => {
     setCustomVisualizations((current) => {
+      const updated = [...current];
+      updated[index] = { ...updated[index], ...next };
+      return updated;
+    });
+  };
+
+  const updateLibraryBundle = (index: number, next: Partial<CustomVisualizationLibraryBundle>) => {
+    setCustomVisualizationLibraryBundles((current) => {
       const updated = [...current];
       updated[index] = { ...updated[index], ...next };
       return updated;
@@ -1394,6 +1076,8 @@ const ResultPageSettingsSection = () => {
       updated[index] = {
         ...visualization,
         library_source: "upload",
+        library_bundle_id: "",
+        library_bundle_files: [],
         library_url: "",
         library_file_name: "",
         library_code: "",
@@ -1402,6 +1086,46 @@ const ResultPageSettingsSection = () => {
       return updated;
     });
     toast.success(`Loaded ${nextFiles.length} visualization file${nextFiles.length === 1 ? "" : "s"}`);
+  };
+
+  const handleLibraryBundleFileUpload = async (index: number, files: FileList | null) => {
+    if (!files?.length) return;
+
+    const nextFiles: CustomVisualizationLibraryFile[] = [];
+    for (const file of Array.from(files)) {
+      const lowerName = file.name.toLowerCase();
+      const fileType = lowerName.endsWith(".js")
+        ? "js"
+        : lowerName.endsWith(".css")
+          ? "css"
+          : null;
+
+      if (!fileType) {
+        toast.error(`${file.name} is not supported. Upload only .js or .css files.`);
+        return;
+      }
+
+      nextFiles.push({
+        id: crypto.randomUUID(),
+        file_name: file.name,
+        file_type: fileType,
+        mime_type: file.type || (fileType === "css" ? "text/css" : "text/javascript"),
+        content: await file.text(),
+      });
+    }
+
+    setCustomVisualizationLibraryBundles((current) => {
+      const updated = [...current];
+      const bundle = updated[index];
+      if (!bundle) return current;
+
+      updated[index] = {
+        ...bundle,
+        library_files: [...(bundle.library_files || []), ...nextFiles],
+      };
+      return updated;
+    });
+    toast.success(`Loaded ${nextFiles.length} bundle file${nextFiles.length === 1 ? "" : "s"}`);
   };
 
   const handleDownloadVisualizationFile = (file: CustomVisualizationLibraryFile) => {
@@ -1426,6 +1150,16 @@ const ResultPageSettingsSection = () => {
     toast.success("Visualization library file removed. Click Apply Changes to save this update.");
   };
 
+  const handleDeleteLibraryBundleFile = (index: number, fileId: string) => {
+    const bundle = customVisualizationLibraryBundles[index];
+    if (!bundle) return;
+
+    updateLibraryBundle(index, {
+      library_files: (bundle.library_files || []).filter((file) => file.id !== fileId),
+    });
+    toast.success("Bundle file removed. Click Save Library Bundles to apply this update.");
+  };
+
   const handleApplyDdvExample = (index: number) => {
     if (!customVisualizations[index]) return;
     updateCustomVisualization(index, { render_code: DDV_RENDER_CODE_EXAMPLE });
@@ -1445,6 +1179,13 @@ const ResultPageSettingsSection = () => {
   };
 
   const getVisualizationLibrarySummary = (visualization: CustomVisualizationConfig) => {
+    if (visualization.library_source === "bundle") {
+      const bundle = customVisualizationLibraryBundles.find((item) => item.id === visualization.library_bundle_id);
+      const files = bundle?.library_files || visualization.library_bundle_files || [];
+      if (!bundle) return "Missing library bundle";
+      return `${bundle.name || "Unnamed bundle"} (${files.length} file${files.length === 1 ? "" : "s"})`;
+    }
+
     const uploadedFiles = visualization.library_files || [];
     if (uploadedFiles.length > 0) {
       const jsCount = uploadedFiles.filter((file) => file.file_type === "js").length;
@@ -1456,7 +1197,9 @@ const ResultPageSettingsSection = () => {
       return visualization.library_file_name || "Uploaded JS";
     }
 
-    return visualization.library_url || "No library URL";
+    const urls = (visualization.library_url || "").split(/\s+/).filter(Boolean);
+    if (urls.length > 1) return `${urls.length} library URLs`;
+    return urls[0] || "No library URL";
   };
 
   const handleSchemaSampleUpload = async (visualizationId: string, file: File | undefined) => {
@@ -1508,6 +1251,7 @@ const ResultPageSettingsSection = () => {
     overrides?: {
       exportApis?: ExportApiConfig[];
       customVisualizations?: CustomVisualizationConfig[];
+      customVisualizationLibraryBundles?: CustomVisualizationLibraryBundle[];
     },
   ) => {
     if (!user?.organization?.id) return false;
@@ -1516,12 +1260,14 @@ const ResultPageSettingsSection = () => {
     try {
       const nextExportApis = overrides?.exportApis ?? exportApis;
       const nextCustomVisualizations = overrides?.customVisualizations ?? customVisualizations;
+      const nextLibraryBundles = overrides?.customVisualizationLibraryBundles ?? customVisualizationLibraryBundles;
       const nextFeatures = {
         ...globalFeatures,
         resultPage: {
           ...(isRecord(globalFeatures.resultPage) ? globalFeatures.resultPage : {}),
           exportApiConfigs: nextExportApis,
           customVisualizations: nextCustomVisualizations,
+          customVisualizationLibraryBundles: nextLibraryBundles,
         },
       };
 
@@ -1554,6 +1300,27 @@ const ResultPageSettingsSection = () => {
     setActiveTab("custom-visualization");
     setCustomVisualizations((current) => [...current, visualization]);
     setEditingVisualizationId(visualization.id);
+  };
+
+  const handleOpenLibraryBundles = () => {
+    setIsLibraryBundlesOpen(true);
+    if (!editingLibraryBundleId && customVisualizationLibraryBundles.length > 0) {
+      setEditingLibraryBundleId(customVisualizationLibraryBundles[0].id);
+    }
+  };
+
+  const handleAddLibraryBundle = () => {
+    const bundle = emptyCustomVisualizationLibraryBundle();
+    setCustomVisualizationLibraryBundles((current) => [...current, bundle]);
+    setEditingLibraryBundleId(bundle.id);
+  };
+
+  const handleSaveLibraryBundles = async () => {
+    const saved = await saveResultPageSettings("Visualization library bundles saved");
+    if (saved) {
+      setIsLibraryBundlesOpen(false);
+      setEditingLibraryBundleId(null);
+    }
   };
 
   const handleToggleCustomVisualizationActive = async (index: number) => {
@@ -1590,6 +1357,33 @@ const ResultPageSettingsSection = () => {
     }
     setDeleteVisualizationId(null);
     await saveResultPageSettings("Custom visualization deleted", { customVisualizations: updated });
+  };
+
+  const handleConfirmDeleteLibraryBundle = async () => {
+    if (!deleteLibraryBundleId) return;
+
+    const updatedBundles = customVisualizationLibraryBundles.filter((bundle) => bundle.id !== deleteLibraryBundleId);
+    const updatedVisualizations = customVisualizations.map((visualization) =>
+      visualization.library_bundle_id === deleteLibraryBundleId
+        ? {
+          ...visualization,
+          library_source: "url" as const,
+          library_bundle_id: "",
+          library_bundle_files: [],
+        }
+        : visualization
+    );
+
+    setCustomVisualizationLibraryBundles(updatedBundles);
+    setCustomVisualizations(updatedVisualizations);
+    if (editingLibraryBundleId === deleteLibraryBundleId) {
+      setEditingLibraryBundleId(updatedBundles[0]?.id || null);
+    }
+    setDeleteLibraryBundleId(null);
+    await saveResultPageSettings("Visualization library bundle deleted", {
+      customVisualizations: updatedVisualizations,
+      customVisualizationLibraryBundles: updatedBundles,
+    });
   };
 
   if (isLoading) {
@@ -1811,15 +1605,26 @@ const ResultPageSettingsSection = () => {
                     Define JavaScript visualizations that render result JSON for selected software resources or service chains.
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleAddCustomVisualization}
-                >
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add Visualization
-                </Button>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleOpenLibraryBundles}
+                  >
+                    <Files className="h-4 w-4 mr-1" />
+                    Add Visualization Libraries
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddCustomVisualization}
+                  >
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add Visualization
+                  </Button>
+                </div>
               </div>
 
               {customVisualizations.length === 0 ? (
@@ -1911,6 +1716,194 @@ const ResultPageSettingsSection = () => {
               )}
             </div>
 
+            <Dialog open={isLibraryBundlesOpen} onOpenChange={(open) => {
+              setIsLibraryBundlesOpen(open);
+              if (!open) setEditingLibraryBundleId(null);
+            }}>
+              <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl">
+                <DialogHeader>
+                  <DialogTitle>Visualization Library Bundles</DialogTitle>
+                  <DialogDescription>
+                    Create reusable JS/CSS file bundles that can be selected by multiple custom visualizations.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="grid gap-4 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.2fr)]">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-xs">Bundles</Label>
+                      <Button type="button" variant="outline" size="sm" onClick={handleAddLibraryBundle}>
+                        <Plus className="h-4 w-4 mr-1" />
+                        Add Bundle
+                      </Button>
+                    </div>
+
+                    {customVisualizationLibraryBundles.length === 0 ? (
+                      <div className="text-center py-8 text-sm text-muted-foreground border border-dashed rounded-lg">
+                        No visualization library bundles yet.
+                      </div>
+                    ) : (
+                      <div className="rounded-md border overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Name</TableHead>
+                              <TableHead>Files</TableHead>
+                              <TableHead className="text-right">Actions</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {customVisualizationLibraryBundles.map((bundle) => (
+                              <TableRow key={bundle.id} className={bundle.id === editingLibraryBundleId ? "bg-secondary/40" : undefined}>
+                                <TableCell>
+                                  <div className="space-y-1">
+                                    <p className="font-medium">{bundle.name || "Unnamed bundle"}</p>
+                                    {bundle.description && (
+                                      <p className="text-xs text-muted-foreground line-clamp-2">{bundle.description}</p>
+                                    )}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground">
+                                  {(bundle.library_files || []).length}
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex justify-end gap-1">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setEditingLibraryBundleId(bundle.id)}
+                                    >
+                                      <Pencil className="h-4 w-4 mr-1" />
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setDeleteLibraryBundleId(bundle.id)}
+                                    >
+                                      <Trash2 className="h-4 w-4 text-destructive" />
+                                    </Button>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </div>
+
+                  {editingLibraryBundle && editingLibraryBundleIndex >= 0 ? (
+                    <div className="space-y-3 rounded-md border bg-background/40 p-3">
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Bundle Name</Label>
+                          <Input
+                            value={editingLibraryBundle.name}
+                            onChange={(event) => updateLibraryBundle(editingLibraryBundleIndex, { name: event.target.value })}
+                            placeholder="DDV visualization libraries"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Add Files</Label>
+                          <Input
+                            type="file"
+                            multiple
+                            accept=".js,.css,application/javascript,text/javascript,text/css"
+                            onChange={(event) => {
+                              void handleLibraryBundleFileUpload(editingLibraryBundleIndex, event.target.files);
+                              event.currentTarget.value = "";
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label className="text-xs">Description</Label>
+                        <Textarea
+                          value={editingLibraryBundle.description || ""}
+                          onChange={(event) => updateLibraryBundle(editingLibraryBundleIndex, { description: event.target.value })}
+                          placeholder="Shared library bundle for DDV visualizations."
+                          className="min-h-[70px]"
+                        />
+                      </div>
+
+                      {(editingLibraryBundle.library_files || []).length > 0 ? (
+                        <div className="rounded-md border overflow-hidden">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>File</TableHead>
+                                <TableHead>Type</TableHead>
+                                <TableHead className="text-right">Actions</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {(editingLibraryBundle.library_files || []).map((file) => (
+                                <TableRow key={file.id}>
+                                  <TableCell className="font-medium">{file.file_name}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="secondary">{file.file_type.toUpperCase()}</Badge>
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="flex justify-end gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleDownloadVisualizationFile(file)}
+                                      >
+                                        <Download className="h-4 w-4 mr-1" />
+                                        Download
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleDeleteLibraryBundleFile(editingLibraryBundleIndex, file.id)}
+                                      >
+                                        <Trash2 className="h-4 w-4 text-destructive" />
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground border border-dashed rounded-md p-3">
+                          No files in this bundle yet.
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 text-sm text-muted-foreground border border-dashed rounded-lg">
+                      Select a bundle to edit it.
+                    </div>
+                  )}
+                </div>
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsLibraryBundlesOpen(false)}>
+                    Close
+                  </Button>
+                  <Button onClick={() => void handleSaveLibraryBundles()} disabled={isSaving}>
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      "Save Library Bundles"
+                    )}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             <Dialog open={Boolean(editingVisualization)} onOpenChange={(open) => !open && setEditingVisualizationId(null)}>
               <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl">
                 <DialogHeader>
@@ -1933,19 +1926,50 @@ const ResultPageSettingsSection = () => {
                           placeholder="Skills network visualization"
                         />
                       </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Library URL / CDN</Label>
-                        <Input
-                          value={editingVisualization.library_url || ""}
-                          onChange={(event) => updateCustomVisualization(editingVisualizationIndex, {
-                            library_source: "url",
-                            library_url: event.target.value,
-                          })}
-                          placeholder="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Optional. If uploaded files are present, uploaded JS/CSS files are loaded first and can be used instead of a CDN URL.
-                        </p>
+                      <div className="space-y-2">
+                        <Label className="text-xs">Library Source</Label>
+                        <div className="grid grid-cols-3 gap-2">
+                          <Button
+                            type="button"
+                            variant={editingVisualization.library_source === "upload" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => updateCustomVisualization(editingVisualizationIndex, {
+                              library_source: "upload",
+                              library_bundle_id: "",
+                              library_bundle_files: [],
+                            })}
+                          >
+                            <Upload className="h-4 w-4 mr-1" />
+                            Upload
+                          </Button>
+                          <Button
+                            type="button"
+                            variant={editingVisualization.library_source === "bundle" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => updateCustomVisualization(editingVisualizationIndex, {
+                              library_source: "bundle",
+                              library_bundle_id: editingVisualization.library_bundle_id || customVisualizationLibraryBundles[0]?.id || "",
+                              library_bundle_files: customVisualizationLibraryBundles.find((bundle) => bundle.id === (editingVisualization.library_bundle_id || customVisualizationLibraryBundles[0]?.id))?.library_files || [],
+                              library_url: "",
+                            })}
+                          >
+                            <Files className="h-4 w-4 mr-1" />
+                            Bundle
+                          </Button>
+                          <Button
+                            type="button"
+                            variant={editingVisualization.library_source === "url" ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => updateCustomVisualization(editingVisualizationIndex, {
+                              library_source: "url",
+                              library_bundle_id: "",
+                              library_bundle_files: [],
+                            })}
+                          >
+                            <LinkIcon className="h-4 w-4 mr-1" />
+                            URLs
+                          </Button>
+                        </div>
                       </div>
                     </div>
 
@@ -1959,6 +1983,78 @@ const ResultPageSettingsSection = () => {
                       />
                     </div>
 
+                    {editingVisualization.library_source === "bundle" && (
+                      <div className="rounded-md border bg-background/40 p-3 space-y-2">
+                        <Label className="text-xs flex items-center gap-2">
+                          <Files className="h-3.5 w-3.5" />
+                          Reusable Visualization Library Bundle
+                        </Label>
+                        {customVisualizationLibraryBundles.length === 0 ? (
+                          <div className="text-sm text-muted-foreground border border-dashed rounded-md p-3">
+                            No library bundles are available yet.
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="ml-3"
+                              onClick={handleOpenLibraryBundles}
+                            >
+                              Add Bundle
+                            </Button>
+                          </div>
+                        ) : (
+                          <Select
+                            value={editingVisualization.library_bundle_id || ""}
+                            onValueChange={(bundleId) => {
+                              const bundle = customVisualizationLibraryBundles.find((item) => item.id === bundleId);
+                              updateCustomVisualization(editingVisualizationIndex, {
+                                library_source: "bundle",
+                                library_bundle_id: bundleId,
+                                library_bundle_files: bundle?.library_files || [],
+                                library_url: "",
+                              });
+                            }}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select a library bundle" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {customVisualizationLibraryBundles.map((bundle) => (
+                                <SelectItem key={bundle.id} value={bundle.id}>
+                                  {bundle.name || "Unnamed bundle"} ({(bundle.library_files || []).length} files)
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                          Selected bundle files are loaded before your render code. Updating the bundle updates every visualization that uses it.
+                        </p>
+                      </div>
+                    )}
+
+                    {editingVisualization.library_source === "url" && (
+                      <div className="rounded-md border bg-background/40 p-3 space-y-2">
+                        <Label className="text-xs flex items-center gap-2">
+                          <LinkIcon className="h-3.5 w-3.5" />
+                          Library URLs / CDN
+                        </Label>
+                        <Textarea
+                          value={editingVisualization.library_url || ""}
+                          onChange={(event) => updateCustomVisualization(editingVisualizationIndex, {
+                            library_source: "url",
+                            library_url: event.target.value,
+                          })}
+                          placeholder={"https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js\nhttps://cdn.jsdelivr.net/npm/tabulator-tables@6.3/dist/js/tabulator.min.js"}
+                          className="font-mono text-xs min-h-[90px]"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Add one JavaScript or CSS URL per line. CSS URLs are added to the custom visualization Shadow DOM, and JS URLs are loaded in order.
+                        </p>
+                      </div>
+                    )}
+
+                    {editingVisualization.library_source === "upload" && (
                     <div className="rounded-md border bg-background/40 p-3 space-y-2">
                       <Label className="text-xs flex items-center gap-2">
                         <Upload className="h-3.5 w-3.5" />
@@ -2030,6 +2126,7 @@ const ResultPageSettingsSection = () => {
                         </p>
                       )}
                     </div>
+                    )}
 
                     <div className="rounded-md border bg-background/40 p-3 space-y-3">
                       <div>
@@ -2183,6 +2280,35 @@ const ResultPageSettingsSection = () => {
                       </>
                     ) : (
                       "Delete Visualization"
+                    )}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={Boolean(deleteLibraryBundle)} onOpenChange={(open) => !open && setDeleteLibraryBundleId(null)}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete Visualization Library Bundle?</DialogTitle>
+                  <DialogDescription>
+                    This removes "{deleteLibraryBundle?.name || "this library bundle"}" and switches visualizations using it back to URL libraries.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  Bundle files are removed from the shared library list. Custom render code and target mappings are kept.
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDeleteLibraryBundleId(null)}>
+                    Cancel
+                  </Button>
+                  <Button variant="destructive" onClick={() => void handleConfirmDeleteLibraryBundle()} disabled={isSaving}>
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Deleting...
+                      </>
+                    ) : (
+                      "Delete Bundle"
                     )}
                   </Button>
                 </DialogFooter>

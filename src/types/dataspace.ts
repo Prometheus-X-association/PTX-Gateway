@@ -21,12 +21,21 @@ export interface CustomVisualizationLibraryFile {
   content: string;
 }
 
+export interface CustomVisualizationLibraryBundle {
+  id: string;
+  name: string;
+  description?: string;
+  library_files: CustomVisualizationLibraryFile[];
+}
+
 export interface CustomVisualizationConfig {
   id: string;
   name: string;
   description?: string;
   is_active: boolean;
-  library_source: "upload" | "url";
+  library_source: "upload" | "bundle" | "url";
+  library_bundle_id?: string;
+  library_bundle_files?: CustomVisualizationLibraryFile[];
   library_url?: string;
   library_file_name?: string;
   library_code?: string;

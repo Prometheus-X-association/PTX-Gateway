@@ -25,7 +25,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useNavigate } from "react-router-dom";
-import { LogOut, Settings, User, Bug, BugOff, KeyRound, Building2, Plus, Check, LogOutIcon, Loader2 } from "lucide-react";
+import { LogOut, Settings, User, Bug, BugOff, KeyRound, Building2, Plus, Check, LogOutIcon, Loader2, ExternalLink, Home } from "lucide-react";
 import ChangePasswordDialog from "./ChangePasswordDialog";
 import { toast } from "sonner";
 
@@ -91,6 +91,16 @@ const UserMenu = () => {
       setShowLeaveOrgDialog(null);
     }
     setIsLeaving(false);
+  };
+
+  const handleOpenGateway = () => {
+    const orgSlug = user.organization?.slug;
+    if (!orgSlug) {
+      toast.error("No active organization gateway is available");
+      return;
+    }
+
+    navigate(`/${encodeURIComponent(orgSlug)}`);
   };
 
   const leaveOrgName = user.organizations.find(m => m.organization.id === showLeaveOrgDialog)?.organization.name;
@@ -193,9 +203,13 @@ const UserMenu = () => {
               <DropdownMenuSeparator />
             </>
           )}
+          <DropdownMenuItem onClick={handleOpenGateway} disabled={!user.organization?.slug}>
+            <ExternalLink className="mr-2 h-4 w-4" />
+            Open Gateway
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => navigate('/')}>
-            <User className="mr-2 h-4 w-4" />
-            Gateway
+            <Home className="mr-2 h-4 w-4" />
+            Home Page
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setShowPasswordDialog(true)}>

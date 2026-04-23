@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { Link2, X, Settings, ChevronDown, ChevronUp, Cpu } from "lucide-react";
+import { Link2, X, Cpu } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,11 +44,8 @@ const AnalyticsSelection = ({
   const [descriptionDialog, setDescriptionDialog] = useState<{ name: string; description: string } | null>(null);
   const [truncatedItems, setTruncatedItems] = useState<Set<string>>(new Set());
   const descriptionRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
-  
-  // State for service chain details dialog
-  const [serviceChainDetailsOpen, setServiceChainDetailsOpen] = useState(false);
-  const [expandedEmbeddedResources, setExpandedEmbeddedResources] = useState<Set<number>>(new Set());
-  const [embeddedResourceParams, setEmbeddedResourceParams] = useState<Record<number, Record<string, string>>>({});
+
+  const [serviceChainDetails, setServiceChainDetails] = useState<ServiceChain | null>(null);
 
   // Build options from props
   const options = useMemo(() => {
@@ -95,11 +92,6 @@ const AnalyticsSelection = ({
     };
   };
 
-  // Get embedded software resources from service chain
-  const getEmbeddedSoftwareResources = (chain: ServiceChain): ServiceChainEmbeddedResource[] => {
-    return (chain.embedded_resources || []).filter(r => r.resource_type === 'software');
-  };
-
   // Check for truncated text after render
   useEffect(() => {
     const checkTruncation = () => {
@@ -120,33 +112,6 @@ const AnalyticsSelection = ({
       window.removeEventListener('resize', checkTruncation);
     };
   }, [options]);
-
-  // Initialize embedded resource params when selecting service chain
-  useEffect(() => {
-    if (selected?.type === "serviceChain") {
-      const softwareResources = getEmbeddedSoftwareResources(selected.data);
-      const initialParams: Record<number, Record<string, string>> = {};
-      
-      softwareResources.forEach(resource => {
-        const prefillParams = getParamValuesMap(resource.parameters);
-        const resolvedParams: Record<string, string> = {};
-        
-        for (const [key, value] of Object.entries(prefillParams)) {
-          if (isSessionIdPlaceholder(value)) {
-            resolvedParams[key] = sessionId;
-          } else {
-            resolvedParams[key] = value;
-          }
-        }
-        
-        initialParams[resource.service_index] = resolvedParams;
-      });
-      
-      setEmbeddedResourceParams(initialParams);
-      // Keep all embedded resources collapsed by default.
-      setExpandedEmbeddedResources(new Set<number>());
-    }
-  }, [selected, sessionId]);
 
   // Set ref for description element
   const setDescriptionRef = (id: string, el: HTMLParagraphElement | null) => {
@@ -205,30 +170,6 @@ const AnalyticsSelection = ({
     });
   };
 
-  // Handle embedded resource param change
-  const handleEmbeddedParamChange = (serviceIndex: number, param: string, value: string) => {
-    setEmbeddedResourceParams(prev => ({
-      ...prev,
-      [serviceIndex]: {
-        ...(prev[serviceIndex] || {}),
-        [param]: value
-      }
-    }));
-  };
-
-  // Toggle embedded resource expansion
-  const toggleEmbeddedResource = (serviceIndex: number) => {
-    setExpandedEmbeddedResources(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(serviceIndex)) {
-        newSet.delete(serviceIndex);
-      } else {
-        newSet.add(serviceIndex);
-      }
-      return newSet;
-    });
-  };
-
   const handleContinue = () => {
     onNext();
   };
@@ -242,11 +183,13 @@ const AnalyticsSelection = ({
     setDescriptionDialog({ name, description });
   };
 
-  // Open service chain details
-  const openServiceChainDetails = (e: React.MouseEvent) => {
+  const openServiceChainDetails = (e: React.MouseEvent, chain: ServiceChain) => {
     e.stopPropagation();
-    setServiceChainDetailsOpen(true);
+    setServiceChainDetails(chain);
   };
+
+  const getServiceChainResources = (chain: ServiceChain): ServiceChainEmbeddedResource[] =>
+    [...(chain.embedded_resources || [])].sort((a, b) => a.service_index - b.service_index);
 
   if (options.length === 0) {
     return (
@@ -273,9 +216,6 @@ const AnalyticsSelection = ({
           const optionSelected = isSelected(option);
           const optionId = getOptionId(option);
           const isTruncated = truncatedItems.has(optionId);
-          const embeddedSoftware = option.type === "serviceChain" 
-            ? getEmbeddedSoftwareResources(option.data) 
-            : [];
           
           return (
             <div
@@ -290,14 +230,28 @@ const AnalyticsSelection = ({
                 </Badge>
               )}
               
-              {/* Provider badge instead of icon */}
-              <div className={`theme-badge mb-4 transition-colors ${
-                optionSelected 
-                  ? "theme-provider-badge selected" 
-                  : "theme-provider-badge"
-              }`}>
-                {info.provider}
-              </div>
+              {option.type === "serviceChain" ? (
+                <button
+                  type="button"
+                  onClick={(event) => openServiceChainDetails(event, option.data)}
+                  className={`theme-badge mb-4 transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-primary hover:text-primary-foreground hover:shadow-md hover:shadow-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                    optionSelected
+                      ? "theme-provider-badge selected"
+                      : "theme-provider-badge"
+                  }`}
+                  aria-label={`Show ${info.provider} in ${info.name}`}
+                >
+                  {info.provider}
+                </button>
+              ) : (
+                <div className={`theme-badge mb-4 transition-colors ${
+                  optionSelected
+                    ? "theme-provider-badge selected"
+                    : "theme-provider-badge"
+                }`}>
+                  {info.provider}
+                </div>
+              )}
               
               <h3 className="font-semibold text-lg mb-2 line-clamp-2">{info.name}</h3>
               <p 
@@ -325,19 +279,6 @@ const AnalyticsSelection = ({
                 </div>
               )}
               
-              {/* Debug mode: Show embedded software resources count for service chains */}
-              {isDebugMode && option.type === "serviceChain" && embeddedSoftware.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-border">
-                  <button
-                    onClick={openServiceChainDetails}
-                    className="flex items-center gap-2 text-xs text-primary hover:underline"
-                  >
-                    <Cpu className="w-3 h-3" />
-                    {embeddedSoftware.length} embedded software resource{embeddedSoftware.length > 1 ? 's' : ''}
-                    <Settings className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
             </div>
           );
         })}
@@ -414,20 +355,20 @@ const AnalyticsSelection = ({
         </div>
       )}
 
-      {/* Service Chain Details Dialog - Shows embedded software resources */}
-      {serviceChainDetailsOpen && selected?.type === "serviceChain" && (
+      {/* Service Chain Details Dialog */}
+      {serviceChainDetails && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           {/* Backdrop */}
           <div 
             className="absolute inset-0 bg-black/80"
-            onClick={() => setServiceChainDetailsOpen(false)}
+            onClick={() => setServiceChainDetails(null)}
           />
           
           {/* Modal Content */}
-          <div className="relative z-10 w-full max-w-2xl mx-4 bg-background border rounded-lg shadow-lg max-h-[85vh] flex flex-col overflow-hidden">
+          <div className="relative z-10 w-full max-w-6xl mx-4 bg-background border rounded-lg shadow-lg max-h-[85vh] flex flex-col overflow-hidden">
             {/* Close Button */}
             <button
-              onClick={() => setServiceChainDetailsOpen(false)}
+              onClick={() => setServiceChainDetails(null)}
               className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 transition-opacity z-10"
             >
               <X className="h-4 w-4" />
@@ -435,140 +376,64 @@ const AnalyticsSelection = ({
             
             {/* Header */}
             <div className="p-6 border-b">
-              <h3 className="text-lg font-semibold">Service Chain Details</h3>
+              <h3 className="text-lg font-semibold">
+                {serviceChainDetails.basis_information?.name || serviceChainDetails.catalog_id}
+              </h3>
               <p className="text-sm text-muted-foreground">
-                {selected.data.catalog_id}
+                {getServiceChainResources(serviceChainDetails).length} provider resource{getServiceChainResources(serviceChainDetails).length === 1 ? "" : "s"} in this service chain
               </p>
             </div>
             
             {/* Content */}
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto min-h-0">
               <div className="p-6 space-y-4">
-                <div>
-                  <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
-                    <Cpu className="w-4 h-4 text-primary" />
-                    Embedded Software Resources
-                  </h4>
-                  
-                  {getEmbeddedSoftwareResources(selected.data).length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No embedded software resources.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {getEmbeddedSoftwareResources(selected.data).map((resource) => {
-                        const isExpanded = expandedEmbeddedResources.has(resource.service_index);
-                        const params = resource.parameters || [];
-                        const resourceParams = embeddedResourceParams[resource.service_index] || {};
-                        
-                        return (
-                          <div
-                            key={resource.service_index}
-                            className="border rounded-lg overflow-hidden"
-                          >
-                            <button
-                              onClick={() => toggleEmbeddedResource(resource.service_index)}
-                              className="w-full p-4 flex items-center justify-between hover:bg-muted/50 transition-colors"
-                            >
-                              <div className="text-left">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                                    Service {resource.service_index + 1}
-                                  </span>
-                                  <p className="font-medium text-sm">
-                                    {resource.resource_name || "Unnamed Resource"}
-                                  </p>
-                                </div>
-                                {resource.provider && (
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    {resource.provider}
-                                  </p>
-                                )}
-                              </div>
-                              {params.length > 0 && (
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
-                                    {params.length} params
-                                  </span>
-                                  {isExpanded ? (
-                                    <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                                  ) : (
-                                    <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                                  )}
-                                </div>
-                              )}
-                            </button>
-                            
-                            {isExpanded && (
-                              <div className="px-4 pb-4 space-y-4 border-t bg-muted/20">
-                                {/* Description */}
-                                {resource.resource_description && (
-                                  <div className="pt-4">
-                                    <p className="text-xs text-muted-foreground">
-                                      {resource.resource_description}
-                                    </p>
-                                  </div>
-                                )}
-                                
-                                {/* Parameters */}
-                                {params.length > 0 && (
-                                  <div className="pt-2 space-y-3">
-                                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                                      Parameters
-                                    </p>
-                                    {params.map((param, idx) => (
-                                      <div key={idx} className="space-y-1.5">
-                                        <div className="flex items-center gap-2">
-                                          <Label htmlFor={`embedded-${resource.service_index}-${param.paramName}`} className="text-xs">
-                                            {param.paramName}
-                                          </Label>
-                                          {param.paramAction && (
-                                            <span className="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground">
-                                              {param.paramAction}
-                                            </span>
-                                          )}
-                                        </div>
-                                        <Input
-                                          id={`embedded-${resource.service_index}-${param.paramName}`}
-                                          placeholder={`Enter ${param.paramName}`}
-                                          value={resourceParams[param.paramName] || ""}
-                                          onChange={(e) => handleEmbeddedParamChange(
-                                            resource.service_index,
-                                            param.paramName,
-                                            e.target.value
-                                          )}
-                                          className="h-8 text-xs"
-                                        />
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                                
-                                {/* URLs */}
-                                <div className="pt-2 space-y-1">
-                                  <p className="text-[10px] text-muted-foreground break-all">
-                                    <span className="font-medium">Resource:</span> {resource.resource_url}
-                                  </p>
-                                  <p className="text-[10px] text-muted-foreground break-all">
-                                    <span className="font-medium">Contract:</span> {resource.contract_url}
-                                  </p>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                {getServiceChainResources(serviceChainDetails).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No provider resources are available for this service chain.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {getServiceChainResources(serviceChainDetails).map((resource) => (
+                      <div key={`${resource.service_index}-${resource.resource_url}`} className="rounded-lg border bg-background/60 p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <Badge variant="secondary" className="shrink-0">
+                            Service {resource.service_index + 1}
+                          </Badge>
+                          <Badge variant="outline" className="shrink-0 capitalize">
+                            {resource.resource_type}
+                          </Badge>
+                        </div>
+
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Provider
+                          </p>
+                          <p className="font-medium leading-snug">
+                            {resource.provider || "Unknown Provider"}
+                          </p>
+                        </div>
+
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Resource
+                          </p>
+                          <p className="text-sm font-medium leading-snug">
+                            {resource.resource_name || "Unnamed Resource"}
+                          </p>
+                        </div>
+
+                        <p className="text-sm text-muted-foreground leading-relaxed">
+                          {resource.resource_description || "No description available."}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             
             {/* Footer */}
-            <div className="p-6 border-t flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setServiceChainDetailsOpen(false)}>
+            <div className="sticky bottom-0 p-4 border-t bg-background flex justify-end gap-2">
+              <Button onClick={() => setServiceChainDetails(null)}>
                 Close
-              </Button>
-              <Button onClick={() => setServiceChainDetailsOpen(false)}>
-                Save Changes
               </Button>
             </div>
           </div>

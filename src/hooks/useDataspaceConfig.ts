@@ -14,6 +14,7 @@ import {
   ServiceChainEmbeddedResource,
   ExportApiConfig,
   CustomVisualizationConfig,
+  CustomVisualizationLibraryBundle,
 } from "@/types/dataspace";
 import { Json } from "@/integrations/supabase/types";
 
@@ -138,8 +139,16 @@ const getResultPageExportApiConfigs = (features: unknown): ExportApiConfig[] => 
 const getResultPageCustomVisualizations = (features: unknown): CustomVisualizationConfig[] => {
   if (!isRecord(features)) return [];
   const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  const bundles = Array.isArray(resultPage.customVisualizationLibraryBundles)
+    ? (resultPage.customVisualizationLibraryBundles as unknown as CustomVisualizationLibraryBundle[])
+    : [];
   return Array.isArray(resultPage.customVisualizations)
-    ? (resultPage.customVisualizations as unknown as CustomVisualizationConfig[])
+    ? (resultPage.customVisualizations as unknown as CustomVisualizationConfig[]).map((visualization) => ({
+      ...visualization,
+      library_bundle_files: visualization.library_source === "bundle"
+        ? bundles.find((bundle) => bundle.id === visualization.library_bundle_id)?.library_files || []
+        : visualization.library_bundle_files || [],
+    }))
     : [];
 };
 

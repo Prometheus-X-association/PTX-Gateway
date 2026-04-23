@@ -23,6 +23,7 @@ interface ResultsViewProps {
   orgExecutionToken?: string | null;
   llmPromptContext?: string | null;
   selectedAnalytics?: AnalyticsOption | null;
+  selectedAnalyticsTargetId?: string | null;
   customVisualizations?: CustomVisualizationConfig[];
 }
 
@@ -1814,6 +1815,22 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
       shadowRoot.appendChild(styleElement);
     };
 
+    const appendCssUrl = (href: string) =>
+      new Promise<void>((resolve, reject) => {
+        if (!href.trim()) {
+          resolve();
+          return;
+        }
+
+        const linkElement = document.createElement("link");
+        linkElement.rel = "stylesheet";
+        linkElement.href = href;
+        linkElement.setAttribute("data-ptx-custom-visualization-file", href);
+        linkElement.onload = () => resolve();
+        linkElement.onerror = () => reject(new Error("Failed to load custom visualization stylesheet"));
+        shadowRoot.appendChild(linkElement);
+      });
+
     const loadScriptSource = (scriptSource: string, sourceType: "upload" | "url", fileName?: string) =>
       new Promise<void>((resolve, reject) => {
         if (!scriptSource?.trim()) {
@@ -1854,7 +1871,9 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
       });
 
     const loadLibraries = async () => {
-      const uploadedFiles = visualization.library_files || [];
+      const uploadedFiles = visualization.library_source === "bundle"
+        ? visualization.library_bundle_files || []
+        : visualization.library_files || [];
 
       uploadedFiles
         .filter((file) => file.file_type === "css")
@@ -1869,7 +1888,14 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
       if (visualization.library_source === "upload") {
         await loadScriptSource(visualization.library_code || "", "upload", visualization.library_file_name);
       } else {
-        await loadScriptSource(visualization.library_url || "", "url");
+        const libraryUrls = (visualization.library_url || "").split(/\s+/).filter(Boolean);
+        for (const libraryUrl of libraryUrls) {
+          if (/\.css($|[?#])/.test(libraryUrl)) {
+            await appendCssUrl(libraryUrl);
+          } else {
+            await loadScriptSource(libraryUrl, "url");
+          }
+        }
       }
     };
 
@@ -1916,12 +1942,9 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
 
   return (
     <div className="space-y-3">
-      <div>
-        <h4 className="font-medium">{visualization.name}</h4>
-        {visualization.description && (
-          <p className="text-sm text-muted-foreground mt-1">{visualization.description}</p>
-        )}
-      </div>
+      {visualization.description && (
+        <p className="text-sm text-muted-foreground">{visualization.description}</p>
+      )}
       <div ref={mountRef} className="min-h-[360px] rounded-lg border border-border bg-background/40 p-4 overflow-auto" />
     </div>
   );
@@ -1938,6 +1961,7 @@ const ResultsView = ({
   orgExecutionToken,
   llmPromptContext,
   selectedAnalytics,
+  selectedAnalyticsTargetId,
   customVisualizations = [],
 }: ResultsViewProps) => {
   const [resultData, setResultData] = useState<unknown>(fallbackResultData);
@@ -1973,14 +1997,17 @@ const ResultsView = ({
     });
   }, [exportApiConfigs, resultData]);
   const activeCustomVisualization = useMemo(() => {
-    if (!selectedAnalytics) return null;
-    const targetId = selectedAnalytics.type === "software"
-      ? `software:${selectedAnalytics.data.id}`
-      : `serviceChain:${selectedAnalytics.data.id}`;
+    const targetId = selectedAnalytics
+      ? selectedAnalytics.type === "software"
+        ? `software:${selectedAnalytics.data.id}`
+        : `serviceChain:${selectedAnalytics.data.id}`
+      : selectedAnalyticsTargetId;
+    if (!targetId) return null;
     return customVisualizations.find((visualization) =>
       visualization.is_active && (visualization.target_resources || []).includes(targetId)
     ) || null;
-  }, [customVisualizations, selectedAnalytics]);
+  }, [customVisualizations, selectedAnalytics, selectedAnalyticsTargetId]);
+  const activeCustomVisualizationLabel = activeCustomVisualization?.name?.trim() || "Custom Visualization";
 
   const fetchResultDataInternal = useCallback(async (): Promise<"ready" | "error"> => {
     if (forcedResultData !== undefined) {
@@ -2537,7 +2564,7 @@ const ResultsView = ({
               {activeCustomVisualization && (
                 <TabsTrigger value="custom" className="flex items-center gap-2">
                   <Palette className="w-4 h-4" />
-                  Custom Visualization
+                  <span className="truncate">{activeCustomVisualizationLabel}</span>
                 </TabsTrigger>
               )}
               <TabsTrigger value="json" className="flex items-center gap-2">

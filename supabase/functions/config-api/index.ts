@@ -171,6 +171,47 @@ const getEmbedSettingsFromOrganizationSettings = (settings: unknown): Record<str
 const sanitizeCustomVisualization = (value: unknown): Record<string, unknown> | null => {
   if (!isRecord(value)) return null;
 
+  const sanitizeLibraryFiles = (files: unknown) => Array.isArray(files)
+    ? files
+      .filter(isRecord)
+      .map((file) => ({
+        id: typeof file.id === 'string' ? file.id : crypto.randomUUID(),
+        file_name: typeof file.file_name === 'string' ? file.file_name : 'visualization-file',
+        file_type: file.file_type === 'css' ? 'css' : 'js',
+        mime_type: typeof file.mime_type === 'string' ? file.mime_type : undefined,
+        content: typeof file.content === 'string' ? file.content : '',
+      }))
+      .filter((file) => file.content.trim().length > 0)
+    : [];
+
+  const libraryFiles = sanitizeLibraryFiles(value.library_files);
+  const librarySource = value.library_source === 'upload' || value.library_source === 'bundle'
+    ? value.library_source
+    : 'url';
+
+  return {
+    id: typeof value.id === 'string' ? value.id : crypto.randomUUID(),
+    name: typeof value.name === 'string' ? value.name : '',
+    description: typeof value.description === 'string' ? value.description : '',
+    is_active: typeof value.is_active === 'boolean' ? value.is_active : false,
+    library_source: librarySource,
+    library_bundle_id: typeof value.library_bundle_id === 'string' ? value.library_bundle_id : '',
+    library_bundle_files: sanitizeLibraryFiles(value.library_bundle_files),
+    library_url: typeof value.library_url === 'string' ? value.library_url : '',
+    library_file_name: typeof value.library_file_name === 'string' ? value.library_file_name : '',
+    library_code: typeof value.library_code === 'string' ? value.library_code : '',
+    library_files: libraryFiles,
+    json_schema: typeof value.json_schema === 'string' ? value.json_schema : '',
+    render_code: typeof value.render_code === 'string' ? value.render_code : '',
+    target_resources: Array.isArray(value.target_resources)
+      ? value.target_resources.map((target) => String(target)).filter((target) => target.trim().length > 0)
+      : [],
+  };
+};
+
+const sanitizeCustomVisualizationLibraryBundle = (value: unknown): Record<string, unknown> | null => {
+  if (!isRecord(value)) return null;
+
   const libraryFiles = Array.isArray(value.library_files)
     ? value.library_files
       .filter(isRecord)
@@ -188,17 +229,7 @@ const sanitizeCustomVisualization = (value: unknown): Record<string, unknown> | 
     id: typeof value.id === 'string' ? value.id : crypto.randomUUID(),
     name: typeof value.name === 'string' ? value.name : '',
     description: typeof value.description === 'string' ? value.description : '',
-    is_active: typeof value.is_active === 'boolean' ? value.is_active : false,
-    library_source: value.library_source === 'upload' ? 'upload' : 'url',
-    library_url: typeof value.library_url === 'string' ? value.library_url : '',
-    library_file_name: typeof value.library_file_name === 'string' ? value.library_file_name : '',
-    library_code: typeof value.library_code === 'string' ? value.library_code : '',
     library_files: libraryFiles,
-    json_schema: typeof value.json_schema === 'string' ? value.json_schema : '',
-    render_code: typeof value.render_code === 'string' ? value.render_code : '',
-    target_resources: Array.isArray(value.target_resources)
-      ? value.target_resources.map((target) => String(target)).filter((target) => target.trim().length > 0)
-      : [],
   };
 };
 
@@ -211,11 +242,15 @@ const sanitizeResultPageSettingsForBackup = (settings: unknown): Record<string, 
   const customVisualizations = Array.isArray(settings.customVisualizations)
     ? settings.customVisualizations.map(sanitizeCustomVisualization).filter(isRecord)
     : [];
+  const customVisualizationLibraryBundles = Array.isArray(settings.customVisualizationLibraryBundles)
+    ? settings.customVisualizationLibraryBundles.map(sanitizeCustomVisualizationLibraryBundle).filter(isRecord)
+    : [];
 
   return {
     ...settings,
     exportApiConfigs,
     customVisualizations,
+    customVisualizationLibraryBundles,
   };
 };
 
