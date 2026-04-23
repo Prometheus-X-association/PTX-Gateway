@@ -101,6 +101,79 @@ const SettingsBackupSchema = z.object({
   result_page_settings: z.record(z.unknown()).nullable().optional(),
 }).passthrough();
 
+const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof SettingsBackupSchema> | null => {
+  if (!isRecord(value)) return null;
+
+  const source = isRecord(value.settings) ? value.settings : value;
+  if (!isRecord(source)) return null;
+
+  const globalConfig =
+    isRecord(source.global_config)
+      ? source.global_config
+      : isRecord(source.globalConfig)
+        ? source.globalConfig
+        : null;
+
+  const resultPageSettings =
+    isRecord(source.result_page_settings)
+      ? source.result_page_settings
+      : isRecord(source.resultPageSettings)
+        ? source.resultPageSettings
+        : isRecord(source.resultPage)
+          ? source.resultPage
+          : null;
+
+  const llmSettings =
+    isRecord(source.llm_settings)
+      ? source.llm_settings
+      : isRecord(source.llmSettings)
+        ? source.llmSettings
+        : null;
+
+  const pdcSource = isRecord(source.pdc) ? source.pdc : {};
+  const pdcConfigs =
+    Array.isArray(pdcSource.configs)
+      ? pdcSource.configs
+      : Array.isArray(source.dataspaceConfigs)
+        ? source.dataspaceConfigs
+        : [];
+
+  return {
+    schema_version: typeof source.schema_version === 'number' ? source.schema_version : 0,
+    exported_at: typeof source.exported_at === 'string' ? source.exported_at : '',
+    organization: isRecord(source.organization) ? source.organization : {},
+    organization_settings: isRecord(source.organization_settings)
+      ? source.organization_settings
+      : isRecord(source.organizationSettings)
+        ? source.organizationSettings
+        : null,
+    embed_settings: isRecord(source.embed_settings)
+      ? source.embed_settings
+      : isRecord(source.embedSettings)
+        ? source.embedSettings
+        : null,
+    pdc: {
+      configs: pdcConfigs.filter(isRecord),
+      bearer_token: typeof pdcSource.bearer_token === 'string' || pdcSource.bearer_token === null
+        ? pdcSource.bearer_token
+        : null,
+    },
+    resources: Array.isArray(source.resources)
+      ? source.resources.filter(isRecord)
+      : Array.isArray(source.dataspaceParams)
+        ? source.dataspaceParams.filter(isRecord)
+        : [],
+    service_chains: Array.isArray(source.service_chains)
+      ? source.service_chains.filter(isRecord)
+      : Array.isArray(source.serviceChains)
+        ? source.serviceChains.filter(isRecord)
+        : [],
+    global_config: globalConfig,
+    llm_settings: llmSettings,
+    result_page_settings: resultPageSettings,
+  };
+};
+
 const ImportSectionsSchema = z.object({
   pdc: z.boolean().optional(),
   resources: z.boolean().optional(),
@@ -422,7 +495,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
 
   return {
     data: {
-      schema_version: 2,
+      schema_version: 3,
       exported_at: new Date().toISOString(),
       organization: {
         id: orgResult.data?.id ?? organizationId,
@@ -1097,18 +1170,13 @@ serve(async (req) => {
         );
       }
 
-      const parsed = SettingsBackupSchema.safeParse(body);
-      if (!parsed.success) {
-        return validationErrorResponse(parsed.error);
+      const normalizedSettings = normalizeSettingsBackupForImport(body);
+      if (!normalizedSettings) {
+        return settingsErrorResponse('No compatible settings were found in the import file', 400);
       }
 
-      const settingsPayload = isRecord(parsed.data.settings) ? parsed.data.settings : parsed.data;
-      const safeSettings = SettingsBackupSchema.safeParse(settingsPayload);
-      if (!safeSettings.success) {
-        return validationErrorResponse(safeSettings.error);
-      }
       const importResult = await importSettingsIntoOrganization({
-        incoming: safeSettings.data,
+        incoming: normalizedSettings,
         orgId,
         userId,
         supabase,

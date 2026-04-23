@@ -394,6 +394,27 @@ const DataSelection = ({ onNext, onBack, dataResources, selectedAnalytics, isDeb
     setIsEditingParams(false);
   };
 
+  useEffect(() => {
+    const hasOnlyOneUploadOption =
+      !isDebugMode &&
+      uploadResources.length === 1 &&
+      apiResources.length === 0 &&
+      manualJsonResources.length === 0;
+
+    if (!hasOnlyOneUploadOption || selectedUploadResource) return;
+
+    const resource = uploadResources[0];
+    const prefillParams = resource.queryParams.length > 0 ? getPrefillParamsResolved(resource) : undefined;
+    confirmUploadResourceSelection(resource, prefillParams);
+  }, [
+    isDebugMode,
+    uploadResources,
+    apiResources.length,
+    manualJsonResources.length,
+    selectedUploadResource,
+    sessionId,
+  ]);
+
   const handleUploadParamsSave = () => {
     if (pendingUploadResource) {
       if (isEditingParams) {
@@ -718,6 +739,7 @@ const DataSelection = ({ onNext, onBack, dataResources, selectedAnalytics, isDeb
                           onParamValuesChange={setUploadResourceParams}
                           onUploadSuccess={() => setUploadSuccessful(true)}
                           onUploadReset={() => setUploadSuccessful(false)}
+                          isDebugMode={isDebugMode}
                         />
                       )}
                     </div>

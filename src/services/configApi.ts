@@ -1,6 +1,10 @@
 import { supabase } from "@/integrations/supabase/client";
 import { VisualizationType } from "@/types/auth";
-import { ExportApiConfig } from "@/types/dataspace";
+import {
+  CustomVisualizationConfig,
+  CustomVisualizationLibraryBundle,
+  ExportApiConfig,
+} from "@/types/dataspace";
 
 const CONFIG_API_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/config-api`;
 
@@ -110,6 +114,7 @@ export interface GlobalConfigData {
     };
     maxFileSizeMB?: number;
     maxFilesCount?: number;
+    resultPage?: ResultPageSettingsBackup;
   };
   logging?: {
     enabled?: boolean;
@@ -132,6 +137,13 @@ export interface AllConfigData {
 
 export const getAllConfig = () => configApiRequest<AllConfigData>({ path: '' });
 
+export interface ResultPageSettingsBackup {
+  exportApiConfigs?: ExportApiConfig[];
+  customVisualizations?: CustomVisualizationConfig[];
+  customVisualizationLibraryBundles?: CustomVisualizationLibraryBundle[];
+  [key: string]: unknown;
+}
+
 export interface SettingsBackupData {
   schema_version: number;
   exported_at: string;
@@ -150,7 +162,7 @@ export interface SettingsBackupData {
   service_chains: Array<Record<string, unknown>>;
   global_config: Record<string, unknown> | null;
   llm_settings?: Record<string, unknown> | null;
-  result_page_settings?: Record<string, unknown> | null;
+  result_page_settings?: ResultPageSettingsBackup | null;
 }
 
 export const exportSettingsBackup = (organizationId?: string) =>
