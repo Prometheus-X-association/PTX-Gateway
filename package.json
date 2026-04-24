@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "stack": "bash scripts/start-stack.sh local",
     "stack:local": "bash scripts/start-stack.sh local",
+    "stack:ngrok": "bash scripts/start-stack.sh local --host 0.0.0.0 --frontend-port 8080",
+    "ngrok:sync": "NGROK_AUTODETECT=true bash scripts/configure-supabase-auth.sh local",
     "stack:aws-local": "bash scripts/start-stack.sh aws-local",
     "stack:aws-remote": "bash scripts/start-stack.sh aws-remote",
     "stack:stop": "bash scripts/stop-stack.sh",

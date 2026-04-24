@@ -112,6 +112,24 @@ export interface GlobalConfigData {
       model?: string;
       promptTemplate?: string;
     };
+    externalOidc?: {
+      enabled?: boolean;
+      grantType?: 'client_credentials' | 'authorization_code';
+      authorizationEndpoint?: string;
+      loginEndpoint?: string;
+      tokenEndpoint?: string;
+      discoveryUrl?: string;
+      issuerUrl?: string;
+      clientId?: string;
+      provider?: string;
+      scope?: string;
+      audience?: string;
+      resource?: string;
+      responseType?: string;
+      responseMode?: string;
+      clientAuthMethod?: 'client_secret_basic' | 'client_secret_post';
+      additionalTokenParams?: string;
+    };
     maxFileSizeMB?: number;
     maxFilesCount?: number;
     resultPage?: ResultPageSettingsBackup;
@@ -122,10 +140,31 @@ export interface GlobalConfigData {
   };
 }
 
-export const getGlobalConfig = () => configApiRequest<GlobalConfigData>({ path: '/global' });
+export const getGlobalConfig = (organizationId?: string) =>
+  configApiRequest<GlobalConfigData>({ path: '/global', organizationId });
 
-export const updateGlobalConfig = (data: GlobalConfigData) =>
-  configApiRequest<GlobalConfigData>({ method: 'PUT', path: '/global', body: data });
+export const updateGlobalConfig = (data: GlobalConfigData, organizationId?: string) =>
+  configApiRequest<GlobalConfigData>({ method: 'PUT', path: '/global', body: data, organizationId });
+
+export interface ExternalOidcSecretStatus {
+  configured: boolean;
+}
+
+export interface ExternalOidcSecretPayload {
+  clientSecret?: string;
+  clearSecret?: boolean;
+}
+
+export const getExternalOidcSecretStatus = (organizationId?: string) =>
+  configApiRequest<ExternalOidcSecretStatus>({ path: '/global/external-oidc-secret', organizationId });
+
+export const updateExternalOidcSecret = (data: ExternalOidcSecretPayload, organizationId?: string) =>
+  configApiRequest<ExternalOidcSecretStatus>({
+    method: 'PUT',
+    path: '/global/external-oidc-secret',
+    body: data,
+    organizationId,
+  });
 
 // All config at once
 export interface AllConfigData {

@@ -32,3 +32,6 @@ verify_jwt = false
 
 [functions.result-proxy]
 verify_jwt = false
+
+[functions.external-oidc-auth]
+verify_jwt = false

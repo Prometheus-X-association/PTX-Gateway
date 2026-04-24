@@ -31,6 +31,7 @@ Options:
   --with-supabase       Force start local Supabase backend.
   --no-supabase         Skip local Supabase backend.
   --reset-db            Run `supabase db reset` after starting backend.
+                        Without this flag, startup applies pending migrations via `supabase db push`.
   --no-install          Skip dependency installation checks.
   --host <host>         Frontend host bind (default: local=127.0.0.1, server=0.0.0.0).
   --frontend-port <n>   Frontend port (default: 8080).
@@ -265,6 +266,9 @@ if [[ "$WITH_SUPABASE" == "true" ]]; then
   if [[ "$RESET_DB" == "true" ]]; then
     echo "Resetting local database..."
     npx supabase db reset
+  else
+    echo "Applying pending local database migrations..."
+    npx supabase db push --local
   fi
 fi
 

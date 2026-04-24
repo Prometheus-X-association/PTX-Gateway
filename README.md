@@ -144,8 +144,11 @@ cd <YOUR_PROJECT_NAME>
 npm install
 
 # Run full local stack (frontend + Supabase + local email inbox)
-npm run stack:local
+# This now applies pending local Supabase migrations automatically.
+npm run stack
 ```
+
+`npm run stack` is an alias for `npm run stack:local`.
 
 For AWS/local/remote variants and detailed setup, see [Self-Hosting & Running Locally](#-self-hosting--running-locally).
 
@@ -866,7 +869,21 @@ bun dev
 Use one script for all environments:
 
 ```bash
+# Default local command:
+# frontend + backend + local Supabase + local email inbox (Mailpit)
+# automatically applies pending local migrations via `supabase db push`
+npm run stack
+
+# Ngrok-friendly local command:
+# same local stack, but frontend binds to 0.0.0.0 so it can be exposed externally
+npm run stack:ngrok
+
+# Re-sync .env.local from active ngrok tunnels
+# detects the Supabase tunnel automatically and prints the frontend callback URL
+npm run ngrok:sync
+
 # Local: frontend + backend + local Supabase + local email inbox (Mailpit)
+# same as `npm run stack`
 npm run stack:local
 
 # AWS server with local Supabase on the same server:
@@ -903,11 +920,65 @@ Useful options:
 
 ```bash
 # Reset DB after starting local Supabase
+# destructive: recreates local DB from migrations
 bash scripts/run-all.sh local --reset-db
+
+# Default stack startup applies pending migrations non-destructively
+npm run stack
+
+# Start local stack for ngrok access
+npm run stack:ngrok
 
 # Custom host/port
 bash scripts/run-all.sh server --host 0.0.0.0 --frontend-port 8080
 ```
+
+### Local Ngrok Testing
+
+To test partner OIDC flows against your local machine, expose both the frontend and the local Supabase API.
+
+1. Start the local stack with a public bind:
+
+```bash
+npm run stack:ngrok
+```
+
+2. Open an ngrok tunnel for the frontend:
+
+```bash
+ngrok http 8080
+```
+
+3. Open a second ngrok tunnel for the local Supabase API:
+
+```bash
+ngrok http 54321
+```
+
+4. Re-point the frontend to the Supabase ngrok URL:
+
+```bash
+npm run ngrok:sync
+```
+
+5. Restart the app:
+
+```bash
+npm run stack:ngrok
+```
+
+Use these values during testing:
+
+- Frontend URL: `https://<your-frontend-ngrok-domain>`
+- OIDC callback URL: `https://<your-frontend-ngrok-domain>/oidc/callback`
+- Supabase API URL in `.env.local`: `https://<your-supabase-ngrok-domain>`
+
+Notes:
+
+- You need two tunnels because the browser app and Supabase local API run on different ports.
+- `npm run ngrok:sync` reads active ngrok tunnels from `http://127.0.0.1:4040/api/tunnels` and updates `.env.local` automatically.
+- Free ngrok domains change on restart, so partner callback registration may need updating each session.
+- For stable partner testing, prefer a reserved/static ngrok domain.
 
 ### Start / Stop Commands
 
@@ -948,7 +1019,7 @@ https://supabase.com/docs/guides/self-hosting/docker
 |-------|----------|
 | `npx supabase start` says "Docker Desktop is a prerequisite" on Linux | Docker daemon is usually not accessible. Run `docker info`; if permission denied: `sudo usermod -aG docker $USER && newgrp docker` then retry |
 | `npx supabase start` fails | Ensure Docker is running and ports `54321-54324` are free |
-| Migrations fail | Run `npx supabase db reset` to recreate local DB |
+| Migrations fail | `npm run stack` already applies pending local migrations. If the schema is out of sync, run `npx supabase db reset` to recreate the local DB |
 | Edge functions return 500 | Check secrets with `npx supabase secrets list` |
 | CORS errors | Ensure `VITE_SUPABASE_URL` matches the running instance |
 | Auth not working | Verify the anon key matches the running instance |

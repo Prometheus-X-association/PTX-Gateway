@@ -10,6 +10,7 @@ import NotFound from "./pages/NotFound";
 import LoginPage from "./components/auth/LoginPage";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import AdminDashboard from "./components/admin/AdminDashboard";
+import ExternalOidcCallbackPage from "./components/admin/ExternalOidcCallbackPage";
 import EmbedGateway from "./components/embed/EmbedGateway";
 import DebugModePage from "./pages/DebugModePage";
 
@@ -34,6 +35,7 @@ const App = () => (
             />
             <Route path="/" element={<LandingPage />} />
             <Route path="/embed" element={<EmbedGateway />} />
+            <Route path="/oidc/callback" element={<ExternalOidcCallbackPage />} />
             <Route
               path="/admin"
               element={

@@ -333,6 +333,65 @@ export type Database = {
           },
         ]
       }
+      organization_pdc_secrets: {
+        Row: {
+          bearer_token: string | null
+          created_at: string
+          external_oidc_access_token: string | null
+          external_oidc_expires_at: string | null
+          external_oidc_id_token: string | null
+          external_oidc_refresh_token: string | null
+          external_oidc_scope: string | null
+          external_oidc_subject: string | null
+          external_oidc_token_type: string | null
+          id: string
+          oidc_client_secret: string | null
+          organization_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          bearer_token?: string | null
+          created_at?: string
+          external_oidc_access_token?: string | null
+          external_oidc_expires_at?: string | null
+          external_oidc_id_token?: string | null
+          external_oidc_refresh_token?: string | null
+          external_oidc_scope?: string | null
+          external_oidc_subject?: string | null
+          external_oidc_token_type?: string | null
+          id?: string
+          oidc_client_secret?: string | null
+          organization_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          bearer_token?: string | null
+          created_at?: string
+          external_oidc_access_token?: string | null
+          external_oidc_expires_at?: string | null
+          external_oidc_id_token?: string | null
+          external_oidc_refresh_token?: string | null
+          external_oidc_scope?: string | null
+          external_oidc_subject?: string | null
+          external_oidc_token_type?: string | null
+          id?: string
+          oidc_client_secret?: string | null
+          organization_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_pdc_secrets_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organizations: {
         Row: {
           created_at: string | null

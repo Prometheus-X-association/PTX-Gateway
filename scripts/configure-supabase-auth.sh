@@ -24,6 +24,7 @@ Usage:
 
 Modes:
   local  Generate local `.env.local` and `supabase/functions/.env` from running Supabase.
+         If ngrok is running locally, the script can auto-detect forwarded URLs.
   aws    Generate `.env.supabase.aws.smtp` template for self-hosted Supabase SMTP/auth config.
 
 AWS options:
@@ -36,6 +37,49 @@ AWS options:
   --sender-name <name>   SMTP sender display name
   -h, --help             Show this help
 EOF
+}
+
+get_ngrok_tunnel_url_for_port() {
+  local port="$1"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local tunnels_json
+  tunnels_json="$(curl -fsS "http://127.0.0.1:4040/api/tunnels" 2>/dev/null || true)"
+  if [[ -z "$tunnels_json" ]]; then
+    return 0
+  fi
+
+  node -e '
+const raw = process.argv[1];
+const port = process.argv[2];
+try {
+  const parsed = JSON.parse(raw);
+  const tunnels = Array.isArray(parsed.tunnels) ? parsed.tunnels : [];
+  const match = tunnels.find((tunnel) => {
+    const addr = String(tunnel?.config?.addr ?? "");
+    const publicUrl = String(tunnel?.public_url ?? "");
+    return (
+      publicUrl.startsWith("https://") &&
+      (
+        addr === port ||
+        addr === `http://localhost:${port}` ||
+        addr === `http://127.0.0.1:${port}` ||
+        addr === `localhost:${port}` ||
+        addr === `127.0.0.1:${port}` ||
+        addr.endsWith(`:${port}`)
+      )
+    );
+  });
+  if (match?.public_url) {
+    process.stdout.write(String(match.public_url));
+  }
+} catch {
+  process.exit(0);
+}
+' "$tunnels_json" "$port"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -206,6 +250,12 @@ if [[ "$MODE" == "local" ]]; then
   if [[ -n "${SUPABASE_URL_OVERRIDE:-}" ]]; then
     echo "Using SUPABASE_URL_OVERRIDE for frontend URL: ${SUPABASE_URL_OVERRIDE}"
     api_url="$SUPABASE_URL_OVERRIDE"
+  elif [[ "${NGROK_AUTODETECT:-true}" == "true" ]]; then
+    ngrok_supabase_url="$(get_ngrok_tunnel_url_for_port "54321" || true)"
+    if [[ -n "$ngrok_supabase_url" ]]; then
+      echo "Detected ngrok tunnel for local Supabase API: ${ngrok_supabase_url}"
+      api_url="$ngrok_supabase_url"
+    fi
   elif is_wsl_runtime && [[ -n "${existing_frontend_url}" ]] && [[ "${existing_frontend_url}" =~ ^http://(127\.0\.0\.1|localhost):([0-9]+)$ ]]; then
     wsl_ip="$(get_wsl_primary_ip || true)"
     if [[ -n "$wsl_ip" ]]; then
@@ -248,6 +298,13 @@ EOF
   echo "Local auth/config files updated:"
   echo "  - .env.local"
   echo "  - supabase/functions/.env"
+  if [[ "${NGROK_AUTODETECT:-true}" == "true" ]]; then
+    ngrok_frontend_url="$(get_ngrok_tunnel_url_for_port "8080" || true)"
+    if [[ -n "$ngrok_frontend_url" ]]; then
+      echo "Detected ngrok tunnel for frontend: ${ngrok_frontend_url}"
+      echo "OIDC callback URL: ${ngrok_frontend_url}/oidc/callback"
+    fi
+  fi
   echo "Local email testing inbox: http://127.0.0.1:54324"
   exit 0
 fi

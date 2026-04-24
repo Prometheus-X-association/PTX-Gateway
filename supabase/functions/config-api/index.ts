@@ -67,6 +67,25 @@ const FeaturesSchema = z.object({
     model: z.string().max(200).optional(),
     promptTemplate: z.string().max(50000).optional(),
   }).optional(),
+  externalOidc: z.object({
+    enabled: z.boolean().optional(),
+    grantType: z.enum(["client_credentials", "authorization_code"]).optional(),
+    authorizationEndpoint: z.string().url().max(1000).optional().or(z.literal("")),
+    loginEndpoint: z.string().url().max(1000).optional().or(z.literal("")),
+    tokenEndpoint: z.string().url().max(1000).optional().or(z.literal("")),
+    discoveryUrl: z.string().url().max(1000).optional().or(z.literal("")),
+    issuerUrl: z.string().url().max(1000).optional().or(z.literal("")),
+    clientId: z.string().max(500).optional(),
+    provider: z.string().max(500).optional(),
+    scope: z.string().max(2000).optional(),
+    audience: z.string().max(1000).optional(),
+    resource: z.string().max(1000).optional(),
+    responseType: z.string().max(100).optional(),
+    responseMode: z.string().max(100).optional(),
+    clientAuthMethod: z.enum(["client_secret_basic", "client_secret_post"]).optional(),
+    additionalTokenParams: z.string().max(5000).optional(),
+  }).optional(),
+  resultPage: z.record(z.unknown()).optional(),
   maxFileSizeMB: z.number().min(1).max(1000).optional(),
   maxFilesCount: z.number().min(1).max(100).optional(),
 }).strict();
@@ -82,6 +101,11 @@ const GlobalConfigSchema = z.object({
   environment: z.enum(['development', 'staging', 'production']).optional().nullable(),
   features: FeaturesSchema.optional(),
   logging: LoggingSchema.optional(),
+}).strict();
+
+const ExternalOidcSecretSchema = z.object({
+  clientSecret: z.string().max(5000).optional(),
+  clearSecret: z.boolean().optional(),
 }).strict();
 
 const SettingsBackupSchema = z.object({
@@ -1519,6 +1543,27 @@ serve(async (req) => {
       );
     }
 
+    // GET /config/global/external-oidc-secret - Return secret status only
+    if (method === 'GET' && path === '/global/external-oidc-secret') {
+      const { data, error } = await adminClient
+        .from('organization_pdc_secrets')
+        .select('oidc_client_secret')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (error) {
+        return new Response(
+          JSON.stringify({ error: 'Failed to fetch external OIDC secret status' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ data: { configured: !!data?.oidc_client_secret } }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // PUT /config/global - Update global config
     if (method === 'PUT' && path === '/global') {
       let body;
@@ -1541,8 +1586,7 @@ serve(async (req) => {
         .upsert({
           ...parseResult.data,
           organization_id: orgId,
-        })
-        .eq('organization_id', orgId)
+        }, { onConflict: 'organization_id' })
         .select()
         .single();
 
@@ -1555,6 +1599,74 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({ data }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // PUT /config/global/external-oidc-secret - Update client secret
+    if (method === 'PUT' && path === '/global/external-oidc-secret') {
+      let body;
+      try {
+        body = await req.json();
+      } catch {
+        return new Response(
+          JSON.stringify({ error: 'Invalid JSON body' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const parseResult = ExternalOidcSecretSchema.safeParse(body);
+      if (!parseResult.success) {
+        return validationErrorResponse(parseResult.error);
+      }
+
+      const { clientSecret, clearSecret } = parseResult.data;
+      if (!clearSecret && (!clientSecret || !clientSecret.trim())) {
+        return new Response(
+          JSON.stringify({ error: 'clientSecret is required unless clearSecret is true' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const { data: existingSecret, error: existingSecretError } = await adminClient
+        .from('organization_pdc_secrets')
+        .select('id, bearer_token')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (existingSecretError) {
+        return new Response(
+          JSON.stringify({ error: 'Failed to load existing organization secret record' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const secretValue = clearSecret ? null : clientSecret!.trim();
+      const payload = {
+        organization_id: orgId,
+        bearer_token: existingSecret?.bearer_token ?? null,
+        oidc_client_secret: secretValue,
+        updated_by: userId,
+      };
+
+      const { error } = existingSecret
+        ? await adminClient
+            .from('organization_pdc_secrets')
+            .update(payload)
+            .eq('organization_id', orgId)
+        : await adminClient
+            .from('organization_pdc_secrets')
+            .insert(payload);
+
+      if (error) {
+        return new Response(
+          JSON.stringify({ error: 'Failed to update external OIDC secret' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ data: { configured: !!secretValue } }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }

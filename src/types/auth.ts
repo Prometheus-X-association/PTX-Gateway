@@ -76,6 +76,24 @@ export interface GlobalConfig {
       model: string;
       promptTemplate: string;
     };
+    externalOidc?: {
+      enabled: boolean;
+      grantType: 'client_credentials' | 'authorization_code';
+      authorizationEndpoint: string;
+      loginEndpoint: string;
+      tokenEndpoint: string;
+      discoveryUrl: string;
+      issuerUrl: string;
+      clientId: string;
+      provider: string;
+      scope: string;
+      audience: string;
+      resource: string;
+      responseType: string;
+      responseMode: string;
+      clientAuthMethod: 'client_secret_basic' | 'client_secret_post';
+      additionalTokenParams: string;
+    };
     maxFileSizeMB: number;
     maxFilesCount: number;
   };
