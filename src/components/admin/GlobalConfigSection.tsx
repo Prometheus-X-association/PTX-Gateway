@@ -600,7 +600,11 @@ const GlobalConfigSection = () => {
                 <div>
                   <p className="font-medium">Enable External OIDC For PDC Calls</p>
                   <p className="text-sm text-muted-foreground">
-                    When enabled, the gateway uses OAuth 2.0 client credentials against the configured OIDC provider instead of the legacy static bearer token.
+                    Configure PTX Gateway as an OAuth 2.0 / OpenID Connect client for the partner platform. Use
+                    <code> client_credentials </code>
+                    for server-to-server access, or
+                    <code> authorization_code </code>
+                    when an admin must sign in on the partner platform first.
                   </p>
                 </div>
                 <Switch
@@ -626,6 +630,10 @@ const GlobalConfigSection = () => {
                       <SelectItem value="authorization_code">authorization_code</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Choose <code>client_credentials</code> for machine-to-machine calls. Choose <code>authorization_code</code> when the
+                    partner requires an interactive login and PTX must receive a callback with a temporary code.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Client ID</Label>
@@ -634,6 +642,9 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ clientId: e.target.value })}
                     placeholder="ptx-gateway-org-a"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    The client or application ID issued by the partner identity provider for this PTX Gateway deployment.
+                  </p>
                 </div>
                 <div className="space-y-2 md:col-span-2">
                   <Label>Login Endpoint</Label>
@@ -643,7 +654,8 @@ const GlobalConfigSection = () => {
                     placeholder="https://partner.example.com/idm/oidc/login"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Use this when the partner requires a custom login entrypoint like <code>/oidc/login?redirect_uri=...&provider=...</code>.
+                    Optional. Only fill this when the partner gives you a custom login entrypoint. If they provide a standard
+                    authorization endpoint, leave this blank and use <code>Authorization Endpoint</code> instead.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -653,6 +665,9 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ authorizationEndpoint: e.target.value })}
                     placeholder="https://partner.example.com/idm/oidc/auth"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Recommended for <code>authorization_code</code>. This is usually the partner&apos;s standard OAuth/OIDC authorize URL.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Provider</Label>
@@ -661,6 +676,9 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ provider: e.target.value })}
                     placeholder="ptx-gateway"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Optional. Some partner login endpoints require an extra provider or connection identifier. Leave blank unless they tell you to use it.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Client Auth Method</Label>
@@ -678,6 +696,9 @@ const GlobalConfigSection = () => {
                       <SelectItem value="client_secret_post">client_secret_post</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Match the partner token endpoint expectation exactly. Most providers use <code>client_secret_basic</code>.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Response Type</Label>
@@ -686,6 +707,9 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ responseType: e.target.value })}
                     placeholder="code"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    For partner login, use <code>code</code>. Do not use <code>token</code> or <code>id_token</code> for this page.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Response Mode</Label>
@@ -694,6 +718,10 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ responseMode: e.target.value })}
                     placeholder="query"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Recommended value for the callback page is <code>query</code>, so the partner returns
+                    <code> /oidc/callback?code=...&state=...</code>.
+                  </p>
                 </div>
                 <div className="space-y-2 md:col-span-2">
                   <Label>Token Endpoint</Label>
@@ -703,7 +731,7 @@ const GlobalConfigSection = () => {
                     placeholder="https://idp.partner.example.com/oauth2/token"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Use this when the partner gives you the exact token endpoint. If you leave it blank, the gateway can resolve it from Discovery URL or Issuer URL.
+                    Optional if discovery is available. Fill this when the partner gives you the exact token endpoint or when discovery is disabled on their side.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -713,6 +741,9 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ discoveryUrl: e.target.value })}
                     placeholder="https://idp.partner.example.com/.well-known/openid-configuration"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Best option when available. PTX can resolve the token endpoint and other metadata from the discovery document.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Issuer URL</Label>
@@ -721,6 +752,9 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ issuerUrl: e.target.value })}
                     placeholder="https://idp.partner.example.com"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Alternative to Discovery URL. PTX will try <code>/.well-known/openid-configuration</code> under this issuer.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Scope</Label>
@@ -729,6 +763,9 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ scope: e.target.value })}
                     placeholder="pdc.execute pdc.read"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Space-separated scopes requested from the partner, for example <code>openid profile email pdc.execute</code>.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Audience</Label>
@@ -737,6 +774,9 @@ const GlobalConfigSection = () => {
                     onChange={(e) => setExternalOidc({ audience: e.target.value })}
                     placeholder="https://api.partner.example.com"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Optional. Use this only when the partner API requires an <code>audience</code> claim in the issued access token.
+                  </p>
                 </div>
                 <div className="space-y-2 md:col-span-2">
                   <Label>Resource</Label>
@@ -746,7 +786,7 @@ const GlobalConfigSection = () => {
                     placeholder="api://partner-platform"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Some identity providers need <code>resource</code> instead of or in addition to <code>audience</code>.
+                    Optional. Some identity providers need <code>resource</code> instead of, or in addition to, <code>audience</code>.
                   </p>
                 </div>
                 <div className="space-y-2 md:col-span-2">
@@ -758,7 +798,8 @@ const GlobalConfigSection = () => {
                     placeholder={'{"tenant":"edge-skills","custom_claim":"org-a"}'}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Optional. Provide a JSON object only when the other platform requires extra token request fields.
+                    Optional. Use only for partner-specific token parameters, such as tenant IDs or custom claims. Example:
+                    <code> {"{\"tenant\":\"org-a\"}"} </code>
                   </p>
                 </div>
               </div>
@@ -805,7 +846,8 @@ const GlobalConfigSection = () => {
                 <CardHeader>
                   <CardTitle className="text-base">Authorization-Code Connection</CardTitle>
                   <CardDescription>
-                    PTX Gateway will open the partner login page, receive a code on <code>/oidc/callback</code>, and exchange it server-side.
+                    Use this for interactive partner login. PTX Gateway opens the partner sign-in page, receives an authorization
+                    code on <code>/oidc/callback</code>, and exchanges it server-side with PKCE.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -816,6 +858,16 @@ const GlobalConfigSection = () => {
                       </AlertDescription>
                     </Alert>
                   ) : null}
+                  <Alert>
+                    <AlertDescription>
+                      Before clicking connect, make sure the partner has registered this exact callback URL, enabled
+                      <code> authorization_code </code>
+                      for the client, and supports PKCE with
+                      <code> response_type=code </code>
+                      and
+                      <code> response_mode=query </code>.
+                    </AlertDescription>
+                  </Alert>
                   <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm">
                     Connection status: {externalOidcConnection.connected ? "Connected" : "Not connected"}
                     {externalOidcConnection.subject ? ` | Subject: ${externalOidcConnection.subject}` : ""}
@@ -857,38 +909,45 @@ const GlobalConfigSection = () => {
               <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">Example: Other Platform Is The Identity Provider</CardTitle>
+                    <CardTitle className="text-base">Example: Partner Login With Authorization Code</CardTitle>
                     <CardDescription>
-                      Most common outbound integration. The partner platform owns the IdP and registers PTX Gateway as an OIDC client.
+                      Use this when an admin must log in on the partner platform and PTX stores the returned access token for later PDC calls.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3 text-sm">
-                    <p>Configure in PTX Gateway:</p>
+                    <p>Fill PTX Gateway like this:</p>
                     <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
 {`Enable External OIDC: on
+Grant Type: authorization_code
 Client ID: ptx-gateway-org-a
 Client Secret: <provided by partner>
+Authorization Endpoint: https://idp.partner.example.com/oauth2/authorize
+Token Endpoint: https://idp.partner.example.com/oauth2/token
 Discovery URL: https://idp.partner.example.com/.well-known/openid-configuration
-Scope: pdc.execute
+Scope: openid profile email pdc.execute
 Audience: https://api.partner.example.com
+Response Type: code
+Response Mode: query
 Client Auth Method: client_secret_basic`}
                     </pre>
-                    <p>Ask the other platform to provide:</p>
+                    <p>Ask the partner platform team to configure:</p>
                     <p className="text-muted-foreground">
-                      issuer or discovery URL, token endpoint if custom, client ID, client secret, required scopes, required audience or resource value, and the exact authentication method they expect at the token endpoint.
+                      client registration for PTX Gateway, the exact callback URL shown above, PKCE enabled, and these values back to you:
+                      client ID, client secret, authorization endpoint, token endpoint, issuer or discovery URL, required scopes,
+                      audience or resource, and token endpoint auth method.
                     </p>
                   </CardContent>
                 </Card>
 
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">Example: PTX Gateway Team Coordinates Client Creation</CardTitle>
+                    <CardTitle className="text-base">Example: Server-To-Server Client Credentials</CardTitle>
                     <CardDescription>
-                      PTX Gateway is still the client, but your team leads the registration process with the other platform.
+                      Use this when PTX should request a fresh access token directly without any interactive partner login.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3 text-sm">
-                    <p>Share these values with the other platform admin:</p>
+                    <p>Share this request with the partner admin:</p>
                     <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
 {`Client display name: PTX Gateway - Org A
 Grant type: client_credentials
@@ -896,9 +955,10 @@ Token usage: server-to-server PDC execution
 Expected API audience: https://api.partner.example.com
 Requested scopes: pdc.execute pdc.read`}
                     </pre>
-                    <p>After they create the client, copy back into PTX Gateway:</p>
+                    <p>After they create the client, fill PTX Gateway with:</p>
                     <p className="text-muted-foreground">
-                      client ID, client secret, discovery URL or issuer URL, plus any mandatory scope, audience, resource, or custom token parameters.
+                      Grant Type <code>client_credentials</code>, then client ID, client secret, token endpoint or discovery URL,
+                      required scope, and any mandatory audience, resource, or custom token parameters.
                     </p>
                   </CardContent>
                 </Card>
@@ -906,7 +966,8 @@ Requested scopes: pdc.execute pdc.read`}
 
               <Alert>
                 <AlertDescription>
-                  If the other platform asks PTX Gateway to act as a full identity provider for them, that is a different integration pattern and is not implemented here. This page configures PTX Gateway as an OIDC client for outbound communication only.
+                  This page makes PTX Gateway an OIDC client of the partner platform. If the partner asks PTX to act as the identity
+                  provider for them, that is a different integration pattern and is not implemented here.
                 </AlertDescription>
               </Alert>
             </TabsContent>

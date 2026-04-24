@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Loader2, ShieldAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -10,18 +10,37 @@ import {
   readExternalOidcAuthState,
 } from "@/utils/externalOidc";
 
+const getCallbackParams = (): URLSearchParams => {
+  const hash = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const hashParams = new URLSearchParams(hash);
+  const searchParams = new URLSearchParams(window.location.search);
+  const merged = new URLSearchParams();
+
+  for (const [key, value] of hashParams.entries()) {
+    merged.set(key, value);
+  }
+
+  for (const [key, value] of searchParams.entries()) {
+    merged.set(key, value);
+  }
+
+  return merged;
+};
+
 const ExternalOidcCallbackPage = () => {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [status, setStatus] = useState<"working" | "success" | "error">("working");
   const [message, setMessage] = useState("Completing external OIDC connection...");
 
   useEffect(() => {
     const run = async () => {
-      const code = searchParams.get("code");
-      const state = searchParams.get("state");
-      const error = searchParams.get("error");
-      const errorDescription = searchParams.get("error_description");
+      const callbackParams = getCallbackParams();
+      const code = callbackParams.get("code");
+      const state = callbackParams.get("state");
+      const error = callbackParams.get("error");
+      const errorDescription = callbackParams.get("error_description");
 
       if (error) {
         setStatus("error");
@@ -32,7 +51,7 @@ const ExternalOidcCallbackPage = () => {
       const savedState = readExternalOidcAuthState();
       if (!code || !state || !savedState) {
         setStatus("error");
-        setMessage("Missing authorization code or saved callback state.");
+        setMessage("Missing authorization code or saved callback state. Check that the provider redirects back with `response_type=code` and `response_mode=query`.");
         return;
       }
 
@@ -73,7 +92,7 @@ const ExternalOidcCallbackPage = () => {
     };
 
     void run();
-  }, [searchParams]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">

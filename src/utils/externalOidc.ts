@@ -89,7 +89,8 @@ export const buildExternalOidcConnectUrl = ({
   codeChallenge: string;
   redirectUri: string;
 }): string => {
-  const baseUrl = config.loginEndpoint || config.authorizationEndpoint;
+  // Prefer the standards-based authorization endpoint when both are configured.
+  const baseUrl = config.authorizationEndpoint || config.loginEndpoint;
   if (!baseUrl) {
     throw new Error("External OIDC login endpoint or authorization endpoint is required");
   }
@@ -102,9 +103,13 @@ export const buildExternalOidcConnectUrl = ({
 
   if (config.provider) url.searchParams.set("provider", config.provider);
   if (config.clientId) url.searchParams.set("client_id", config.clientId);
-  if (config.responseType) url.searchParams.set("response_type", config.responseType);
+  url.searchParams.set("response_type", config.responseType || "code");
   if (config.scope) url.searchParams.set("scope", config.scope);
-  if (config.responseMode) url.searchParams.set("response_mode", config.responseMode);
+  if (config.responseMode) {
+    url.searchParams.set("response_mode", config.responseMode);
+  } else if ((config.responseType || "code") === "code") {
+    url.searchParams.set("response_mode", "query");
+  }
   if (config.audience) url.searchParams.set("audience", config.audience);
   if (config.resource) url.searchParams.set("resource", config.resource);
 
