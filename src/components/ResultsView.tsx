@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette } from "lucide-react";
+import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,6 +25,7 @@ interface ResultsViewProps {
   selectedAnalytics?: AnalyticsOption | null;
   selectedAnalyticsTargetId?: string | null;
   customVisualizations?: CustomVisualizationConfig[];
+  showDebugApiExportConfig?: boolean;
 }
 
 interface LlmInsightPayload {
@@ -139,23 +140,35 @@ const fallbackResultData = {
 const RESULT_PLACEHOLDER = "##result";
 const RESULT_ARRAY_PREFIXES = ["##resultArray", "##resultsArray"] as const;
 const RESULT_ARRAY_EACH_PREFIXES = ["##resultArrayEach", "##resultsArrayEach"] as const;
-const RESULT_DYNAMIC_TOKEN_REGEX = /##resultArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultsArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##result(?![A-Za-z])|##results?Array(?:\.[A-Za-z_$][\w$]*|\[\d+\])*/g;
-const QUOTED_RESULT_DYNAMIC_TOKEN_REGEX = /"(##resultArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultsArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##result(?![A-Za-z])|##results?Array(?:\.[A-Za-z_$][\w$]*|\[\d+\])*)"/g;
+const RESULT_OBJECT_EACH_PREFIXES = ["##resultObjectEach", "##resultsObjectEach"] as const;
+const TOKEN_TRANSFORM_PATTERN = String.raw`(?:\|replace\((?:"[^"]*"|'[^']*'|[^,)]*),(?:"[^"]*"|'[^']*'|[^)]*)\))?`;
+const RESULT_TOKEN_PATTERN = String.raw`(?:##resultArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultsArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultObjectEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultsObjectEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##result(?![A-Za-z])|##results?Array(?:\.[A-Za-z_$][\w$]*|\[\d+\])*)`;
+const RESULT_DYNAMIC_TOKEN_REGEX = new RegExp(`${RESULT_TOKEN_PATTERN}${TOKEN_TRANSFORM_PATTERN}`, "g");
+const QUOTED_RESULT_DYNAMIC_TOKEN_REGEX = new RegExp(`"(${RESULT_TOKEN_PATTERN}${TOKEN_TRANSFORM_PATTERN})"`, "g");
 const TOKEN_SENTINEL_PREFIX = "__PTX_TOKEN__";
 
 type PathToken = string | number;
+interface TokenTransform {
+  type: "replace";
+  search: string;
+  replacement: string;
+}
 interface TokenSpec {
   token: string;
   quoted: boolean;
 }
 interface EachTokenInfo {
+  mode: "array" | "object";
   arrayPath: PathToken[];
   arrayPathKey: string;
   itemPath: PathToken[];
+  objectValuePath?: PathToken[];
+  objectField?: "key" | "value";
 }
 interface EachResolveContext {
   arrayPathKey: string;
   item: unknown;
+  objectKey?: string;
 }
 
 const parseResultArrayPath = (pathExpression: string): PathToken[] => {
@@ -217,6 +230,46 @@ const getValueByPath = (data: unknown, path: PathToken[]): unknown => {
   return current;
 };
 
+const unquoteTransformArg = (value: string): string => {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+};
+
+const splitTokenTransform = (token: string): { baseToken: string; transform?: TokenTransform } => {
+  const match = token.match(/^(.*)\|replace\((?:"([^"]*)"|'([^']*)'|([^,)]*)),(?:"([^"]*)"|'([^']*)'|([^)]*))\)$/);
+  if (!match) return { baseToken: token };
+
+  const search = match[2] ?? match[3] ?? unquoteTransformArg(match[4] || "");
+  const replacement = match[5] ?? match[6] ?? unquoteTransformArg(match[7] || "");
+  return {
+    baseToken: match[1],
+    transform: {
+      type: "replace",
+      search,
+      replacement,
+    },
+  };
+};
+
+const applyTokenTransform = (value: unknown, transform?: TokenTransform): unknown => {
+  if (!transform) return value;
+
+  const applyReplace = (item: unknown): unknown => {
+    if (typeof item !== "string") return item;
+    if (!transform.search) return item;
+    return item.split(transform.search).join(transform.replacement);
+  };
+
+  if (Array.isArray(value)) return value.map(applyReplace);
+  return applyReplace(value);
+};
+
 const parseEachTokenInfo = (token: string, result: unknown): EachTokenInfo => {
   let matchedPrefix: string | undefined;
   for (const prefix of RESULT_ARRAY_EACH_PREFIXES) {
@@ -239,6 +292,7 @@ const parseEachTokenInfo = (token: string, result: unknown): EachTokenInfo => {
     if (Array.isArray(current)) {
       const arrayPath = fullPath.slice(0, i + 1);
       return {
+        mode: "array",
         arrayPath,
         arrayPathKey: pathToKey(arrayPath),
         itemPath: fullPath.slice(i + 1),
@@ -247,6 +301,40 @@ const parseEachTokenInfo = (token: string, result: unknown): EachTokenInfo => {
   }
 
   throw new Error(`Token "${token}" must point to an array path`);
+};
+
+const parseObjectEachTokenInfo = (token: string): EachTokenInfo => {
+  let matchedPrefix: string | undefined;
+  for (const prefix of RESULT_OBJECT_EACH_PREFIXES) {
+    if (token === prefix || token.startsWith(prefix)) {
+      matchedPrefix = prefix;
+      break;
+    }
+  }
+  if (!matchedPrefix) {
+    throw new Error(`Unsupported token "${token}"`);
+  }
+
+  const fullPath = parseResultArrayPath(token.slice(matchedPrefix.length));
+  const markerIndex = fullPath.findIndex((pathToken) => pathToken === "$key" || pathToken === "$value");
+  if (markerIndex < 0) {
+    throw new Error(`Token "${token}" must include .$key or .$value after the object path`);
+  }
+
+  const objectField = fullPath[markerIndex] === "$key" ? "key" : "value";
+  const objectPath = fullPath.slice(0, markerIndex);
+  if (objectPath.length === 0) {
+    throw new Error(`Token "${token}" must include an object path before ${objectField === "key" ? "$key" : "$value"}`);
+  }
+
+  return {
+    mode: "object",
+    arrayPath: objectPath,
+    arrayPathKey: pathToKey(objectPath),
+    itemPath: [],
+    objectValuePath: fullPath.slice(markerIndex + 1),
+    objectField,
+  };
 };
 
 const collectEachTokenInfos = (
@@ -258,8 +346,12 @@ const collectEachTokenInfos = (
     const tokenId = node.slice(TOKEN_SENTINEL_PREFIX.length);
     const spec = tokenMap.get(tokenId);
     if (!spec) return [];
-    if (RESULT_ARRAY_EACH_PREFIXES.some((prefix) => spec.token === prefix || spec.token.startsWith(prefix))) {
-      return [parseEachTokenInfo(spec.token, result)];
+    const { baseToken } = splitTokenTransform(spec.token);
+    if (RESULT_ARRAY_EACH_PREFIXES.some((prefix) => baseToken === prefix || baseToken.startsWith(prefix))) {
+      return [parseEachTokenInfo(baseToken, result)];
+    }
+    if (RESULT_OBJECT_EACH_PREFIXES.some((prefix) => baseToken === prefix || baseToken.startsWith(prefix))) {
+      return [parseObjectEachTokenInfo(baseToken)];
     }
     return [];
   }
@@ -280,7 +372,12 @@ const resolveResultToken = (
   result: unknown,
   eachContext?: EachResolveContext
 ): unknown => {
-  if (token === RESULT_PLACEHOLDER) return result;
+  const { baseToken, transform } = splitTokenTransform(token);
+  token = baseToken;
+
+  const finish = (value: unknown) => applyTokenTransform(value, transform);
+
+  if (token === RESULT_PLACEHOLDER) return finish(result);
 
   for (const prefix of RESULT_ARRAY_EACH_PREFIXES) {
     if (token === prefix || token.startsWith(prefix)) {
@@ -289,22 +386,47 @@ const resolveResultToken = (
       if (eachContext && eachContext.arrayPathKey === info.arrayPathKey) {
         const value = getValueByPath(eachContext.item, info.itemPath);
         if (value === undefined) throw new Error(`Could not resolve token "${token}" for one array item`);
-        return value;
+        return finish(value);
       }
 
       const sourceArray = getValueByPath(result, info.arrayPath);
       if (!Array.isArray(sourceArray)) throw new Error(`Token "${token}" path does not resolve to an array`);
 
-      return sourceArray.map((item) => {
+      return finish(sourceArray.map((item) => {
         const value = getValueByPath(item, info.itemPath);
         if (value === undefined) throw new Error(`Could not resolve token "${token}" for one array item`);
         return value;
-      });
+      }));
+    }
+  }
+
+  for (const prefix of RESULT_OBJECT_EACH_PREFIXES) {
+    if (token === prefix || token.startsWith(prefix)) {
+      const info = parseObjectEachTokenInfo(token);
+
+      if (eachContext && eachContext.arrayPathKey === info.arrayPathKey) {
+        if (info.objectField === "key") return finish(eachContext.objectKey);
+        const value = getValueByPath(eachContext.item, info.objectValuePath || []);
+        if (value === undefined) throw new Error(`Could not resolve token "${token}" for one object entry`);
+        return finish(value);
+      }
+
+      const sourceObject = getValueByPath(result, info.arrayPath);
+      if (!sourceObject || typeof sourceObject !== "object" || Array.isArray(sourceObject)) {
+        throw new Error(`Token "${token}" path does not resolve to an object`);
+      }
+
+      return finish(Object.entries(sourceObject as Record<string, unknown>).map(([key, value]) => {
+        if (info.objectField === "key") return key;
+        const resolved = getValueByPath(value, info.objectValuePath || []);
+        if (resolved === undefined) throw new Error(`Could not resolve token "${token}" for object entry "${key}"`);
+        return resolved;
+      }));
     }
   }
 
   for (const prefix of RESULT_ARRAY_PREFIXES) {
-    if (token === prefix) return result;
+    if (token === prefix) return finish(result);
     if (token.startsWith(prefix)) {
       const pathExpression = token.slice(prefix.length);
       const pathTokens = parseResultArrayPath(pathExpression);
@@ -312,7 +434,7 @@ const resolveResultToken = (
       if (resolved === undefined) {
         throw new Error(`Could not resolve token "${token}" from result data`);
       }
-      return resolved;
+      return finish(resolved);
     }
   }
 
@@ -348,7 +470,7 @@ const buildApiExportBody = (template: string, result: unknown): string => {
     parsedTemplate = JSON.parse(withAllTokens);
   } catch {
     throw new Error(
-      "Invalid JSON template. Supported tokens: ##result, ##resultArray.path[0], ##resultsArray.path[0], ##resultArrayEach.path.to.array.field."
+      "Invalid JSON template. Supported tokens: ##result, ##resultArray.path[0], ##resultsArray.path[0], ##resultArrayEach.path.to.array.field, ##resultObjectEach.path.$key, ##resultObjectEach.path.$value.field."
     );
   }
 
@@ -373,12 +495,26 @@ const buildApiExportBody = (template: string, result: unknown): string => {
             throw new Error("All ##resultArrayEach tokens in one template array item must target the same source array");
           }
 
-          const sourceArray = getValueByPath(result, eachInfos[0].arrayPath);
-          if (!Array.isArray(sourceArray)) {
+          const firstInfo = eachInfos[0];
+          const sourceCollection = getValueByPath(result, firstInfo.arrayPath);
+          if (firstInfo.mode === "array" && !Array.isArray(sourceCollection)) {
             throw new Error("##resultArrayEach source path does not resolve to an array");
           }
+          if (firstInfo.mode === "object" && (!sourceCollection || typeof sourceCollection !== "object" || Array.isArray(sourceCollection))) {
+            throw new Error("##resultObjectEach source path does not resolve to an object");
+          }
 
-          return sourceArray.map((item) => resolveNode(node[0], { arrayPathKey: firstPathKey, item }));
+          if (firstInfo.mode === "array") {
+            return (sourceCollection as unknown[]).map((item) => resolveNode(node[0], { arrayPathKey: firstPathKey, item }));
+          }
+
+          return Object.entries(sourceCollection as Record<string, unknown>).flatMap(([objectKey, item]) => {
+            try {
+              return [resolveNode(node[0], { arrayPathKey: firstPathKey, item, objectKey })];
+            } catch {
+              return [];
+            }
+          });
         }
       }
 
@@ -494,11 +630,18 @@ const TEMPLATE_TAG_HELP: TemplateTagHelp[] = [
       '[\n  {\n    "name": ##resultArrayEach.data.content.data.nodes.label,\n    "weight": ##resultArrayEach.data.content.data.nodes.weight\n  }\n]',
   },
   {
+    tag: "##resultObjectEach",
+    title: "Map Object Entries",
+    description: "Generate an array item template from each key/value pair in a source object. Use .$key for the object key and .$value for fields inside that value. Entries missing a selected field are skipped.",
+    example:
+      '[\n  {\n    "skill_name": ##resultObjectEach.data.content.data.result.$key|replace("_"," "),\n    "description": ##resultObjectEach.data.content.data.result.$value.skills[0].description.literal\n  }\n]',
+  },
+  {
     tag: "##forEach",
     title: "Send Multiple POST Requests",
-    description: "Prefix template to send one POST per item of the resolved array body.",
+    description: "Prefix template to send one POST per item of the resolved array body. Use ##forEach(0:2) for the first 3 items.",
     example:
-      '##forEach(1:)\n[\n  {\n    "name": ##resultArrayEach.data.content.data.nodes.label,\n    "weight": ##resultArrayEach.data.content.data.nodes.weight\n  }\n]',
+      '##forEach(0:2)\n[\n  {\n    "skill_name": ##resultObjectEach.data.content.data.result.$key|replace("_"," "),\n    "description": ##resultObjectEach.data.content.data.result.$value.skills[0].description.literal\n  }\n]',
   },
 ];
 
@@ -1963,6 +2106,7 @@ const ResultsView = ({
   selectedAnalytics,
   selectedAnalyticsTargetId,
   customVisualizations = [],
+  showDebugApiExportConfig = false,
 }: ResultsViewProps) => {
   const [resultData, setResultData] = useState<unknown>(fallbackResultData);
   const [isLoading, setIsLoading] = useState(false);
@@ -1981,32 +2125,31 @@ const ResultsView = ({
   const [llmInsightsEnabled, setLlmInsightsEnabled] = useState(false);
   const [insightError, setInsightError] = useState<string | null>(null);
   const [llmInsight, setLlmInsight] = useState<LlmInsightPayload | null>(null);
+  const selectedTargetId = useMemo(() => {
+    if (selectedAnalytics) {
+      return selectedAnalytics.type === "software"
+        ? `software:${selectedAnalytics.data.id}`
+        : `serviceChain:${selectedAnalytics.data.id}`;
+    }
+    return selectedAnalyticsTargetId || null;
+  }, [selectedAnalytics, selectedAnalyticsTargetId]);
   const compatibleExportApiConfigs = useMemo(() => {
     return exportApiConfigs.filter((config) => {
-      const template = config.body_template?.trim();
-      if (!template) {
-        return true;
-      }
-
-      try {
-        const { bodies } = buildApiExportBodies(template, resultData);
-        return bodies.length > 0;
-      } catch {
+      if (!(config.is_active ?? true)) {
         return false;
       }
+      if (!selectedTargetId || !(config.target_resources || []).includes(selectedTargetId)) {
+        return false;
+      }
+      return true;
     });
-  }, [exportApiConfigs, resultData]);
+  }, [exportApiConfigs, selectedTargetId]);
   const activeCustomVisualization = useMemo(() => {
-    const targetId = selectedAnalytics
-      ? selectedAnalytics.type === "software"
-        ? `software:${selectedAnalytics.data.id}`
-        : `serviceChain:${selectedAnalytics.data.id}`
-      : selectedAnalyticsTargetId;
-    if (!targetId) return null;
+    if (!selectedTargetId) return null;
     return customVisualizations.find((visualization) =>
-      visualization.is_active && (visualization.target_resources || []).includes(targetId)
+      visualization.is_active && (visualization.target_resources || []).includes(selectedTargetId)
     ) || null;
-  }, [customVisualizations, selectedAnalytics, selectedAnalyticsTargetId]);
+  }, [customVisualizations, selectedTargetId]);
   const activeCustomVisualizationLabel = activeCustomVisualization?.name?.trim() || "Custom Visualization";
 
   const fetchResultDataInternal = useCallback(async (): Promise<"ready" | "error"> => {
@@ -2352,6 +2495,36 @@ const ResultsView = ({
     };
   }, [apiUrl, apiAuthorization, apiParams, apiTemplate, resultData]);
 
+  const buildApiRequestPreviewForConfig = useCallback((config: ExportApiConfig): ApiRequestPreview => {
+    if (!config.url?.trim()) {
+      throw new Error(`${config.name || "Export API"} has no API URL`);
+    }
+
+    const template = config.body_template?.trim() || '{\n  "data": ##result\n}';
+    const { bodies, forEachRange } = buildApiExportBodies(template, resultData);
+
+    let finalUrl = config.url;
+    const params = config.params || [];
+    if (params.length > 0) {
+      const searchParams = new URLSearchParams();
+      params.forEach((p) => {
+        if (p.key.trim()) searchParams.append(p.key, p.value);
+      });
+      const paramString = searchParams.toString();
+      if (paramString) {
+        finalUrl += (finalUrl.includes("?") ? "&" : "?") + paramString;
+      }
+    }
+
+    return {
+      targetUrl: finalUrl,
+      bodies,
+      hasAuthorization: Boolean(config.authorization?.trim()),
+      forEachMode: bodies.length > 1,
+      forEachRange,
+    };
+  }, [resultData]);
+
   const handlePreviewApiExport = useCallback(() => {
     try {
       const preview = buildApiRequestPreview();
@@ -2413,6 +2586,57 @@ const ResultsView = ({
     setIsPreviewOpen(false);
     await handleApiExport();
   }, [handleApiExport]);
+
+  const handleImportToLms = useCallback(async () => {
+    if (compatibleExportApiConfigs.length === 0) return;
+
+    try {
+      setIsSendingToApi(true);
+      const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/result-proxy`;
+      let endpointCount = 0;
+      let requestCount = 0;
+
+      for (const config of compatibleExportApiConfigs) {
+        const request = buildApiRequestPreviewForConfig(config);
+        const proxyHeaders: Record<string, string> = {
+          "Content-Type": "application/json",
+          "x-result-url": request.targetUrl,
+          "x-result-method": "POST",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        };
+
+        if (config.authorization?.trim()) {
+          proxyHeaders["x-result-authorization"] = config.authorization;
+        }
+
+        for (let i = 0; i < request.bodies.length; i++) {
+          const response = await fetch(proxyUrl, {
+            method: "POST",
+            headers: proxyHeaders,
+            body: request.bodies[i],
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`${config.name || "Export API"} request ${i + 1}/${request.bodies.length} failed: HTTP ${response.status}: ${errText}`);
+          }
+          requestCount += 1;
+        }
+
+        endpointCount += 1;
+      }
+
+      toast.success(
+        endpointCount > 1
+          ? `Imported to LMS through ${endpointCount} endpoints (${requestCount} requests)`
+          : "Imported to LMS successfully"
+      );
+    } catch (e) {
+      toast.error("LMS import failed: " + (e as Error).message);
+    } finally {
+      setIsSendingToApi(false);
+    }
+  }, [buildApiRequestPreviewForConfig, compatibleExportApiConfigs]);
 
   const handleSelectExportApi = (configName: string) => {
     setSelectedExportApi(configName);
@@ -2612,7 +2836,7 @@ const ResultsView = ({
           <Download className="w-5 h-5 text-primary" />
           Export Results
         </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className={`grid grid-cols-1 ${compatibleExportApiConfigs.length > 0 ? "sm:grid-cols-4" : "sm:grid-cols-3"} gap-4`}>
           <button onClick={() => handleExport("pdf")} className="export-btn">
             <FileText className="w-8 h-8 text-primary" />
             <span className="font-medium">PDF Report</span>
@@ -2628,138 +2852,156 @@ const ResultsView = ({
             <span className="font-medium">CSV Export</span>
             <span className="text-xs text-muted-foreground">Spreadsheet compatible</span>
           </button>
+          {compatibleExportApiConfigs.length > 0 && (
+            <button
+              onClick={handleImportToLms}
+              className="export-btn"
+              disabled={isSendingToApi}
+            >
+              {isSendingToApi ? (
+                <Loader2 className="w-8 h-8 text-primary animate-spin" />
+              ) : (
+                <GraduationCap className="w-8 h-8 text-primary" />
+              )}
+              <span className="font-medium">Import to LMS</span>
+              <span className="text-xs text-muted-foreground">
+                {compatibleExportApiConfigs.length === 1
+                  ? compatibleExportApiConfigs[0].name || "Connected endpoint"
+                  : `${compatibleExportApiConfigs.length} connected endpoints`}
+              </span>
+            </button>
+          )}
         </div>
-        
-        {/* API Export Panel */}
-        <div className="glass-card p-6 mt-4">
-          <h4 className="font-medium mb-4 flex items-center gap-2">
-            <Send className="w-4 h-4 text-primary" />
-            API Export Configuration
-          </h4>
-          <div className="space-y-4">
-            {/* Prefilled API selector */}
-            <div>
-              <label className="text-sm text-muted-foreground mb-2 block">Preconfigured API Presets</label>
-              {compatibleExportApiConfigs.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {compatibleExportApiConfigs.map((config) => (
+
+        {showDebugApiExportConfig && (
+          <div className="glass-card p-6 mt-4">
+            <h4 className="font-medium mb-4 flex items-center gap-2">
+              <Send className="w-4 h-4 text-primary" />
+              Export API Configuration
+            </h4>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">Preconfigured API Presets</label>
+                {compatibleExportApiConfigs.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {compatibleExportApiConfigs.map((config) => (
+                      <button
+                        key={config.id || config.name}
+                        onClick={() => handleSelectExportApi(config.name)}
+                        className={`text-sm px-3 py-1.5 rounded-lg border transition-colors ${
+                          selectedExportApi === config.name
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-secondary/50 text-muted-foreground border-border hover:border-primary/50"
+                        }`}
+                      >
+                        {config.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : exportApiConfigs.length > 0 ? (
+                  <p className="text-xs text-muted-foreground italic">
+                    No active API presets are connected to this selected analytics.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">No preconfigured APIs available. Admins can add export presets in Result Page settings.</p>
+                )}
+              </div>
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">API Endpoint URL</label>
+                <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.example.com/data" className="bg-secondary/30" />
+              </div>
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">Authorization</label>
+                <Input
+                  value={apiAuthorization}
+                  onChange={(e) => setApiAuthorization(e.target.value)}
+                  placeholder="Bearer <token> or API key"
+                  type="password"
+                  className="bg-secondary/30"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm text-muted-foreground">Query Parameters</label>
+                  <button
+                    onClick={() => setApiParams([...apiParams, { key: "", value: "" }])}
+                    className="text-xs px-2 py-1 rounded bg-primary/20 text-primary hover:bg-primary/30 transition-colors flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Add Parameter
+                  </button>
+                </div>
+                {apiParams.map((param, index) => (
+                  <div key={index} className="flex gap-2 mb-2">
+                    <Input
+                      value={param.key}
+                      onChange={(e) => {
+                        const newParams = [...apiParams];
+                        newParams[index] = { ...newParams[index], key: e.target.value };
+                        setApiParams(newParams);
+                      }}
+                      placeholder="Parameter name"
+                      className="flex-1 bg-secondary/30"
+                    />
+                    <Input
+                      value={param.value}
+                      onChange={(e) => {
+                        const newParams = [...apiParams];
+                        newParams[index] = { ...newParams[index], value: e.target.value };
+                        setApiParams(newParams);
+                      }}
+                      placeholder="Value"
+                      className="flex-1 bg-secondary/30"
+                    />
                     <button
-                      key={config.name}
-                      onClick={() => handleSelectExportApi(config.name)}
-                      className={`text-sm px-3 py-1.5 rounded-lg border transition-colors ${
-                        selectedExportApi === config.name
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'bg-secondary/50 text-muted-foreground border-border hover:border-primary/50'
-                      }`}
+                      onClick={() => setApiParams(apiParams.filter((_, i) => i !== index))}
+                      className="p-2 rounded hover:bg-destructive/20 transition-colors"
                     >
-                      {config.name}
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <label className="text-sm text-muted-foreground mb-2 block">
+                  Request Body Template <span className="text-primary ml-1">(optional: ##result, ##resultArray.path[0], ##resultArrayEach.path.to.array.field, ##resultObjectEach.path.$key, ##forEach(0:2))</span>
+                </label>
+                <Textarea value={apiTemplate} onChange={(e) => setApiTemplate(e.target.value)} className="font-mono text-sm min-h-[120px] bg-secondary/30" />
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Tag examples:</span>
+                  {TEMPLATE_TAG_HELP.map((item) => (
+                    <button
+                      key={item.tag}
+                      type="button"
+                      onClick={() => handleOpenTagHelp(item.tag)}
+                      className="text-xs px-2 py-1 rounded border border-border bg-secondary/40 hover:bg-secondary/70 transition-colors"
+                    >
+                      {item.tag}
                     </button>
                   ))}
                 </div>
-              ) : exportApiConfigs.length > 0 ? (
-                <p className="text-xs text-muted-foreground italic">
-                  No compatible API presets for this result structure. Edit the result JSON or choose a different template.
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground italic">No preconfigured APIs available. Admins can add export presets in Result Page settings.</p>
-              )}
-            </div>
-            <div>
-              <label className="text-sm text-muted-foreground mb-2 block">API Endpoint URL</label>
-              <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://api.example.com/data" className="bg-secondary/30" />
-            </div>
-            <div>
-              <label className="text-sm text-muted-foreground mb-2 block">Authorization</label>
-              <Input 
-                value={apiAuthorization} 
-                onChange={(e) => setApiAuthorization(e.target.value)} 
-                placeholder="Bearer <token> or API key" 
-                type="password"
-                className="bg-secondary/30" 
-              />
-            </div>
-            {/* Key-Value Parameters */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-sm text-muted-foreground">Query Parameters</label>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
                 <button
-                  onClick={() => setApiParams([...apiParams, { key: '', value: '' }])}
-                  className="text-xs px-2 py-1 rounded bg-primary/20 text-primary hover:bg-primary/30 transition-colors flex items-center gap-1"
+                  onClick={handlePreviewApiExport}
+                  className="w-full px-4 py-3 rounded-lg font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors flex items-center justify-center gap-2"
+                  disabled={isSendingToApi}
                 >
-                  <Plus className="w-3 h-3" />
-                  Add Parameter
+                  <Code className="w-4 h-4" />
+                  Preview Request
+                </button>
+                <button
+                  onClick={handleApiExport}
+                  className="w-full px-4 py-3 rounded-lg font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+                  disabled={isSendingToApi}
+                >
+                  {isSendingToApi ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  {isSendingToApi ? "Sending..." : "Send to API"}
                 </button>
               </div>
-              {apiParams.map((param, index) => (
-                <div key={index} className="flex gap-2 mb-2">
-                  <Input
-                    value={param.key}
-                    onChange={(e) => {
-                      const newParams = [...apiParams];
-                      newParams[index] = { ...newParams[index], key: e.target.value };
-                      setApiParams(newParams);
-                    }}
-                    placeholder="Parameter name"
-                    className="flex-1 bg-secondary/30"
-                  />
-                  <Input
-                    value={param.value}
-                    onChange={(e) => {
-                      const newParams = [...apiParams];
-                      newParams[index] = { ...newParams[index], value: e.target.value };
-                      setApiParams(newParams);
-                    }}
-                    placeholder="Value"
-                    className="flex-1 bg-secondary/30"
-                  />
-                  <button
-                    onClick={() => setApiParams(apiParams.filter((_, i) => i !== index))}
-                    className="p-2 rounded hover:bg-destructive/20 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4 text-destructive" />
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div>
-              <label className="text-sm text-muted-foreground mb-2 block">
-                Request Body Template <span className="text-primary ml-1">(optional: ##result, ##resultArray.path[0], ##resultArrayEach.path.to.array.field, ##forEach(1:))</span>
-              </label>
-              <Textarea value={apiTemplate} onChange={(e) => setApiTemplate(e.target.value)} className="font-mono text-sm min-h-[120px] bg-secondary/30" />
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="text-xs text-muted-foreground">Tag examples:</span>
-                {TEMPLATE_TAG_HELP.map((item) => (
-                  <button
-                    key={item.tag}
-                    type="button"
-                    onClick={() => handleOpenTagHelp(item.tag)}
-                    className="text-xs px-2 py-1 rounded border border-border bg-secondary/40 hover:bg-secondary/70 transition-colors"
-                  >
-                    {item.tag}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <button
-                onClick={handlePreviewApiExport}
-                className="w-full px-4 py-3 rounded-lg font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors flex items-center justify-center gap-2"
-                disabled={isSendingToApi}
-              >
-                <Code className="w-4 h-4" />
-                Preview Request
-              </button>
-              <button
-                onClick={handleApiExport}
-                className="w-full px-4 py-3 rounded-lg font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
-                disabled={isSendingToApi}
-              >
-                {isSendingToApi ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                {isSendingToApi ? "Sending..." : "Send to API"}
-              </button>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>

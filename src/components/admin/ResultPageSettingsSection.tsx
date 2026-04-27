@@ -51,11 +51,18 @@ const TEMPLATE_TAG_HELP: TemplateTagHelp[] = [
       '[\n  {\n    "name": ##resultArrayEach.data.content.data.nodes.label,\n    "weight": ##resultArrayEach.data.content.data.nodes.weight\n  }\n]',
   },
   {
+    tag: "##resultObjectEach",
+    title: "Map Object Entries",
+    description: "Generate one array item from each key/value pair in a source object. Use .$key for the object key and .$value for nested fields inside that value. Entries missing a selected field are skipped.",
+    example:
+      '[\n  {\n    "skill_name": ##resultObjectEach.data.content.data.result.$key|replace("_"," "),\n    "description": ##resultObjectEach.data.content.data.result.$value.skills[0].description.literal\n  }\n]',
+  },
+  {
     tag: "##forEach",
     title: "Send Multiple POST Requests",
-    description: "Prefix template to send one POST request per item in the resolved body array.",
+    description: "Prefix template to send one POST request per item in the resolved body array. Use ##forEach(0:2) for the first 3 items.",
     example:
-      '##forEach(1:)\n[\n  {\n    "name": ##resultArrayEach.data.content.data.nodes.label,\n    "weight": ##resultArrayEach.data.content.data.nodes.weight\n  }\n]',
+      '##forEach(0:2)\n[\n  {\n    "skill_name": ##resultObjectEach.data.content.data.result.$key|replace("_"," "),\n    "description": ##resultObjectEach.data.content.data.result.$value.skills[0].description.literal\n  }\n]',
   },
 ];
 
@@ -734,11 +741,15 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 })();`;
 
 const emptyExportApi = (): ExportApiConfig => ({
+  id: crypto.randomUUID(),
   name: "",
   url: "",
+  api_version: "",
+  is_active: false,
   authorization: "",
   params: [],
   body_template: '{\n  "data": ##result\n}',
+  target_resources: [],
 });
 
 const emptyCustomVisualization = (): CustomVisualizationConfig => ({
@@ -905,12 +916,17 @@ const ResultPageSettingsSection = () => {
   const [isUsingLegacyExportApis, setIsUsingLegacyExportApis] = useState(false);
   const [isTagHelpOpen, setIsTagHelpOpen] = useState(false);
   const [selectedTagHelp, setSelectedTagHelp] = useState<TemplateTagHelp | null>(null);
+  const [editingExportApiId, setEditingExportApiId] = useState<string | null>(null);
+  const [deleteExportApiId, setDeleteExportApiId] = useState<string | null>(null);
   const [editingVisualizationId, setEditingVisualizationId] = useState<string | null>(null);
   const [deleteVisualizationId, setDeleteVisualizationId] = useState<string | null>(null);
   const [isLibraryBundlesOpen, setIsLibraryBundlesOpen] = useState(false);
   const [editingLibraryBundleId, setEditingLibraryBundleId] = useState<string | null>(null);
   const [deleteLibraryBundleId, setDeleteLibraryBundleId] = useState<string | null>(null);
 
+  const editingExportApiIndex = exportApis.findIndex((api) => api.id === editingExportApiId);
+  const editingExportApi = editingExportApiIndex >= 0 ? exportApis[editingExportApiIndex] : null;
+  const deleteExportApi = exportApis.find((api) => api.id === deleteExportApiId);
   const editingVisualizationIndex = customVisualizations.findIndex(
     (visualization) => visualization.id === editingVisualizationId
   );
@@ -965,14 +981,22 @@ const ResultPageSettingsSection = () => {
       if (chainsError) throw chainsError;
 
       const features = isRecord(globalData?.features) ? globalData.features : {};
-      const storedExportApis = getExportApisFromFeatures(features);
+      const normalizeExportApis = (apis: ExportApiConfig[]) => apis.map((api) => ({
+        ...api,
+        id: api.id || crypto.randomUUID(),
+        api_version: api.api_version || "",
+        is_active: api.is_active ?? true,
+        target_resources: Array.isArray(api.target_resources) ? api.target_resources : [],
+        params: Array.isArray(api.params) ? api.params : [],
+      }));
+      const storedExportApis = normalizeExportApis(getExportApisFromFeatures(features));
       const storedCustomVisualizations = getCustomVisualizationsFromFeatures(features);
       const storedLibraryBundles = getCustomVisualizationLibraryBundlesFromFeatures(features);
-      const legacyExportApis = (legacyData || []).flatMap((config) =>
+      const legacyExportApis = normalizeExportApis((legacyData || []).flatMap((config) =>
         Array.isArray(config.export_api_configs)
           ? (config.export_api_configs as unknown as ExportApiConfig[])
           : [],
-      );
+      ));
       const softwareTargets: VisualizationTargetOption[] = (softwareData || []).map((item) => ({
         id: `software:${item.id}`,
         label: item.resource_name || item.resource_url || item.id,
@@ -1010,6 +1034,30 @@ const ResultPageSettingsSection = () => {
       updated[index] = { ...updated[index], ...next };
       return updated;
     });
+  };
+
+  const toggleExportApiTarget = (index: number, targetId: string, checked: boolean) => {
+    setExportApis((current) => {
+      const updated = [...current];
+      const currentTargets = updated[index]?.target_resources || [];
+      updated[index] = {
+        ...updated[index],
+        target_resources: checked
+          ? Array.from(new Set([...currentTargets, targetId]))
+          : currentTargets.filter((id) => id !== targetId),
+      };
+      return updated;
+    });
+  };
+
+  const getTargetSummary = (targetIds: string[] = []) => {
+    if (targetIds.length === 0) return "No analytics selected";
+    const targetMap = new Map(visualizationTargets.map((target) => [target.id, target]));
+    const labels = targetIds
+      .map((id) => targetMap.get(id)?.label || id)
+      .slice(0, 2);
+    const remainder = targetIds.length - labels.length;
+    return remainder > 0 ? `${labels.join(", ")} +${remainder} more` : labels.join(", ");
   };
 
   const updateCustomVisualization = (index: number, next: Partial<CustomVisualizationConfig>) => {
@@ -1295,6 +1343,49 @@ const ResultPageSettingsSection = () => {
     await saveResultPageSettings("Export API endpoints saved");
   };
 
+  const handleAddExportApi = () => {
+    const api = emptyExportApi();
+    setActiveTab("export-api");
+    setExportApis((current) => [...current, api]);
+    setEditingExportApiId(api.id || null);
+  };
+
+  const handleToggleExportApiActive = async (index: number) => {
+    const api = exportApis[index];
+    if (!api) return;
+
+    setActiveTab("export-api");
+    const updated = [...exportApis];
+    updated[index] = { ...api, is_active: !(api.is_active ?? true) };
+    setExportApis(updated);
+
+    await saveResultPageSettings(
+      updated[index].is_active ? "Export API endpoint activated" : "Export API endpoint deactivated",
+      { exportApis: updated },
+    );
+  };
+
+  const handleApplyExportApiChanges = async () => {
+    setActiveTab("export-api");
+    const saved = await saveResultPageSettings("Export API endpoint saved");
+    if (saved) {
+      setEditingExportApiId(null);
+    }
+  };
+
+  const handleConfirmDeleteExportApi = async () => {
+    if (!deleteExportApiId) return;
+
+    setActiveTab("export-api");
+    const updated = exportApis.filter((api) => api.id !== deleteExportApiId);
+    setExportApis(updated);
+    if (editingExportApiId === deleteExportApiId) {
+      setEditingExportApiId(null);
+    }
+    setDeleteExportApiId(null);
+    await saveResultPageSettings("Export API endpoint deleted", { exportApis: updated });
+  };
+
   const handleAddCustomVisualization = () => {
     const visualization = emptyCustomVisualization();
     setActiveTab("custom-visualization");
@@ -1432,7 +1523,7 @@ const ResultPageSettingsSection = () => {
                     <div>
                       <Label className="flex items-center gap-2">
                         <Send className="w-4 h-4" />
-                        Export API Endpoints
+                        Manage export API endpoints
                       </Label>
                       <p className="text-xs text-muted-foreground mt-1">
                         Configure API endpoints available for users to export result data from the result page.
@@ -1442,7 +1533,7 @@ const ResultPageSettingsSection = () => {
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => setExportApis((current) => [...current, emptyExportApi()])}
+                      onClick={handleAddExportApi}
                     >
                       <Plus className="h-4 w-4 mr-1" />
                       Add API
@@ -1454,124 +1545,87 @@ const ResultPageSettingsSection = () => {
                       No export API endpoints configured yet.
                     </div>
                   ) : (
-                    exportApis.map((api, apiIndex) => (
-                      <div key={apiIndex} className="border border-border rounded-lg p-4 space-y-3 bg-secondary/20">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium">API #{apiIndex + 1}</span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setExportApis((current) => current.filter((_, index) => index !== apiIndex))}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <Label className="text-xs">Name</Label>
-                            <Input
-                              value={api.name}
-                              onChange={(e) => updateApi(apiIndex, { name: e.target.value })}
-                              placeholder="My Export API"
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs">URL</Label>
-                            <Input
-                              value={api.url}
-                              onChange={(e) => updateApi(apiIndex, { url: e.target.value })}
-                              placeholder="https://api.example.com/data"
-                            />
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Authorization</Label>
-                          <Input
-                            type="password"
-                            value={api.authorization || ""}
-                            onChange={(e) => updateApi(apiIndex, { authorization: e.target.value })}
-                            placeholder="Bearer <token>"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-xs">Parameters</Label>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 text-xs"
-                              onClick={() =>
-                                updateApi(apiIndex, {
-                                  params: [...(api.params || []), { key: "", value: "" }],
-                                })
-                              }
-                            >
-                              <Plus className="h-3 w-3 mr-1" />
-                              Add
-                            </Button>
-                          </div>
-                          {(api.params || []).map((param, paramIndex) => (
-                            <div key={paramIndex} className="flex gap-2">
-                              <Input
-                                value={param.key}
-                                onChange={(e) => {
-                                  const params = [...(api.params || [])];
-                                  params[paramIndex] = { ...params[paramIndex], key: e.target.value };
-                                  updateApi(apiIndex, { params });
-                                }}
-                                placeholder="Key"
-                                className="flex-1"
-                              />
-                              <Input
-                                value={param.value}
-                                onChange={(e) => {
-                                  const params = [...(api.params || [])];
-                                  params[paramIndex] = { ...params[paramIndex], value: e.target.value };
-                                  updateApi(apiIndex, { params });
-                                }}
-                                placeholder="Value"
-                                className="flex-1"
-                              />
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-10 px-2"
-                                onClick={() => updateApi(apiIndex, { params: (api.params || []).filter((_, index) => index !== paramIndex) })}
-                              >
-                                <Trash2 className="h-3 w-3 text-destructive" />
-                              </Button>
-                            </div>
+                    <div className="rounded-lg border overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Version</TableHead>
+                            <TableHead>Endpoint</TableHead>
+                            <TableHead>Connected Analytics</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {exportApis.map((api, apiIndex) => (
+                            <TableRow key={api.id || apiIndex}>
+                              <TableCell>
+                                <div className="space-y-1">
+                                  <p className="font-medium">{api.name || `Export API #${apiIndex + 1}`}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {(api.params || []).length} query parameter{(api.params || []).length === 1 ? "" : "s"}
+                                  </p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={(api.is_active ?? true) ? "default" : "secondary"}>
+                                  {(api.is_active ?? true) ? "Active" : "Inactive"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {api.api_version || "Not set"}
+                              </TableCell>
+                              <TableCell className="max-w-[260px]">
+                                <code className="text-xs text-muted-foreground break-all">{api.url || "No URL configured"}</code>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {getTargetSummary(api.target_resources || [])}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex justify-end gap-2">
+                                  <Button
+                                    type="button"
+                                    variant={(api.is_active ?? true) ? "secondary" : "outline"}
+                                    size="sm"
+                                    onClick={() => void handleToggleExportApiActive(apiIndex)}
+                                  >
+                                    {(api.is_active ?? true) ? (
+                                      <>
+                                        <EyeOff className="h-4 w-4 mr-1" />
+                                        Deactivate
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Eye className="h-4 w-4 mr-1" />
+                                        Activate
+                                      </>
+                                    )}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setEditingExportApiId(api.id || null)}
+                                  >
+                                    <Pencil className="h-4 w-4 mr-1" />
+                                    Edit
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setDeleteExportApiId(api.id || null)}
+                                  >
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
                           ))}
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">
-                            Body Template <span className="text-primary">(supports ##result, ##resultArray, ##resultArrayEach, ##forEach)</span>
-                          </Label>
-                          <Textarea
-                            value={api.body_template || ""}
-                            onChange={(e) => updateApi(apiIndex, { body_template: e.target.value })}
-                            placeholder='{"data": ##result}'
-                            className="font-mono text-xs min-h-[80px]"
-                          />
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <span className="text-xs text-muted-foreground">Tag examples:</span>
-                            {TEMPLATE_TAG_HELP.map((item) => (
-                              <button
-                                key={item.tag}
-                                type="button"
-                                onClick={() => handleOpenTagHelp(item.tag)}
-                                className="text-xs px-2 py-1 rounded border border-border bg-secondary/40 hover:bg-secondary/70 transition-colors"
-                              >
-                                {item.tag}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    ))
+                        </TableBody>
+                      </Table>
+                    </div>
                   )}
                 </div>
 
@@ -1590,6 +1644,203 @@ const ResultPageSettingsSection = () => {
                     )}
                   </Button>
                 </div>
+
+                <Dialog open={Boolean(editingExportApi)} onOpenChange={(open) => !open && setEditingExportApiId(null)}>
+                  <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+                    <DialogHeader>
+                      <DialogTitle>Edit Export API Endpoint</DialogTitle>
+                      <DialogDescription>
+                        Configure the endpoint and select which software or service-chain results can import to LMS through it.
+                      </DialogDescription>
+                    </DialogHeader>
+
+                    {editingExportApi && (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Name</Label>
+                            <Input
+                              value={editingExportApi.name}
+                              onChange={(e) => updateApi(editingExportApiIndex, { name: e.target.value })}
+                              placeholder="My Export API"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">URL</Label>
+                            <Input
+                              value={editingExportApi.url}
+                              onChange={(e) => updateApi(editingExportApiIndex, { url: e.target.value })}
+                              placeholder="https://api.example.com/data"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">API Version</Label>
+                            <Input
+                              value={editingExportApi.api_version || ""}
+                              onChange={(e) => updateApi(editingExportApiIndex, { api_version: e.target.value })}
+                              placeholder="v1"
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Authorization</Label>
+                          <Input
+                            type="password"
+                            value={editingExportApi.authorization || ""}
+                            onChange={(e) => updateApi(editingExportApiIndex, { authorization: e.target.value })}
+                            placeholder="Bearer <token>"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-xs">Parameters</Label>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 text-xs"
+                              onClick={() =>
+                                updateApi(editingExportApiIndex, {
+                                  params: [...(editingExportApi.params || []), { key: "", value: "" }],
+                                })
+                              }
+                            >
+                              <Plus className="h-3 w-3 mr-1" />
+                              Add
+                            </Button>
+                          </div>
+                          {(editingExportApi.params || []).map((param, paramIndex) => (
+                            <div key={paramIndex} className="flex gap-2">
+                              <Input
+                                value={param.key}
+                                onChange={(e) => {
+                                  const params = [...(editingExportApi.params || [])];
+                                  params[paramIndex] = { ...params[paramIndex], key: e.target.value };
+                                  updateApi(editingExportApiIndex, { params });
+                                }}
+                                placeholder="Key"
+                                className="flex-1"
+                              />
+                              <Input
+                                value={param.value}
+                                onChange={(e) => {
+                                  const params = [...(editingExportApi.params || [])];
+                                  params[paramIndex] = { ...params[paramIndex], value: e.target.value };
+                                  updateApi(editingExportApiIndex, { params });
+                                }}
+                                placeholder="Value"
+                                className="flex-1"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-10 px-2"
+                                onClick={() => updateApi(editingExportApiIndex, { params: (editingExportApi.params || []).filter((_, index) => index !== paramIndex) })}
+                              >
+                                <Trash2 className="h-3 w-3 text-destructive" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">
+                            Body Template <span className="text-primary">(supports ##result, ##resultArray, ##resultArrayEach, ##resultObjectEach, ##forEach)</span>
+                          </Label>
+                          <Textarea
+                            value={editingExportApi.body_template || ""}
+                            onChange={(e) => updateApi(editingExportApiIndex, { body_template: e.target.value })}
+                            placeholder='{"data": ##result}'
+                            className="font-mono text-xs min-h-[120px]"
+                          />
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <span className="text-xs text-muted-foreground">Tag examples:</span>
+                            {TEMPLATE_TAG_HELP.map((item) => (
+                              <button
+                                key={item.tag}
+                                type="button"
+                                onClick={() => handleOpenTagHelp(item.tag)}
+                                className="text-xs px-2 py-1 rounded border border-border bg-secondary/40 hover:bg-secondary/70 transition-colors"
+                              >
+                                {item.tag}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-xs">Show / Connect For Software And Service Chains</Label>
+                          {visualizationTargets.length === 0 ? (
+                            <p className="text-xs text-muted-foreground border border-dashed rounded-md p-3">
+                              No software resources or service chains found yet.
+                            </p>
+                          ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-56 overflow-auto rounded-md border p-3 bg-background/30">
+                              {visualizationTargets.map((target) => (
+                                <label key={target.id} className="flex items-start gap-2 text-sm">
+                                  <Checkbox
+                                    checked={(editingExportApi.target_resources || []).includes(target.id)}
+                                    onCheckedChange={(checked) => toggleExportApiTarget(editingExportApiIndex, target.id, checked === true)}
+                                  />
+                                  <span>
+                                    <span className="font-medium">{target.label}</span>
+                                    <span className="ml-2 text-xs text-muted-foreground">
+                                      {target.type === "software" ? "Software" : "Service Chain"}
+                                    </span>
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setEditingExportApiId(null)}>
+                        Close
+                      </Button>
+                      <Button onClick={() => void handleApplyExportApiChanges()} disabled={isSaving}>
+                        {isSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          "Apply Changes"
+                        )}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog open={Boolean(deleteExportApi)} onOpenChange={(open) => !open && setDeleteExportApiId(null)}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Delete Export API Endpoint?</DialogTitle>
+                      <DialogDescription>
+                        This removes "{deleteExportApi?.name || "this export API endpoint"}" from the list and saves the change immediately.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                      Connected analytics mappings, query parameters, authorization, and body template for this endpoint will be removed.
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setDeleteExportApiId(null)}>
+                        Cancel
+                      </Button>
+                      <Button variant="destructive" onClick={() => void handleConfirmDeleteExportApi()} disabled={isSaving}>
+                        {isSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Deleting...
+                          </>
+                        ) : (
+                          "Delete Endpoint"
+                        )}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
             </>
           </TabsContent>
 

@@ -1,0 +1,447 @@
+{
+  "sessionID": "session_1777276323823_7f2nca7rh",
+  "data": {
+    "dataType": "json",
+    "content": {
+      "data": {
+        "user": "IMC",
+        "result": {
+          "intelligent_systems": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The artificial intelligence theories, applied principles, architectures and systems, such as intelligent agents, multi-agent systems, expert systems, rule-based systems, neural networks, ontologies and cognition theories.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "principles of AI"
+                ]
+              }
+            ]
+          },
+          "software_engineering": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Work with computer-aided engineering (CAE) tools to perform analysis tasks such as Finite Element Analysis and Computional Fluid Dynamics.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "manage CAE software",
+                  "apply computer-aided engineering software",
+                  "be familiar with CAE software",
+                  "work with CAE software",
+                  "employ CAE software",
+                  "use computer-aided engineering software",
+                  "utilise CAE software",
+                  "make use of CAE software",
+                  "use CAE softwares"
+                ]
+              }
+            ]
+          },
+          "machine_learning": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The methods of artificial intelligence, machine learning, statistics and databases used to extract content from a dataset.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": []
+              }
+            ]
+          },
+          "deep_foundation": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Construct foundations and assemble wooden or steel framework in order to erect a derrick.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "assemble derrick foundation",
+                  "assembly of derrick foundation",
+                  "derrick foundation assembly",
+                  "assembling derrick foundation",
+                  "making foundations for derricks",
+                  "making of derrick foundations",
+                  "derrick foundation making",
+                  "making of foundations for derricks",
+                  "assembling of derrick foundation"
+                ]
+              }
+            ]
+          },
+          "deep_learning": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The learning disorders some students face in an academic context, especially Specific Learning Difficulties such as dyslexia, dyscalculia, and concentration deficit disorders.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "learning difficulty",
+                  "learning delays",
+                  "learning complications",
+                  "learning problems"
+                ]
+              }
+            ]
+          },
+          "dataset": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The methods of artificial intelligence, machine learning, statistics and databases used to extract content from a dataset.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": []
+              }
+            ]
+          },
+          "machine_learning_algorithms": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Use techniques and algorithms that are able to extract mastery out of data, learn from it and make predictions, to be used for program optimisation, application adaptation, pattern recognition, filtering, search engines and computer vision.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": []
+              }
+            ]
+          },
+          "engineer_in_training": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Coach junior and graduate mining engineers.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "mine engineer coaching",
+                  "mine engineer training",
+                  "training for mine engineers",
+                  "training of mine engineers",
+                  "training mine engineers",
+                  "coaching of mine engineers",
+                  "coaching for mine engineers",
+                  "coaching mine engineers"
+                ]
+              }
+            ]
+          },
+          "willingness_to_learn": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Show a positive attitude towards new and challenging demands that can only be met via lifelong learning.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "show willingness to learn",
+                  "demonstrate willingness to learn",
+                  "work towards own potential",
+                  "direct own learning",
+                  "exhibit willingness to learn",
+                  "display willingness to learn",
+                  "show self-knowledge"
+                ]
+              }
+            ]
+          },
+          "analytical_thinking": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Produce thoughts using logic and reasoning in order to identify the strengths and weaknesses of alternative solutions, conclusions or approaches to problems.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "analytical thinking",
+                  "think logically",
+                  "think in an analytical way"
+                ]
+              }
+            ]
+          },
+          "unstructured_data": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The Not Only SQL non-relational database used for creating, updating and managing large amounts of unstructured data stored in the cloud.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": []
+              }
+            ]
+          },
+          "analytical_skills": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Analyse information flows to reconstruct messages quickly and precisely. Navigate a language to explain the same sense or feeling in situations where there is no definite word or literal translation.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "proceed analytically",
+                  "operate analytically",
+                  "run analytically",
+                  "analytical work",
+                  "working analytically"
+                ]
+              }
+            ]
+          },
+          "computer_science": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Instruct students in the theory and practice of computer science, more specifically in the development of software systems, programming languages, artificial intelligence, and software security.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "teaching computer science",
+                  "provide instruction on computer science",
+                  "explain computer science",
+                  "teaches computer science",
+                  "educate on computer science"
+                ]
+              }
+            ]
+          },
+          "computer_vision": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The game engine that consists of integrated development environments and specialised design tools, designed for the rapid iteration of user-derived computer games. \n ",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": []
+              }
+            ]
+          },
+          "data_processing": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Enter information into a data storage and data retrieval system via processes such as scanning, manual keying or electronic data transfer in order to process large amounts of data.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "convert data",
+                  "handle data",
+                  "refine data",
+                  "measure data",
+                  "data processing",
+                  "analyse data",
+                  "processing data",
+                  "processing of data"
+                ]
+              }
+            ]
+          },
+          "cloud_to_cloud": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The technologies which enable access to hardware, software, data and services through remote servers and software networks irrespective of their location and architecture.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "cloud computing"
+                ]
+              }
+            ]
+          },
+          "communications": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Monitor and analyse data, waveforms, measurements, images or transmitted communications and emissions and identify elecrical anomalies.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "analyse electronic communications",
+                  "interpreting transmitted communications",
+                  "interpret transmitted communications",
+                  "analysing electronic communications",
+                  "transmitted communications analysing",
+                  "analysing transmitted communications"
+                ]
+              }
+            ]
+          },
+          "data_pipelines": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Conduct maintenance and repair work on pipelines to prevent or remedy damages using, if necessary, remote-controlled robots.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "pipeline maintaining",
+                  "pipelines repairing",
+                  "repairing pipelines",
+                  "maintaining pipelines",
+                  "pipeline repairing",
+                  "pipelines maintaining"
+                ]
+              }
+            ]
+          },
+          "microservices": {
+            "count": 0,
+            "skills": "No matching skill found."
+          },
+          "data_science": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Collect and analyse scientific data resulting from research. Interpret these data according to certain standards and viewpoints in order to comment on it.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "study scientific data",
+                  "analysing scientific data",
+                  "survey scientific data",
+                  "review scientific data",
+                  "examine scientific data",
+                  "analyse science data",
+                  "scrutinize"
+                ]
+              }
+            ]
+          },
+          "scalability": {
+            "count": 0,
+            "skills": "No matching skill found."
+          },
+          "algorithms": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The self-contained step-by-step sets of operations that carry out calculations, data processing and automated reasoning, usually to solve problems.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "formulae",
+                  "formulas",
+                  "algorithmic",
+                  "algorithm"
+                ]
+              }
+            ]
+          },
+          "tensorflow": {
+            "count": 0,
+            "skills": "No matching skill found."
+          },
+          "curiosity": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Show a lively interest in novelty, an openness to experience, find subjects and topics fascinating, actively explore and discover new areas.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "demonstrating curiosity",
+                  "exhibit curiosity",
+                  "display curiosity",
+                  "show curiosity",
+                  "show interest",
+                  "demonstrate interest",
+                  "be curious"
+                ]
+              }
+            ]
+          },
+          "big_data": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "The computer program CA Datacom/DB is a tool for creating, updating and managing databases, currently developed by the software company CA Technologies.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "CA-Datacom/DB",
+                  "CA Datacom",
+                  "DATACOM/DB"
+                ]
+              }
+            ]
+          },
+          "research": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Participate in field research and evaluation of state and private lands and waters.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "field research peforming",
+                  "perform research in the field",
+                  "carrying out field research",
+                  "conduct field research",
+                  "carry out field research",
+                  "performing research in the field",
+                  "conducting field research",
+                  "performing field research"
+                ]
+              }
+            ]
+          },
+          "teamwork": {
+            "count": 1,
+            "skills": [
+              {
+                "description": {
+                  "literal": "Encourage students to cooperate with others in their learning by working in teams, for example through group activities.",
+                  "mimetype": "plain/text"
+                },
+                "alternative_labels": [
+                  "facilitating teamwork between students",
+                  "facilitate students’ teamwork",
+                  "encourage teamwork between students",
+                  "assist teamwork between students",
+                  "support teamwork between students",
+                  "facilitates teamwork between students"
+                ]
+              }
+            ]
+          },
+          "ci_cd": {
+            "count": 0,
+            "skills": "No matching skill found."
+          }
+        }
+      },
+      "contract": "https://contract.visionstrust.com/contracts/65f97c07ae20c15f69d42d0b",
+      "params": ""
+    },
+    "_id": "69ef15b8a92bc4db65833487",
+    "createdAt": "2026-04-27T07:52:24.746Z"
+  }
+}

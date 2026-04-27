@@ -6,11 +6,15 @@ export type VisualizationType = 'upload_document' | 'manual_json_input' | 'data_
 // PDC Configuration from dataspace_configs table
 // Export API configuration for admin-managed endpoints
 export interface ExportApiConfig {
+  id?: string;
   name: string;
   url: string;
+  api_version?: string;
+  is_active?: boolean;
   authorization?: string;
   params?: Array<{ key: string; value: string }>;
   body_template?: string;
+  target_resources?: string[];
 }
 
 export interface CustomVisualizationLibraryFile {

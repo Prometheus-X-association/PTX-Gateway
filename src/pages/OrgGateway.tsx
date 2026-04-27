@@ -845,6 +845,7 @@ const OrgGatewayContent = ({
               selectedAnalytics={selectedAnalytics}
               selectedAnalyticsTargetId={activeAnalyticsTargetId}
               customVisualizations={customVisualizations}
+              showDebugApiExportConfig={isDebugMode}
             />
           )}
         </main>

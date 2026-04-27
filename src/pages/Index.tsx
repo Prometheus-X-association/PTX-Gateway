@@ -45,6 +45,7 @@ const IndexContent = () => {
     softwareResources, 
     dataResources, 
     serviceChains,
+    customVisualizations,
     isLoading: configLoading, 
     error: configError 
   } = useDataspaceConfig();
@@ -329,8 +330,12 @@ const IndexContent = () => {
                 analyticsType={getAnalyticsDisplayName()}
                 onRestart={handleRestart}
                 resultUrlInfo={resultUrlInfo}
+                exportApiConfigs={pdcConfig?.export_api_configs}
                 organizationId={pdcConfig?.organization_id ?? null}
                 llmPromptContext={llmPromptContext}
+                selectedAnalytics={selectedAnalytics}
+                customVisualizations={customVisualizations}
+                showDebugApiExportConfig={isDebugMode}
               />
             )}
           </main>
