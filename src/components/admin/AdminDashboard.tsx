@@ -467,7 +467,7 @@ const AdminDashboard = () => {
                   />
                   <div>
                     <p className="font-medium">Result Page Settings</p>
-                    <p className="text-sm text-muted-foreground">Export APIs, custom visualizations, and reusable visualization library bundles.</p>
+                    <p className="text-sm text-muted-foreground">Export API endpoints, active state, API versions, analytics mappings, custom visualizations, and reusable visualization library bundles.</p>
                   </div>
                 </label>
                 <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">

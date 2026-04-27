@@ -306,6 +306,38 @@ const sanitizeCustomVisualization = (value: unknown): Record<string, unknown> | 
   };
 };
 
+const sanitizeExportApiConfig = (value: unknown): Record<string, unknown> | null => {
+  if (!isRecord(value)) return null;
+
+  const params = Array.isArray(value.params)
+    ? value.params
+      .filter(isRecord)
+      .map((param) => ({
+        key: typeof param.key === 'string' ? param.key : '',
+        value: typeof param.value === 'string' ? param.value : '',
+      }))
+      .filter((param) => param.key.trim().length > 0 || param.value.trim().length > 0)
+    : [];
+
+  const targetResources = Array.isArray(value.target_resources)
+    ? value.target_resources
+      .map((target) => String(target))
+      .filter((target) => target.trim().length > 0)
+    : [];
+
+  return {
+    id: typeof value.id === 'string' && value.id.trim() ? value.id : crypto.randomUUID(),
+    name: typeof value.name === 'string' ? value.name : '',
+    url: typeof value.url === 'string' ? value.url : '',
+    api_version: typeof value.api_version === 'string' ? value.api_version : '',
+    is_active: typeof value.is_active === 'boolean' ? value.is_active : false,
+    authorization: typeof value.authorization === 'string' ? value.authorization : '',
+    params,
+    body_template: typeof value.body_template === 'string' ? value.body_template : '{\n  "data": ##result\n}',
+    target_resources: targetResources,
+  };
+};
+
 const sanitizeCustomVisualizationLibraryBundle = (value: unknown): Record<string, unknown> | null => {
   if (!isRecord(value)) return null;
 
@@ -334,7 +366,7 @@ const sanitizeResultPageSettingsForBackup = (settings: unknown): Record<string, 
   if (!isRecord(settings)) return null;
 
   const exportApiConfigs = Array.isArray(settings.exportApiConfigs)
-    ? settings.exportApiConfigs.filter(isRecord)
+    ? settings.exportApiConfigs.map(sanitizeExportApiConfig).filter(isRecord)
     : [];
   const customVisualizations = Array.isArray(settings.customVisualizations)
     ? settings.customVisualizations.map(sanitizeCustomVisualization).filter(isRecord)
@@ -355,6 +387,25 @@ const getResultPageSettingsFromGlobalConfig = (globalConfig: unknown): Record<st
   if (!isRecord(globalConfig) || !isRecord(globalConfig.features)) return null;
   const resultPage = isRecord(globalConfig.features.resultPage) ? globalConfig.features.resultPage : null;
   return sanitizeResultPageSettingsForBackup(resultPage);
+};
+
+const sanitizeGlobalConfigForBackup = (
+  globalConfig: unknown,
+  resultPageSettings: Record<string, unknown> | null,
+): Record<string, unknown> | null => {
+  if (!isRecord(globalConfig)) return null;
+
+  const features = isRecord(globalConfig.features) ? { ...globalConfig.features } : {};
+  if (resultPageSettings) {
+    features.resultPage = resultPageSettings;
+  } else {
+    delete features.resultPage;
+  }
+
+  return {
+    ...globalConfig,
+    features,
+  };
 };
 
 const mergeOrganizationSettingsForImport = (
@@ -401,7 +452,9 @@ const sanitizePdcConfig = (value: Record<string, unknown>) => ({
   fallback_result_authorization: value.fallback_result_authorization === null || typeof value.fallback_result_authorization === 'string'
     ? value.fallback_result_authorization
     : null,
-  export_api_configs: Array.isArray(value.export_api_configs) ? value.export_api_configs : [],
+  export_api_configs: Array.isArray(value.export_api_configs)
+    ? value.export_api_configs.map(sanitizeExportApiConfig).filter(isRecord)
+    : [],
   is_active: typeof value.is_active === 'boolean' ? value.is_active : false,
 });
 
@@ -511,6 +564,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
     (orgResult.data?.settings as Record<string, unknown> | null) ?? null,
   );
   const resultPageSettings = getResultPageSettingsFromGlobalConfig(globalResult.data ?? null);
+  const globalConfig = sanitizeGlobalConfigForBackup(globalResult.data ?? null, resultPageSettings);
   const llmSettings =
     isRecord(globalResult.data?.features) &&
     isRecord((globalResult.data?.features as Record<string, unknown>).llmInsights)
@@ -519,7 +573,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
 
   return {
     data: {
-      schema_version: 3,
+      schema_version: 4,
       exported_at: new Date().toISOString(),
       organization: {
         id: orgResult.data?.id ?? organizationId,
@@ -534,7 +588,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
       },
       resources: resourcesResult.data ?? [],
       service_chains: chainsResult.data ?? [],
-      global_config: globalResult.data ?? null,
+      global_config: globalConfig,
       llm_settings: llmSettings,
       result_page_settings: resultPageSettings,
     },

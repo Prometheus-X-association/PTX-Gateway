@@ -11,7 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChevronDown, Download, Files, GraduationCap, LinkIcon, Loader2, Plus, Save, Send, Trash2, Eye, EyeOff, Upload, Palette, Pencil, Table as TableIcon } from "lucide-react";
+import { ChevronDown, Download, Files, GraduationCap, LinkIcon, Loader2, Plus, Send, Trash2, Eye, EyeOff, Upload, Palette, Pencil, Table as TableIcon } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -917,6 +917,7 @@ const ResultPageSettingsSection = () => {
   const [isTagHelpOpen, setIsTagHelpOpen] = useState(false);
   const [selectedTagHelp, setSelectedTagHelp] = useState<TemplateTagHelp | null>(null);
   const [editingExportApiId, setEditingExportApiId] = useState<string | null>(null);
+  const [toggleExportApiId, setToggleExportApiId] = useState<string | null>(null);
   const [deleteExportApiId, setDeleteExportApiId] = useState<string | null>(null);
   const [editingVisualizationId, setEditingVisualizationId] = useState<string | null>(null);
   const [deleteVisualizationId, setDeleteVisualizationId] = useState<string | null>(null);
@@ -926,6 +927,7 @@ const ResultPageSettingsSection = () => {
 
   const editingExportApiIndex = exportApis.findIndex((api) => api.id === editingExportApiId);
   const editingExportApi = editingExportApiIndex >= 0 ? exportApis[editingExportApiIndex] : null;
+  const toggleExportApi = exportApis.find((api) => api.id === toggleExportApiId);
   const deleteExportApi = exportApis.find((api) => api.id === deleteExportApiId);
   const editingVisualizationIndex = customVisualizations.findIndex(
     (visualization) => visualization.id === editingVisualizationId
@@ -1339,10 +1341,6 @@ const ResultPageSettingsSection = () => {
     }
   };
 
-  const handleSave = async () => {
-    await saveResultPageSettings("Export API endpoints saved");
-  };
-
   const handleAddExportApi = () => {
     const api = emptyExportApi();
     setActiveTab("export-api");
@@ -1350,17 +1348,21 @@ const ResultPageSettingsSection = () => {
     setEditingExportApiId(api.id || null);
   };
 
-  const handleToggleExportApiActive = async (index: number) => {
-    const api = exportApis[index];
+  const handleConfirmToggleExportApiActive = async () => {
+    if (!toggleExportApiId) return;
+
+    const apiIndex = exportApis.findIndex((api) => api.id === toggleExportApiId);
+    const api = apiIndex >= 0 ? exportApis[apiIndex] : null;
     if (!api) return;
 
     setActiveTab("export-api");
     const updated = [...exportApis];
-    updated[index] = { ...api, is_active: !(api.is_active ?? true) };
+    updated[apiIndex] = { ...api, is_active: !(api.is_active ?? true) };
     setExportApis(updated);
+    setToggleExportApiId(null);
 
     await saveResultPageSettings(
-      updated[index].is_active ? "Export API endpoint activated" : "Export API endpoint deactivated",
+      updated[apiIndex].is_active ? "Export API endpoint activated" : "Export API endpoint deactivated",
       { exportApis: updated },
     );
   };
@@ -1588,7 +1590,7 @@ const ResultPageSettingsSection = () => {
                                     type="button"
                                     variant={(api.is_active ?? true) ? "secondary" : "outline"}
                                     size="sm"
-                                    onClick={() => void handleToggleExportApiActive(apiIndex)}
+                                    onClick={() => setToggleExportApiId(api.id || null)}
                                   >
                                     {(api.is_active ?? true) ? (
                                       <>
@@ -1627,22 +1629,6 @@ const ResultPageSettingsSection = () => {
                       </Table>
                     </div>
                   )}
-                </div>
-
-                <div className="flex justify-end">
-                  <Button onClick={handleSave} disabled={isSaving}>
-                    {isSaving ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Save className="h-4 w-4 mr-2" />
-                        Save Export APIs
-                      </>
-                    )}
-                  </Button>
                 </div>
 
                 <Dialog open={Boolean(editingExportApi)} onOpenChange={(open) => !open && setEditingExportApiId(null)}>
@@ -1807,6 +1793,41 @@ const ResultPageSettingsSection = () => {
                           </>
                         ) : (
                           "Apply Changes"
+                        )}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog open={Boolean(toggleExportApi)} onOpenChange={(open) => !open && setToggleExportApiId(null)}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>
+                        {(toggleExportApi?.is_active ?? true) ? "Deactivate Export API Endpoint?" : "Activate Export API Endpoint?"}
+                      </DialogTitle>
+                      <DialogDescription>
+                        {(toggleExportApi?.is_active ?? true)
+                          ? `"${toggleExportApi?.name || "This export API endpoint"}" will no longer appear as an LMS import option for connected analytics.`
+                          : `"${toggleExportApi?.name || "This export API endpoint"}" will become available as an LMS import option for connected analytics.`}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="rounded-md border p-3 text-sm text-muted-foreground">
+                      This change is saved immediately after confirmation.
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setToggleExportApiId(null)}>
+                        Cancel
+                      </Button>
+                      <Button onClick={() => void handleConfirmToggleExportApiActive()} disabled={isSaving}>
+                        {isSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (toggleExportApi?.is_active ?? true) ? (
+                          "Deactivate Endpoint"
+                        ) : (
+                          "Activate Endpoint"
                         )}
                       </Button>
                     </DialogFooter>
