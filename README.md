@@ -562,6 +562,28 @@ leaveOrganization(orgId)    // Leave with super_admin protection
 
 Configuration is **database-driven** and managed per organization. The admin dashboard provides a UI for all configuration, and the `config-api` edge function provides the API.
 
+### Current Admin Dashboard Layout
+
+Top-level tabs:
+
+- `PDC Config`
+- `Global Settings`
+- `Resources`
+- `Choose Analytics Page` (currently dummy plugin scaffold)
+- `Data Selection`
+- `Show Processing Page`
+- `Result Page`
+
+`Global Settings` sub-tabs:
+
+- `General`
+- `External OIDC`
+- `LLM Settings`
+- `Visualization`
+- `Embed`
+- `Users` (super admin)
+- `Organization` (super admin)
+
 ### Data Flow
 
 ```
@@ -575,8 +597,51 @@ Public Gateway (/:slug) ← Direct Supabase queries ←
 1. **PDC Config** (`dataspace_configs`): PDC URL, bearer token reference, fallback result URL
 2. **Resources** (`dataspace_params`): Software resources (analytics) and data resources with parameters
 3. **Service Chains** (`service_chains`): Multi-step service chains with embedded resources
-4. **Global Config** (`global_configs`): App name, version, feature flags, logging settings
+4. **Global Config** (`global_configs`): App name, version, feature flags, logging settings, and page-specific settings under `features`
 5. **Placeholders** (`param_placeholders`): Dynamic value generators for parameter substitution
+
+### Result/Data/Processing Page Settings (Current)
+
+Under `global_configs.features`, the gateway currently uses:
+
+- `features.resultPage`:
+  - `exportApiConfigs`
+  - `customVisualizations`
+  - `customVisualizationLibraryBundles`
+- `features.dataSelection`:
+  - custom API visibility defaults/targets
+  - data-page plugin placeholder entries
+- `features.processingPage`:
+  - `pendingWaitSeconds` (admin-configurable pending wait window)
+
+Export API endpoint entries in `features.resultPage.exportApiConfigs` support:
+
+- endpoint URL/auth/params/body template
+- target analytics mapping (`target_resources`)
+- result-page action button text (`import_button_text`)
+- post-import redirect button (`post_import_button_text`, `post_import_button_url`)
+
+### Settings Export / Import (Schema v6)
+
+Admin export/import now uses schema version `v6`.
+
+Backups include (in addition to core org/PDC/resources/chains/global settings):
+
+- `result_page_settings`
+- `data_selection_settings`
+- `processing_page_settings`
+
+Cross-organization import supports section-level toggles for:
+
+- PDC
+- Resources
+- Service Chains
+- Global Settings
+- Result Page Settings
+- Data Selection Settings
+- Processing Page Settings
+- Embed Settings
+- Organization Settings
 
 ### Frontend Config Hooks
 
@@ -629,6 +694,24 @@ interface PdcPayload {
     params?: { query: Array<Record<string, string>> };
   }>;
 }
+
+---
+
+## 🧾 Result Page Export (Current)
+
+Result page supports:
+
+- Export as JSON
+- Export as CSV
+- Export as PDF report
+
+PDF export generates a print-ready report tab containing:
+
+- analytics/resource/service-chain execution metadata
+- selected data resources and provider details
+- embedded service-chain resources (name/type/provider/urls)
+- full result JSON
+- custom visualization snapshot section (including Tabulator table markup when active)
 ```
 
 ### Generation Modes
