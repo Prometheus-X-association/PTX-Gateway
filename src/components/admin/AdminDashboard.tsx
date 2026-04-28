@@ -57,6 +57,7 @@ const AdminDashboard = () => {
     globalConfig: false,
     resultPageSettings: true,
     dataSelectionSettings: true,
+    processingPageSettings: true,
     organizationSettings: false,
     embedSettings: false,
   });
@@ -69,6 +70,7 @@ const AdminDashboard = () => {
     if (summary.globalConfigImported) parts.push("global config updated");
     if (summary.resultPageSettingsImported) parts.push("result page settings updated");
     if (summary.dataSelectionSettingsImported) parts.push("data selection settings updated");
+    if (summary.processingPageSettingsImported) parts.push("processing page settings updated");
     if (summary.embedSettingsImported) parts.push("embed settings updated");
     if (summary.pdcConfigsCreated) parts.push(`${summary.pdcConfigsCreated} PDC config created`);
     if (summary.pdcConfigsUpdated) parts.push(`${summary.pdcConfigsUpdated} PDC config updated`);
@@ -287,8 +289,7 @@ const AdminDashboard = () => {
             is applied to the currently active organization.
           </p>
           <p className="text-xs text-muted-foreground ml-14 mt-1">
-            Export schema: <code>v5</code>. Backups using this schema include current dashboard settings such as data
-            selection mappings and software-scoped resource visibility.
+            Export schema: <code>v6</code>. Backups using this schema include current dashboard settings such as result/data/processing page mappings and software-scoped resource visibility.
           </p>
           {sourceOrganizations.length === 0 && (
             <p className="text-sm text-muted-foreground ml-14 mt-1">
@@ -542,6 +543,16 @@ const AdminDashboard = () => {
                   <div>
                     <p className="font-medium">Data Selection Settings</p>
                     <p className="text-sm text-muted-foreground">Custom API visibility targets and data page plugin placeholder settings.</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+                  <Checkbox
+                    checked={importSections.processingPageSettings}
+                    onCheckedChange={(checked) => handleToggleImportSection("processingPageSettings", checked === true)}
+                  />
+                  <div>
+                    <p className="font-medium">Processing Page Settings</p>
+                    <p className="text-sm text-muted-foreground">Pending wait-time and related processing page behavior settings.</p>
                   </div>
                 </label>
                 <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">

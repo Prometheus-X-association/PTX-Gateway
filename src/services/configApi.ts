@@ -208,6 +208,7 @@ export interface SettingsBackupData {
   llm_settings?: Record<string, unknown> | null;
   result_page_settings?: ResultPageSettingsBackup | null;
   data_selection_settings?: Record<string, unknown> | null;
+  processing_page_settings?: ProcessingPageSettings | null;
 }
 
 export const exportSettingsBackup = (organizationId?: string) =>
@@ -230,6 +231,7 @@ export interface CrossOrgImportOptions {
     globalConfig?: boolean;
     resultPageSettings?: boolean;
     dataSelectionSettings?: boolean;
+    processingPageSettings?: boolean;
     organizationSettings?: boolean;
     embedSettings?: boolean;
   };
@@ -240,6 +242,7 @@ export interface ImportSettingsSummary {
   globalConfigImported?: boolean;
   resultPageSettingsImported?: boolean;
   dataSelectionSettingsImported?: boolean;
+  processingPageSettingsImported?: boolean;
   embedSettingsImported?: boolean;
   pdcConfigsCreated?: number;
   pdcConfigsUpdated?: number;

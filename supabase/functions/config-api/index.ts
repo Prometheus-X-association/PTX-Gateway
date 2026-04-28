@@ -86,6 +86,8 @@ const FeaturesSchema = z.object({
     additionalTokenParams: z.string().max(5000).optional(),
   }).optional(),
   resultPage: z.record(z.unknown()).optional(),
+  dataSelection: z.record(z.unknown()).optional(),
+  processingPage: z.record(z.unknown()).optional(),
   maxFileSizeMB: z.number().min(1).max(1000).optional(),
   maxFilesCount: z.number().min(1).max(100).optional(),
 }).strict();
@@ -124,6 +126,7 @@ const SettingsBackupSchema = z.object({
   llm_settings: z.record(z.unknown()).nullable().optional(),
   result_page_settings: z.record(z.unknown()).nullable().optional(),
   data_selection_settings: z.record(z.unknown()).nullable().optional(),
+  processing_page_settings: z.record(z.unknown()).nullable().optional(),
 }).passthrough();
 
 const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof SettingsBackupSchema> | null => {
@@ -163,6 +166,16 @@ const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof Settin
           ? source.dataSelection
           : isRecord(globalConfig) && isRecord(globalConfig.features) && isRecord(globalConfig.features.dataSelection)
             ? globalConfig.features.dataSelection
+            : null;
+  const processingPageSettings =
+    isRecord(source.processing_page_settings)
+      ? source.processing_page_settings
+      : isRecord(source.processingPageSettings)
+        ? source.processingPageSettings
+        : isRecord(source.processingPage)
+          ? source.processingPage
+          : isRecord(globalConfig) && isRecord(globalConfig.features) && isRecord(globalConfig.features.processingPage)
+            ? globalConfig.features.processingPage
             : null;
 
   const pdcSource = isRecord(source.pdc) ? source.pdc : {};
@@ -207,6 +220,7 @@ const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof Settin
     llm_settings: llmSettings,
     result_page_settings: resultPageSettings,
     data_selection_settings: dataSelectionSettings,
+    processing_page_settings: processingPageSettings,
   };
 };
 
@@ -217,6 +231,7 @@ const ImportSectionsSchema = z.object({
   globalConfig: z.boolean().optional(),
   resultPageSettings: z.boolean().optional(),
   dataSelectionSettings: z.boolean().optional(),
+  processingPageSettings: z.boolean().optional(),
   organizationSettings: z.boolean().optional(),
   embedSettings: z.boolean().optional(),
 }).strict();
@@ -348,6 +363,9 @@ const sanitizeExportApiConfig = (value: unknown): Record<string, unknown> | null
     params,
     body_template: typeof value.body_template === 'string' ? value.body_template : '{\n  "data": ##result\n}',
     target_resources: targetResources,
+    import_button_text: typeof value.import_button_text === 'string' ? value.import_button_text : '',
+    post_import_button_text: typeof value.post_import_button_text === 'string' ? value.post_import_button_text : '',
+    post_import_button_url: typeof value.post_import_button_url === 'string' ? value.post_import_button_url : '',
   };
 };
 
@@ -406,6 +424,12 @@ const getDataSelectionSettingsFromGlobalConfig = (globalConfig: unknown): Record
   if (!isRecord(globalConfig) || !isRecord(globalConfig.features)) return null;
   const dataSelection = isRecord(globalConfig.features.dataSelection) ? globalConfig.features.dataSelection : null;
   return isRecord(dataSelection) ? dataSelection : null;
+};
+
+const getProcessingPageSettingsFromGlobalConfig = (globalConfig: unknown): Record<string, unknown> | null => {
+  if (!isRecord(globalConfig) || !isRecord(globalConfig.features)) return null;
+  const processingPage = isRecord(globalConfig.features.processingPage) ? globalConfig.features.processingPage : null;
+  return isRecord(processingPage) ? processingPage : null;
 };
 
 const sanitizeGlobalConfigForBackup = (
@@ -587,6 +611,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
   );
   const resultPageSettings = getResultPageSettingsFromGlobalConfig(globalResult.data ?? null);
   const dataSelectionSettings = getDataSelectionSettingsFromGlobalConfig(globalResult.data ?? null);
+  const processingPageSettings = getProcessingPageSettingsFromGlobalConfig(globalResult.data ?? null);
   const globalConfig = sanitizeGlobalConfigForBackup(globalResult.data ?? null, resultPageSettings);
   const llmSettings =
     isRecord(globalResult.data?.features) &&
@@ -596,7 +621,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
 
   return {
     data: {
-      schema_version: 5,
+      schema_version: 6,
       exported_at: new Date().toISOString(),
       organization: {
         id: orgResult.data?.id ?? organizationId,
@@ -615,6 +640,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
       llm_settings: llmSettings,
       result_page_settings: resultPageSettings,
       data_selection_settings: dataSelectionSettings,
+      processing_page_settings: processingPageSettings,
     },
     error: null,
   };
@@ -641,11 +667,13 @@ const importSettingsIntoOrganization = async ({
   const shouldImportGlobalConfig = shouldImport('globalConfig');
   const shouldImportResultPageSettings = shouldImport('resultPageSettings');
   const shouldImportDataSelectionSettings = shouldImport('dataSelectionSettings');
+  const shouldImportProcessingPageSettings = shouldImport('processingPageSettings');
   const summary = {
     organizationSettingsImported: false,
     globalConfigImported: false,
     resultPageSettingsImported: false,
     dataSelectionSettingsImported: false,
+    processingPageSettingsImported: false,
     embedSettingsImported: false,
     pdcConfigsCreated: 0,
     pdcConfigsUpdated: 0,
@@ -733,6 +761,7 @@ const importSettingsIntoOrganization = async ({
     }
     let importedResultPageSettings: Record<string, unknown> | null = null;
     let importedDataSelectionSettings: Record<string, unknown> | null = null;
+    let importedProcessingPageSettings: Record<string, unknown> | null = null;
     if (shouldImportResultPageSettings) {
       importedResultPageSettings =
         sanitizeResultPageSettingsForBackup(incoming.result_page_settings) ??
@@ -786,6 +815,34 @@ const importSettingsIntoOrganization = async ({
         delete incomingFeatures.dataSelection;
       }
     }
+    if (shouldImportProcessingPageSettings) {
+      importedProcessingPageSettings =
+        isRecord(incoming.processing_page_settings)
+          ? incoming.processing_page_settings
+          : isRecord(incomingFeatures.processingPage)
+            ? (incomingFeatures.processingPage as Record<string, unknown>)
+            : null;
+      if (importedProcessingPageSettings) {
+        incomingFeatures.processingPage = importedProcessingPageSettings;
+      }
+    } else {
+      const { data: currentGlobal, error: currentGlobalError } = await supabase
+        .from('global_configs')
+        .select('features')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (currentGlobalError) {
+        return fail('Failed to load current processing page settings');
+      }
+
+      const currentFeatures = isRecord(currentGlobal?.features) ? currentGlobal.features : {};
+      if (isRecord(currentFeatures.processingPage)) {
+        incomingFeatures.processingPage = currentFeatures.processingPage;
+      } else {
+        delete incomingFeatures.processingPage;
+      }
+    }
     const globalUpsert = {
       organization_id: orgId,
       app_name: typeof globalInput.app_name === 'string' ? globalInput.app_name : null,
@@ -809,6 +866,9 @@ const importSettingsIntoOrganization = async ({
     }
     if (importedDataSelectionSettings) {
       summary.dataSelectionSettingsImported = true;
+    }
+    if (importedProcessingPageSettings) {
+      summary.processingPageSettingsImported = true;
     }
   } else if (shouldImportResultPageSettings) {
     const incomingResultPageSettings =
@@ -884,6 +944,45 @@ const importSettingsIntoOrganization = async ({
       }
 
       summary.dataSelectionSettingsImported = true;
+    }
+  }
+
+  if (!shouldImportGlobalConfig && shouldImportProcessingPageSettings) {
+    const incomingProcessingPageSettings = isRecord(incoming.processing_page_settings)
+      ? incoming.processing_page_settings
+      : getProcessingPageSettingsFromGlobalConfig(incoming.global_config);
+
+    if (incomingProcessingPageSettings) {
+      const { data: currentGlobal, error: currentGlobalError } = await supabase
+        .from('global_configs')
+        .select('*')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (currentGlobalError) {
+        return fail('Failed to load current global config');
+      }
+
+      const currentFeatures = isRecord(currentGlobal?.features) ? currentGlobal.features : {};
+      const { error: globalError } = await supabase
+        .from('global_configs')
+        .upsert({
+          organization_id: orgId,
+          app_name: typeof currentGlobal?.app_name === 'string' ? currentGlobal.app_name : null,
+          app_version: typeof currentGlobal?.app_version === 'string' ? currentGlobal.app_version : null,
+          environment: typeof currentGlobal?.environment === 'string' ? currentGlobal.environment : null,
+          features: {
+            ...currentFeatures,
+            processingPage: incomingProcessingPageSettings,
+          },
+          logging: isRecord(currentGlobal?.logging) ? currentGlobal.logging : {},
+        }, { onConflict: 'organization_id' });
+
+      if (globalError) {
+        return fail('Failed to import processing page settings');
+      }
+
+      summary.processingPageSettingsImported = true;
     }
   }
 
