@@ -49,6 +49,20 @@ export interface CustomVisualizationConfig {
   target_resources: string[];
 }
 
+export interface DataPagePluginConfig {
+  id: string;
+  name: string;
+  description?: string;
+  is_active: boolean;
+}
+
+export interface DataSelectionSettings {
+  customApiDebugOnly?: boolean;
+  customApiTargetSoftwareIds?: string[];
+  customApiTargetServiceChainIds?: string[];
+  dataPagePlugins?: DataPagePluginConfig[];
+}
+
 export interface PdcConfig {
   id: string;
   name: string;
@@ -128,6 +142,7 @@ export interface DataResource {
   result_query_params: ResultQueryParam[];
   // Legacy field (deprecated, use result_url_source instead)
   use_fallback_result_url?: boolean;
+  visible_for_software_ids: string[];
 }
 
 // Software Resource from dataspace_params table (resource_type = 'software')
@@ -222,6 +237,7 @@ export interface DataspaceConfig {
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
   customVisualizations: CustomVisualizationConfig[];
+  dataSelectionSettings?: DataSelectionSettings | null;
   isLoading: boolean;
   error: string | null;
 }

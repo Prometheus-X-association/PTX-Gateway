@@ -524,7 +524,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       align-items: center;
     }
     .tabulator-save-button {
-      display: none;
+      display: inline-flex;
       border: 0;
       border-radius: 10px;
       padding: 9px 14px;
@@ -534,23 +534,10 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       cursor: pointer;
     }
     .tabulator-save-button.is-visible {
-      display: inline-flex;
+      display: inline-flex !important;
     }
     .tabulator-save-button:hover {
       background: #047857;
-    }
-    .tabulator-reset-button {
-      display: none;
-      border: 1px solid rgba(148, 163, 184, 0.55);
-      border-radius: 10px;
-      padding: 9px 14px;
-      background: white;
-      color: #334155;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .tabulator-reset-button.is-visible {
-      display: inline-flex;
     }
     .tabulator-toolbar .hint {
       font-size: 12px;
@@ -603,16 +590,11 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   saveButton.className = "tabulator-save-button";
   saveButton.textContent = "Save changes to JSON";
 
-  const resetButton = document.createElement("button");
-  resetButton.type = "button";
-  resetButton.className = "tabulator-reset-button";
-  resetButton.textContent = "Discard table edits";
-
   const hint = document.createElement("div");
   hint.className = "hint";
   hint.textContent = "Edit cells directly, then click Save changes to synchronize with the JSON view.";
 
-  toolbarActions.append(saveButton, resetButton);
+  toolbarActions.append(saveButton);
   toolbar.append(searchInput, toolbarActions, hint);
 
   const tableHost = document.createElement("div");
@@ -623,7 +605,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
   const setDirty = (dirty) => {
     saveButton.classList.toggle("is-visible", dirty);
-    resetButton.classList.toggle("is-visible", dirty);
+    saveButton.style.setProperty("display", "inline-flex", "important");
     hint.textContent = dirty
       ? "You have unsaved table edits. Click Save changes to update the JSON view."
       : "Edit cells directly, then click Save changes to synchronize with the JSON view.";
@@ -709,7 +691,10 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       },
     ],
     cellEdited: () => setDirty(true),
+    dataChanged: () => setDirty(true),
   });
+
+  setDirty(false);
 
   saveButton.addEventListener("click", () => {
     try {
@@ -718,11 +703,6 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     } catch (error) {
       alert(error instanceof Error ? error.message : "Could not update JSON.");
     }
-  });
-
-  resetButton.addEventListener("click", () => {
-    table.replaceData(rows);
-    setDirty(false);
   });
 
   searchInput.addEventListener("input", () => {

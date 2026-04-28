@@ -91,6 +91,7 @@ export type Database = {
           upload_file: boolean | null
           upload_url: string | null
           use_fallback_result_url: boolean | null
+          visible_for_software_ids: string[] | null
           visualization_type:
             | Database["public"]["Enums"]["visualization_type"]
             | null
@@ -121,6 +122,7 @@ export type Database = {
           upload_file?: boolean | null
           upload_url?: string | null
           use_fallback_result_url?: boolean | null
+          visible_for_software_ids?: string[] | null
           visualization_type?:
             | Database["public"]["Enums"]["visualization_type"]
             | null
@@ -151,6 +153,7 @@ export type Database = {
           upload_file?: boolean | null
           upload_url?: string | null
           use_fallback_result_url?: boolean | null
+          visible_for_software_ids?: string[] | null
           visualization_type?:
             | Database["public"]["Enums"]["visualization_type"]
             | null

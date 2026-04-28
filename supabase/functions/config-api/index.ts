@@ -123,6 +123,7 @@ const SettingsBackupSchema = z.object({
   global_config: z.record(z.unknown()).nullable().optional(),
   llm_settings: z.record(z.unknown()).nullable().optional(),
   result_page_settings: z.record(z.unknown()).nullable().optional(),
+  data_selection_settings: z.record(z.unknown()).nullable().optional(),
 }).passthrough();
 
 const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof SettingsBackupSchema> | null => {
@@ -153,6 +154,16 @@ const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof Settin
       : isRecord(source.llmSettings)
         ? source.llmSettings
         : null;
+  const dataSelectionSettings =
+    isRecord(source.data_selection_settings)
+      ? source.data_selection_settings
+      : isRecord(source.dataSelectionSettings)
+        ? source.dataSelectionSettings
+        : isRecord(source.dataSelection)
+          ? source.dataSelection
+          : isRecord(globalConfig) && isRecord(globalConfig.features) && isRecord(globalConfig.features.dataSelection)
+            ? globalConfig.features.dataSelection
+            : null;
 
   const pdcSource = isRecord(source.pdc) ? source.pdc : {};
   const pdcConfigs =
@@ -195,6 +206,7 @@ const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof Settin
     global_config: globalConfig,
     llm_settings: llmSettings,
     result_page_settings: resultPageSettings,
+    data_selection_settings: dataSelectionSettings,
   };
 };
 
@@ -204,6 +216,7 @@ const ImportSectionsSchema = z.object({
   serviceChains: z.boolean().optional(),
   globalConfig: z.boolean().optional(),
   resultPageSettings: z.boolean().optional(),
+  dataSelectionSettings: z.boolean().optional(),
   organizationSettings: z.boolean().optional(),
   embedSettings: z.boolean().optional(),
 }).strict();
@@ -389,6 +402,12 @@ const getResultPageSettingsFromGlobalConfig = (globalConfig: unknown): Record<st
   return sanitizeResultPageSettingsForBackup(resultPage);
 };
 
+const getDataSelectionSettingsFromGlobalConfig = (globalConfig: unknown): Record<string, unknown> | null => {
+  if (!isRecord(globalConfig) || !isRecord(globalConfig.features)) return null;
+  const dataSelection = isRecord(globalConfig.features.dataSelection) ? globalConfig.features.dataSelection : null;
+  return isRecord(dataSelection) ? dataSelection : null;
+};
+
 const sanitizeGlobalConfigForBackup = (
   globalConfig: unknown,
   resultPageSettings: Record<string, unknown> | null,
@@ -484,6 +503,9 @@ const sanitizeResource = (value: Record<string, unknown>) => ({
     ? value.result_authorization
     : null,
   result_query_params: Array.isArray(value.result_query_params) ? value.result_query_params : [],
+  visible_for_software_ids: Array.isArray(value.visible_for_software_ids)
+    ? value.visible_for_software_ids.map((id) => String(id)).filter((id) => id.trim().length > 0)
+    : [],
 });
 
 const sanitizeServiceChain = (value: Record<string, unknown>) => ({
@@ -564,6 +586,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
     (orgResult.data?.settings as Record<string, unknown> | null) ?? null,
   );
   const resultPageSettings = getResultPageSettingsFromGlobalConfig(globalResult.data ?? null);
+  const dataSelectionSettings = getDataSelectionSettingsFromGlobalConfig(globalResult.data ?? null);
   const globalConfig = sanitizeGlobalConfigForBackup(globalResult.data ?? null, resultPageSettings);
   const llmSettings =
     isRecord(globalResult.data?.features) &&
@@ -573,7 +596,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
 
   return {
     data: {
-      schema_version: 4,
+      schema_version: 5,
       exported_at: new Date().toISOString(),
       organization: {
         id: orgResult.data?.id ?? organizationId,
@@ -591,6 +614,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
       global_config: globalConfig,
       llm_settings: llmSettings,
       result_page_settings: resultPageSettings,
+      data_selection_settings: dataSelectionSettings,
     },
     error: null,
   };
@@ -616,10 +640,12 @@ const importSettingsIntoOrganization = async ({
   const shouldImportEmbedSettings = shouldImport('embedSettings');
   const shouldImportGlobalConfig = shouldImport('globalConfig');
   const shouldImportResultPageSettings = shouldImport('resultPageSettings');
+  const shouldImportDataSelectionSettings = shouldImport('dataSelectionSettings');
   const summary = {
     organizationSettingsImported: false,
     globalConfigImported: false,
     resultPageSettingsImported: false,
+    dataSelectionSettingsImported: false,
     embedSettingsImported: false,
     pdcConfigsCreated: 0,
     pdcConfigsUpdated: 0,
@@ -706,6 +732,7 @@ const importSettingsIntoOrganization = async ({
       incomingFeatures.llmInsights = incomingLlmSettings;
     }
     let importedResultPageSettings: Record<string, unknown> | null = null;
+    let importedDataSelectionSettings: Record<string, unknown> | null = null;
     if (shouldImportResultPageSettings) {
       importedResultPageSettings =
         sanitizeResultPageSettingsForBackup(incoming.result_page_settings) ??
@@ -731,6 +758,34 @@ const importSettingsIntoOrganization = async ({
         delete incomingFeatures.resultPage;
       }
     }
+    if (shouldImportDataSelectionSettings) {
+      importedDataSelectionSettings =
+        isRecord(incoming.data_selection_settings)
+          ? incoming.data_selection_settings
+          : isRecord(incomingFeatures.dataSelection)
+            ? (incomingFeatures.dataSelection as Record<string, unknown>)
+            : null;
+      if (importedDataSelectionSettings) {
+        incomingFeatures.dataSelection = importedDataSelectionSettings;
+      }
+    } else {
+      const { data: currentGlobal, error: currentGlobalError } = await supabase
+        .from('global_configs')
+        .select('features')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (currentGlobalError) {
+        return fail('Failed to load current data selection settings');
+      }
+
+      const currentFeatures = isRecord(currentGlobal?.features) ? currentGlobal.features : {};
+      if (isRecord(currentFeatures.dataSelection)) {
+        incomingFeatures.dataSelection = currentFeatures.dataSelection;
+      } else {
+        delete incomingFeatures.dataSelection;
+      }
+    }
     const globalUpsert = {
       organization_id: orgId,
       app_name: typeof globalInput.app_name === 'string' ? globalInput.app_name : null,
@@ -751,6 +806,9 @@ const importSettingsIntoOrganization = async ({
     summary.globalConfigImported = true;
     if (importedResultPageSettings) {
       summary.resultPageSettingsImported = true;
+    }
+    if (importedDataSelectionSettings) {
+      summary.dataSelectionSettingsImported = true;
     }
   } else if (shouldImportResultPageSettings) {
     const incomingResultPageSettings =
@@ -788,6 +846,44 @@ const importSettingsIntoOrganization = async ({
       }
 
       summary.resultPageSettingsImported = true;
+    }
+  }
+  if (!shouldImportGlobalConfig && shouldImportDataSelectionSettings) {
+    const incomingDataSelectionSettings = isRecord(incoming.data_selection_settings)
+      ? incoming.data_selection_settings
+      : getDataSelectionSettingsFromGlobalConfig(incoming.global_config);
+
+    if (incomingDataSelectionSettings) {
+      const { data: currentGlobal, error: currentGlobalError } = await supabase
+        .from('global_configs')
+        .select('*')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+
+      if (currentGlobalError) {
+        return fail('Failed to load current global config');
+      }
+
+      const currentFeatures = isRecord(currentGlobal?.features) ? currentGlobal.features : {};
+      const { error: globalError } = await supabase
+        .from('global_configs')
+        .upsert({
+          organization_id: orgId,
+          app_name: typeof currentGlobal?.app_name === 'string' ? currentGlobal.app_name : null,
+          app_version: typeof currentGlobal?.app_version === 'string' ? currentGlobal.app_version : null,
+          environment: typeof currentGlobal?.environment === 'string' ? currentGlobal.environment : null,
+          features: {
+            ...currentFeatures,
+            dataSelection: incomingDataSelectionSettings,
+          },
+          logging: isRecord(currentGlobal?.logging) ? currentGlobal.logging : {},
+        }, { onConflict: 'organization_id' });
+
+      if (globalError) {
+        return fail('Failed to import data selection settings');
+      }
+
+      summary.dataSelectionSettingsImported = true;
     }
   }
 
@@ -946,6 +1042,7 @@ const importSettingsIntoOrganization = async ({
           custom_result_url: res.custom_result_url,
           result_authorization: res.result_authorization,
           result_query_params: res.result_query_params,
+          visible_for_software_ids: res.visible_for_software_ids,
         };
 
         if (match) {

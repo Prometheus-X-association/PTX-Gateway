@@ -3,6 +3,7 @@ import { VisualizationType } from "@/types/auth";
 import {
   CustomVisualizationConfig,
   CustomVisualizationLibraryBundle,
+  DataSelectionSettings,
   ExportApiConfig,
 } from "@/types/dataspace";
 
@@ -83,6 +84,7 @@ export interface ResourceConfigData {
   api_response_representation?: Record<string, unknown>;
   upload_file?: boolean;
   is_visible?: boolean;
+  visible_for_software_ids?: string[];
   visualization_type?: VisualizationType;
   param_actions?: string[];
 }
@@ -133,6 +135,7 @@ export interface GlobalConfigData {
     maxFileSizeMB?: number;
     maxFilesCount?: number;
     resultPage?: ResultPageSettingsBackup;
+    dataSelection?: DataSelectionSettings;
   };
   logging?: {
     enabled?: boolean;
@@ -202,6 +205,7 @@ export interface SettingsBackupData {
   global_config: Record<string, unknown> | null;
   llm_settings?: Record<string, unknown> | null;
   result_page_settings?: ResultPageSettingsBackup | null;
+  data_selection_settings?: Record<string, unknown> | null;
 }
 
 export const exportSettingsBackup = (organizationId?: string) =>
@@ -223,6 +227,7 @@ export interface CrossOrgImportOptions {
     serviceChains?: boolean;
     globalConfig?: boolean;
     resultPageSettings?: boolean;
+    dataSelectionSettings?: boolean;
     organizationSettings?: boolean;
     embedSettings?: boolean;
   };
@@ -232,6 +237,7 @@ export interface ImportSettingsSummary {
   organizationSettingsImported?: boolean;
   globalConfigImported?: boolean;
   resultPageSettingsImported?: boolean;
+  dataSelectionSettingsImported?: boolean;
   embedSettingsImported?: boolean;
   pdcConfigsCreated?: number;
   pdcConfigsUpdated?: number;

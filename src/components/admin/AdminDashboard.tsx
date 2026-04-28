@@ -28,6 +28,7 @@ import VisualizationConfigSection from "./VisualizationConfigSection";
 import EmbedAccessSection from "./EmbedAccessSection";
 import LlmSettingsSection from "./LlmSettingsSection";
 import ResultPageSettingsSection from "./ResultPageSettingsSection";
+import DataSelectionSettingsSection from "./DataSelectionSettingsSection";
 import {
   exportSettingsBackup,
   importSettingsBackup,
@@ -41,6 +42,7 @@ const AdminDashboard = () => {
   const navigate = useNavigate();
   const { user, isAdmin, isSuperAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState("pdc");
+  const [activeGeneralSubTab, setActiveGeneralSubTab] = useState("global");
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isCopyingFromOrg, setIsCopyingFromOrg] = useState(false);
@@ -52,6 +54,7 @@ const AdminDashboard = () => {
     serviceChains: true,
     globalConfig: false,
     resultPageSettings: true,
+    dataSelectionSettings: true,
     organizationSettings: false,
     embedSettings: false,
   });
@@ -63,6 +66,7 @@ const AdminDashboard = () => {
     if (summary.organizationSettingsImported) parts.push("organization settings updated");
     if (summary.globalConfigImported) parts.push("global config updated");
     if (summary.resultPageSettingsImported) parts.push("result page settings updated");
+    if (summary.dataSelectionSettingsImported) parts.push("data selection settings updated");
     if (summary.embedSettingsImported) parts.push("embed settings updated");
     if (summary.pdcConfigsCreated) parts.push(`${summary.pdcConfigsCreated} PDC config created`);
     if (summary.pdcConfigsUpdated) parts.push(`${summary.pdcConfigsUpdated} PDC config updated`);
@@ -280,6 +284,10 @@ const AdminDashboard = () => {
             You can import a settings file exported from this organization or a different organization. Imported data
             is applied to the currently active organization.
           </p>
+          <p className="text-xs text-muted-foreground ml-14 mt-1">
+            Export schema: <code>v5</code>. Backups using this schema include current dashboard settings such as data
+            selection mappings and software-scoped resource visibility.
+          </p>
           {sourceOrganizations.length === 0 && (
             <p className="text-sm text-muted-foreground ml-14 mt-1">
               Cross-organization import is available when you are an admin in more than one organization.
@@ -288,7 +296,7 @@ const AdminDashboard = () => {
         </header>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className={`grid w-full ${isSuperAdmin ? "grid-cols-9" : "grid-cols-7"} lg:w-auto lg:inline-flex`}>
+          <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-flex">
             <TabsTrigger value="pdc" className="flex items-center gap-2">
               <Globe className="h-4 w-4" />
               <span className="hidden sm:inline">PDC Config</span>
@@ -304,40 +312,16 @@ const AdminDashboard = () => {
               <span className="hidden sm:inline">Global Settings</span>
               <span className="sm:hidden">Settings</span>
             </TabsTrigger>
-            <TabsTrigger value="llm" className="flex items-center gap-2">
-              <Brain className="h-4 w-4" />
-              <span className="hidden sm:inline">LLM Settings</span>
-              <span className="sm:hidden">LLM</span>
-            </TabsTrigger>
             <TabsTrigger value="result" className="flex items-center gap-2">
               <FileJson className="h-4 w-4" />
               <span className="hidden sm:inline">Result Page</span>
               <span className="sm:hidden">Result</span>
             </TabsTrigger>
-            <TabsTrigger value="visualization" className="flex items-center gap-2">
-              <Palette className="h-4 w-4" />
-              <span className="hidden sm:inline">Visualization</span>
-              <span className="sm:hidden">Theme</span>
+            <TabsTrigger value="data-selection" className="flex items-center gap-2">
+              <Database className="h-4 w-4" />
+              <span className="hidden sm:inline">Data Selection</span>
+              <span className="sm:hidden">Data Sel</span>
             </TabsTrigger>
-            <TabsTrigger value="embed" className="flex items-center gap-2">
-              <Link2 className="h-4 w-4" />
-              <span className="hidden sm:inline">Embed</span>
-              <span className="sm:hidden">Embed</span>
-            </TabsTrigger>
-            {isSuperAdmin && (
-              <TabsTrigger value="users" className="flex items-center gap-2">
-                <Users className="h-4 w-4" />
-                <span className="hidden sm:inline">Users</span>
-                <span className="sm:hidden">Users</span>
-              </TabsTrigger>
-            )}
-            {isSuperAdmin && (
-              <TabsTrigger value="organization" className="flex items-center gap-2">
-                <Building2 className="h-4 w-4" />
-                <span className="hidden sm:inline">Organization</span>
-                <span className="sm:hidden">Org</span>
-              </TabsTrigger>
-            )}
           </TabsList>
 
           <TabsContent value="pdc">
@@ -349,36 +333,96 @@ const AdminDashboard = () => {
           </TabsContent>
 
           <TabsContent value="global">
-            <GlobalConfigSection />
-          </TabsContent>
+            <Tabs value={activeGeneralSubTab} onValueChange={setActiveGeneralSubTab} className="w-full">
+              <div className="rounded-xl border border-border/60 bg-muted/30 p-2 shadow-sm animate-in fade-in-50 duration-300">
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  <TabsList className="h-auto min-w-max gap-2 bg-transparent p-0">
+                    <TabsTrigger
+                      value="global"
+                      className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                    >
+                      General
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="external-oidc"
+                      className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                    >
+                      External OIDC
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="llm"
+                      className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                    >
+                      LLM Settings
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="visualization"
+                      className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                    >
+                      Visualization
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="embed"
+                      className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                    >
+                      Embed
+                    </TabsTrigger>
+                {isSuperAdmin && (
+                      <TabsTrigger
+                        value="users"
+                        className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                      >
+                        Users
+                      </TabsTrigger>
+                )}
+                {isSuperAdmin && (
+                      <TabsTrigger
+                        value="organization"
+                        className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                      >
+                        Organization
+                      </TabsTrigger>
+                )}
+                  </TabsList>
+                </div>
+              </div>
 
-          <TabsContent value="llm">
-            <LlmSettingsSection />
+              <TabsContent value="global" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                <GlobalConfigSection section="general" />
+              </TabsContent>
+              <TabsContent value="external-oidc" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                <GlobalConfigSection section="external-oidc" />
+              </TabsContent>
+              <TabsContent value="llm" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                <LlmSettingsSection />
+              </TabsContent>
+              <TabsContent value="visualization" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                <VisualizationConfigSection />
+              </TabsContent>
+              <TabsContent value="embed" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                <EmbedAccessSection />
+              </TabsContent>
+              {isSuperAdmin && (
+                <TabsContent value="users" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                  <UsersManagementSection />
+                </TabsContent>
+              )}
+              {isSuperAdmin && (
+                <TabsContent value="organization" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                  <OrganizationManagementSection />
+                </TabsContent>
+              )}
+            </Tabs>
           </TabsContent>
 
           <TabsContent value="result">
             <ResultPageSettingsSection />
           </TabsContent>
 
-          <TabsContent value="visualization">
-            <VisualizationConfigSection />
+          <TabsContent value="data-selection">
+            <DataSelectionSettingsSection />
           </TabsContent>
 
-          <TabsContent value="embed">
-            <EmbedAccessSection />
-          </TabsContent>
-
-          {isSuperAdmin && (
-            <TabsContent value="users">
-              <UsersManagementSection />
-            </TabsContent>
-          )}
-
-          {isSuperAdmin && (
-            <TabsContent value="organization">
-              <OrganizationManagementSection />
-            </TabsContent>
-          )}
         </Tabs>
       </div>
 
@@ -468,6 +512,16 @@ const AdminDashboard = () => {
                   <div>
                     <p className="font-medium">Result Page Settings</p>
                     <p className="text-sm text-muted-foreground">Export API endpoints, active state, API versions, analytics mappings, custom visualizations, and reusable visualization library bundles.</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+                  <Checkbox
+                    checked={importSections.dataSelectionSettings}
+                    onCheckedChange={(checked) => handleToggleImportSection("dataSelectionSettings", checked === true)}
+                  />
+                  <div>
+                    <p className="font-medium">Data Selection Settings</p>
+                    <p className="text-sm text-muted-foreground">Custom API visibility targets and data page plugin placeholder settings.</p>
                   </div>
                 </label>
                 <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">

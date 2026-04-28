@@ -46,6 +46,7 @@ const IndexContent = () => {
     dataResources, 
     serviceChains,
     customVisualizations,
+    dataSelectionSettings,
     isLoading: configLoading, 
     error: configError 
   } = useDataspaceConfig();
@@ -301,6 +302,7 @@ const IndexContent = () => {
                 dataResources={dataResources}
                 selectedAnalytics={selectedAnalytics}
                 isDebugMode={isDebugMode}
+                dataSelectionSettings={dataSelectionSettings}
               />
             )}
             {getCurrentStepName() === "Validation" && selectedData && selectedAnalytics && (

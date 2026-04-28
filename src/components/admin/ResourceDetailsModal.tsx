@@ -38,12 +38,14 @@ interface ResourceParam {
   custom_result_url: string | null;
   result_authorization: string | null;
   result_query_params: Array<{ paramName: string; paramValue: string }>;
+  visible_for_software_ids: string[];
   // Fallback URL from PDC config (passed in for display)
   fallback_result_url?: string | null;
 }
 
 interface ResourceDetailsModalProps {
   resource: ResourceParam | null;
+  softwareOptions: Array<{ id: string; name: string }>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (resource: ResourceParam) => Promise<void>;
@@ -69,13 +71,13 @@ const RESULT_URL_SOURCE_OPTIONS: { value: ResultUrlSource; label: string; descri
   { value: 'custom', label: 'Custom URL', description: 'Specify a custom result URL' },
 ];
 
-const ResourceDetailsModal = ({ resource, open, onOpenChange, onSave, isSaving }: ResourceDetailsModalProps) => {
+const ResourceDetailsModal = ({ resource, softwareOptions, open, onOpenChange, onSave, isSaving }: ResourceDetailsModalProps) => {
   const [editedResource, setEditedResource] = useState<ResourceParam | null>(null);
   const [customActionInput, setCustomActionInput] = useState<Record<number, string>>({});
 
   useEffect(() => {
     if (resource) {
-      setEditedResource({ ...resource });
+      setEditedResource({ ...resource, visible_for_software_ids: resource.visible_for_software_ids || [] });
       setCustomActionInput({});
     }
   }, [resource]);
@@ -329,6 +331,37 @@ const ResourceDetailsModal = ({ resource, open, onOpenChange, onSave, isSaving }
               {/* Result URL Configuration - show for all data resources */}
               {editedResource.resource_type === 'data' && (
                 <div className="space-y-4 p-4 border rounded-lg bg-muted/30">
+                  <div className="space-y-2">
+                    <Label>Allowed Software Resources</Label>
+                    <p className="text-xs text-muted-foreground">
+                      This data resource will appear in Gateway only when one of these software analytics is selected.
+                    </p>
+                    <div className="space-y-2 max-h-40 overflow-y-auto rounded-md border p-3 bg-background">
+                      {softwareOptions.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No software resources available.</p>
+                      ) : softwareOptions.map((option) => {
+                        const checked = editedResource.visible_for_software_ids.includes(option.id);
+                        return (
+                          <label key={option.id} className="flex items-center gap-2 text-sm">
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(nextChecked) => {
+                                const next = new Set(editedResource.visible_for_software_ids);
+                                if (nextChecked) next.add(option.id);
+                                else next.delete(option.id);
+                                setEditedResource({
+                                  ...editedResource,
+                                  visible_for_software_ids: Array.from(next),
+                                });
+                              }}
+                            />
+                            <span>{option.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <h4 className="text-sm font-medium">Result URL Configuration</h4>
                   <p className="text-xs text-muted-foreground">
                     Configure how results are fetched for this data resource on the results page.

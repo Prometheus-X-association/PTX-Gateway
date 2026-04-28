@@ -9,6 +9,7 @@ import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { 
   DataResource, 
   AnalyticsOption,
+  DataSelectionSettings,
   ServiceChainEmbeddedResource,
   getQueryParamNames, 
   getParamValuesMap,
@@ -42,6 +43,7 @@ interface DataSelectionProps {
   dataResources: DataResource[];
   selectedAnalytics?: AnalyticsOption | null;
   isDebugMode?: boolean;
+  dataSelectionSettings?: DataSelectionSettings | null;
 }
 
 // File upload resource (upload_file: true)
@@ -64,7 +66,14 @@ interface ApiResource {
   fullData: DataResource;
 }
 
-const DataSelection = ({ onNext, onBack, dataResources, selectedAnalytics, isDebugMode = false }: DataSelectionProps) => {
+const DataSelection = ({
+  onNext,
+  onBack,
+  dataResources,
+  selectedAnalytics,
+  isDebugMode = false,
+  dataSelectionSettings = null,
+}: DataSelectionProps) => {
   const { sessionId } = useProcessSession();
 
   // State for debug-mode result query param overrides (keyed by resource_url)
@@ -93,31 +102,31 @@ const DataSelection = ({ onNext, onBack, dataResources, selectedAnalytics, isDeb
     custom_result_url: embedded.custom_result_url,
     result_authorization: embedded.result_authorization,
     result_query_params: [],
+    visible_for_software_ids: [],
   });
   
   // Determine which data resources to use based on selected analytics
   const effectiveDataResources = useMemo(() => {
-    // If a service chain is selected, use only the FIRST embedded data resource from the chain
-    // (the one with the lowest service_index that initiates the flow)
+    // Service-chain flow: always expose all embedded data resources directly.
     if (selectedAnalytics?.type === "serviceChain") {
       const embeddedResources = selectedAnalytics.data.embedded_resources || [];
-      // Filter to only data-type resources
-      const dataEmbedded = embeddedResources.filter(r => r.resource_type === 'data');
-      
-      if (dataEmbedded.length === 0) {
-        return [];
-      }
-      
-      // Find the data resource with the lowest service_index (first in the chain)
-      const firstDataResource = dataEmbedded.reduce((first, current) => 
-        current.service_index < first.service_index ? current : first
-      );
-      
-      // Only return the first data resource
-      const converted = [embeddedToDataResource(firstDataResource)];
-      return converted;
+      return embeddedResources
+        .filter((r) => r.resource_type === "data")
+        .map((r) => embeddedToDataResource(r));
     }
-    // Otherwise use the provided data resources list
+
+    // Software flow: data must be visible AND mapped to selected software in admin settings.
+    if (selectedAnalytics?.type === "software") {
+      const softwareId = selectedAnalytics.data.id;
+      return dataResources.filter(
+        (resource) =>
+          resource.is_visible &&
+          Array.isArray(resource.visible_for_software_ids) &&
+          resource.visible_for_software_ids.includes(softwareId)
+      );
+    }
+
+    // Fallback (should rarely happen): use provided data resources.
     return dataResources;
   }, [selectedAnalytics, dataResources]);
   
@@ -395,23 +404,45 @@ const DataSelection = ({ onNext, onBack, dataResources, selectedAnalytics, isDeb
   };
 
   useEffect(() => {
-    const hasOnlyOneUploadOption =
-      !isDebugMode &&
-      uploadResources.length === 1 &&
-      apiResources.length === 0 &&
-      manualJsonResources.length === 0;
+    if (isDebugMode) return;
 
-    if (!hasOnlyOneUploadOption || selectedUploadResource) return;
+    const totalOptions = uploadResources.length + apiResources.length + manualJsonResources.length;
+    if (totalOptions !== 1) return;
 
-    const resource = uploadResources[0];
-    const prefillParams = resource.queryParams.length > 0 ? getPrefillParamsResolved(resource) : undefined;
-    confirmUploadResourceSelection(resource, prefillParams);
+    if (uploadResources.length === 1 && !selectedUploadResource) {
+      const resource = uploadResources[0];
+      const prefillParams = resource.queryParams.length > 0 ? getPrefillParamsResolved(resource) : undefined;
+      confirmUploadResourceSelection(resource, prefillParams);
+      return;
+    }
+
+    if (apiResources.length === 1 && selectedApis.length === 0) {
+      const api = apiResources[0];
+      setSelectedApis([api.id]);
+      const prefillParams = getPrefillParamsResolved({
+        id: api.id,
+        name: api.name,
+        provider: api.provider,
+        description: api.description,
+        queryParams: api.queryParams,
+        fullData: api.fullData,
+      });
+      setApiParams((prev) => ({ ...prev, [api.id]: prefillParams }));
+      return;
+    }
+
+    if (manualJsonResources.length === 1 && !selectedManualJsonResource) {
+      setSelectedManualJsonResource(manualJsonResources[0]);
+      setManualJsonData("");
+    }
   }, [
     isDebugMode,
     uploadResources,
-    apiResources.length,
-    manualJsonResources.length,
+    apiResources,
+    manualJsonResources,
     selectedUploadResource,
+    selectedApis.length,
+    selectedManualJsonResource,
     sessionId,
   ]);
 
@@ -528,6 +559,26 @@ const DataSelection = ({ onNext, onBack, dataResources, selectedAnalytics, isDeb
   const uploadDataReady = selectedUploadResource ? (files.length > 0 && uploadSuccessful) : false;
   const manualJsonReady = selectedManualJsonResource ? isManualJsonValid(manualJsonData) : false;
   const hasData = uploadDataReady || selectedApis.length > 0 || customApiUrl.trim() !== "" || manualJsonReady;
+  const selectedAnalyticsId = selectedAnalytics?.type === "software"
+    ? selectedAnalytics.data.id
+    : selectedAnalytics?.type === "serviceChain"
+      ? selectedAnalytics.data.id
+      : null;
+  const customApiDebugOnly = dataSelectionSettings?.customApiDebugOnly ?? true;
+  const targetSoftwareIds = dataSelectionSettings?.customApiTargetSoftwareIds ?? [];
+  const targetServiceChainIds = dataSelectionSettings?.customApiTargetServiceChainIds ?? [];
+  const customApiTargeted = selectedAnalytics?.type === "software"
+    ? Boolean(selectedAnalyticsId && targetSoftwareIds.includes(selectedAnalyticsId))
+    : selectedAnalytics?.type === "serviceChain"
+      ? Boolean(selectedAnalyticsId && targetServiceChainIds.includes(selectedAnalyticsId))
+      : false;
+  const showCustomApiSection = customApiDebugOnly ? isDebugMode || customApiTargeted : customApiTargeted;
+
+  useEffect(() => {
+    if (!showCustomApiSection && customApiUrl) {
+      setCustomApiUrl("");
+    }
+  }, [showCustomApiSection, customApiUrl]);
 
   return (
     <div className="animate-fade-in">
@@ -954,8 +1005,8 @@ const DataSelection = ({ onNext, onBack, dataResources, selectedAnalytics, isDeb
           </div>
         )}
 
-        {/* Custom API URL Section - Only show when NOT using service chain */}
-        {selectedAnalytics?.type !== "serviceChain" && (
+        {/* Custom API URL Section - controlled by data-selection settings */}
+        {showCustomApiSection && (
           <div className="space-y-4">
             <h3 className="font-semibold flex items-center gap-2">
               <Link className="w-5 h-5 text-primary" />

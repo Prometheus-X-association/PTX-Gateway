@@ -124,7 +124,11 @@ const DEFAULT_CONFIG: GlobalConfigState = {
   },
 };
 
-const GlobalConfigSection = () => {
+interface GlobalConfigSectionProps {
+  section?: "all" | "general" | "external-oidc";
+}
+
+const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
   const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -369,6 +373,8 @@ const GlobalConfigSection = () => {
     );
   }
 
+  const activeSection = section === "external-oidc" ? "external-oidc" : "general";
+
   return (
     <div className="space-y-6">
       <Card>
@@ -382,11 +388,13 @@ const GlobalConfigSection = () => {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <Tabs defaultValue="general" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="general">General</TabsTrigger>
-              <TabsTrigger value="external-oidc">External OIDC</TabsTrigger>
-            </TabsList>
+          <Tabs defaultValue={activeSection} className="w-full">
+            {section === "all" && (
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="general">General</TabsTrigger>
+                <TabsTrigger value="external-oidc">External OIDC</TabsTrigger>
+              </TabsList>
+            )}
 
             <TabsContent value="general" className="space-y-6 pt-4">
               <div className="space-y-4">
@@ -991,7 +999,7 @@ Requested scopes: pdc.execute pdc.read`}
         </CardContent>
       </Card>
 
-      <PlaceholdersConfigSection />
+      {section !== "external-oidc" && <PlaceholdersConfigSection />}
     </div>
   );
 };

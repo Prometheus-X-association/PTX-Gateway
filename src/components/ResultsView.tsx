@@ -1950,6 +1950,16 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
       }
     };
 
+    const enforceTabulatorButtonsVisible = () => {
+      const saveButtons = Array.from(shadowRoot.querySelectorAll<HTMLElement>(".tabulator-save-button"));
+      const resetButtons = Array.from(shadowRoot.querySelectorAll<HTMLElement>(".tabulator-reset-button"));
+      [...saveButtons, ...resetButtons].forEach((button) => {
+        button.style.setProperty("display", "inline-flex", "important");
+        button.style.setProperty("visibility", "visible", "important");
+        button.style.setProperty("opacity", "1", "important");
+      });
+    };
+
     const appendCss = (content: string, fileName?: string) => {
       if (!content.trim()) return;
       const styleElement = document.createElement("style");
@@ -2068,6 +2078,14 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
           `"use strict";\n${visualization.render_code || ""}`
         );
         await render(container, resultData, jsonSchema, visualization, shadowRoot, onResultDataChange);
+        enforceTabulatorButtonsVisible();
+
+        // Defensive: some older saved render scripts toggle inline display:none after init.
+        const observer = new MutationObserver(() => {
+          enforceTabulatorButtonsVisible();
+        });
+        observer.observe(shadowRoot, { subtree: true, attributes: true, childList: true, attributeFilter: ["style", "class"] });
+        setTimeout(() => observer.disconnect(), 3000);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Custom visualization failed";
         container.innerHTML = `

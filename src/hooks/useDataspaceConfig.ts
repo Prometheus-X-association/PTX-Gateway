@@ -15,6 +15,7 @@ import {
   ExportApiConfig,
   CustomVisualizationConfig,
   CustomVisualizationLibraryBundle,
+  DataSelectionSettings,
 } from "@/types/dataspace";
 import { Json } from "@/integrations/supabase/types";
 
@@ -152,6 +153,24 @@ const getResultPageCustomVisualizations = (features: unknown): CustomVisualizati
     : [];
 };
 
+const getDataSelectionSettings = (features: unknown): DataSelectionSettings | null => {
+  if (!isRecord(features)) return null;
+  const dataSelection = isRecord(features.dataSelection) ? features.dataSelection : {};
+  return {
+    customApiDebugOnly:
+      typeof dataSelection.customApiDebugOnly === "boolean" ? dataSelection.customApiDebugOnly : true,
+    customApiTargetSoftwareIds: Array.isArray(dataSelection.customApiTargetSoftwareIds)
+      ? (dataSelection.customApiTargetSoftwareIds as string[])
+      : [],
+    customApiTargetServiceChainIds: Array.isArray(dataSelection.customApiTargetServiceChainIds)
+      ? (dataSelection.customApiTargetServiceChainIds as string[])
+      : [],
+    dataPagePlugins: Array.isArray(dataSelection.dataPagePlugins)
+      ? (dataSelection.dataPagePlugins as DataSelectionSettings["dataPagePlugins"])
+      : [],
+  };
+};
+
 export const useDataspaceConfig = (
   organizationId?: string,
   options?: { enabled?: boolean }
@@ -163,6 +182,7 @@ export const useDataspaceConfig = (
     dataResources: [],
     serviceChains: [],
     customVisualizations: [],
+    dataSelectionSettings: null,
     isLoading: true,
     error: null,
   });
@@ -240,6 +260,7 @@ export const useDataspaceConfig = (
         ? resultPageExportApiConfigs
         : legacyExportApiConfigs;
       const customVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
+      const dataSelectionSettings = getDataSelectionSettings(globalConfigData?.features);
 
       // Parse PDC config
       const pdcConfig: PdcConfig | null = pdcData
@@ -300,6 +321,7 @@ export const useDataspaceConfig = (
           custom_result_url: (r as unknown as { custom_result_url?: string }).custom_result_url ?? null,
           result_authorization: (r as unknown as { result_authorization?: string }).result_authorization ?? null,
           result_query_params: ((r as unknown as { result_query_params?: Array<{ paramName: string; paramValue: string }> }).result_query_params) ?? [],
+          visible_for_software_ids: ((r as unknown as { visible_for_software_ids?: string[] | null }).visible_for_software_ids) ?? [],
         }));
 
       // Parse service chains
@@ -328,6 +350,7 @@ export const useDataspaceConfig = (
         dataResources,
         serviceChains,
         customVisualizations,
+        dataSelectionSettings,
         isLoading: false,
         error: null,
       });

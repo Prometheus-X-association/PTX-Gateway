@@ -42,6 +42,7 @@ interface ResourceParam {
   custom_result_url: string | null;
   result_authorization: string | null;
   result_query_params: Array<{ paramName: string; paramValue: string }>;
+  visible_for_software_ids: string[];
 }
 
 const normalizeResourceParameters = (
@@ -269,6 +270,7 @@ const ResourcesConfigSection = () => {
         custom_result_url: (r as unknown as { custom_result_url?: string }).custom_result_url ?? null,
         result_authorization: (r as unknown as { result_authorization?: string }).result_authorization ?? null,
         result_query_params: (r as unknown as { result_query_params?: Array<{ paramName: string; paramValue: string }> }).result_query_params ?? [],
+        visible_for_software_ids: (r as unknown as { visible_for_software_ids?: string[] | null }).visible_for_software_ids ?? [],
         llm_context: (r as unknown as { llm_context?: string | null }).llm_context ?? null,
       })));
 
@@ -366,6 +368,7 @@ const ResourcesConfigSection = () => {
           custom_result_url: updatedResource.custom_result_url,
           result_authorization: updatedResource.result_authorization,
           result_query_params: updatedResource.result_query_params as unknown as Json,
+          visible_for_software_ids: updatedResource.visible_for_software_ids,
         })
         .eq('id', updatedResource.id);
 
@@ -723,6 +726,17 @@ const ResourcesConfigSection = () => {
       fallback_result_url: fallbackResultUrl,
     } : null
   ), [editingChain, fallbackResultUrl]);
+
+  const softwareOptions = useMemo(
+    () =>
+      resources
+        .filter((r) => r.resource_type === "software")
+        .map((r) => ({
+          id: r.id,
+          name: r.resource_name || r.resource_url,
+        })),
+    [resources]
+  );
 
   if (isLoading) {
     return (
@@ -1355,6 +1369,7 @@ const ResourcesConfigSection = () => {
       {/* Resource Details Modal */}
       <ResourceDetailsModal
         resource={resourceModalData}
+        softwareOptions={softwareOptions}
         open={!!editingResource}
         onOpenChange={(open) => {
           if (!open) setEditingResource(null);

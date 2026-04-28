@@ -16,7 +16,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import UserMenu from "@/components/UserMenu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AnalyticsOption, CustomVisualizationConfig, CustomVisualizationLibraryBundle, DataResource, ExportApiConfig, PdcConfig, SoftwareResource, ServiceChain } from "@/types/dataspace";
+import { AnalyticsOption, CustomVisualizationConfig, CustomVisualizationLibraryBundle, DataResource, DataSelectionSettings, ExportApiConfig, PdcConfig, SoftwareResource, ServiceChain } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { Json } from "@/integrations/supabase/types";
@@ -316,6 +316,24 @@ const getResultPageCustomVisualizations = (features: unknown): CustomVisualizati
     : [];
 };
 
+const getDataSelectionSettings = (features: unknown): DataSelectionSettings | null => {
+  if (!isRecord(features)) return null;
+  const dataSelection = isRecord(features.dataSelection) ? features.dataSelection : {};
+  return {
+    customApiDebugOnly:
+      typeof dataSelection.customApiDebugOnly === "boolean" ? dataSelection.customApiDebugOnly : true,
+    customApiTargetSoftwareIds: Array.isArray(dataSelection.customApiTargetSoftwareIds)
+      ? (dataSelection.customApiTargetSoftwareIds as string[])
+      : [],
+    customApiTargetServiceChainIds: Array.isArray(dataSelection.customApiTargetServiceChainIds)
+      ? (dataSelection.customApiTargetServiceChainIds as string[])
+      : [],
+    dataPagePlugins: Array.isArray(dataSelection.dataPagePlugins)
+      ? (dataSelection.dataPagePlugins as DataSelectionSettings["dataPagePlugins"])
+      : [],
+  };
+};
+
 const buildDummySkillResult = (error: unknown, organizationName: string) => {
   const categories = [
     "Data Management",
@@ -374,6 +392,7 @@ const OrgGatewayContent = ({
   pdcConfig,
   orgExecutionToken,
   customVisualizations,
+  dataSelectionSettings,
   softwareResources,
   dataResources,
   serviceChains,
@@ -382,6 +401,7 @@ const OrgGatewayContent = ({
   pdcConfig: PdcConfig | null;
   orgExecutionToken: string | null;
   customVisualizations: CustomVisualizationConfig[];
+  dataSelectionSettings: DataSelectionSettings | null;
   softwareResources: SoftwareResource[];
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
@@ -805,6 +825,7 @@ const OrgGatewayContent = ({
               dataResources={dataResources}
               selectedAnalytics={selectedAnalytics}
               isDebugMode={isDebugMode}
+              dataSelectionSettings={dataSelectionSettings}
             />
           )}
           {currentStepName === "Validation" && selectedData && selectedAnalytics && (
@@ -871,6 +892,7 @@ const OrgGateway = () => {
   const [dataResources, setDataResources] = useState<DataResource[]>([]);
   const [serviceChains, setServiceChains] = useState<ServiceChain[]>([]);
   const [customVisualizations, setCustomVisualizations] = useState<CustomVisualizationConfig[]>([]);
+  const [dataSelectionSettings, setDataSelectionSettings] = useState<DataSelectionSettings | null>(null);
   const themeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -906,6 +928,7 @@ const OrgGateway = () => {
         setDataResources([]);
         setServiceChains([]);
         setCustomVisualizations([]);
+        setDataSelectionSettings(null);
 
         themeCleanupRef.current?.();
         themeCleanupRef.current = null;
@@ -960,7 +983,9 @@ const OrgGateway = () => {
           .maybeSingle();
         const resultPageExportConfigs = getResultPageExportApiConfigs(globalConfigData?.features);
         const resultPageCustomVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
+        const dataSelectionConfig = getDataSelectionSettings(globalConfigData?.features);
         setCustomVisualizations(resultPageCustomVisualizations);
+        setDataSelectionSettings(dataSelectionConfig);
 
         // Fetch PDC config for this organization
         const { data: pdcData } = await supabase
@@ -1038,6 +1063,7 @@ const OrgGateway = () => {
               custom_result_url: (r as unknown as { custom_result_url?: string }).custom_result_url ?? null,
               result_authorization: (r as unknown as { result_authorization?: string }).result_authorization ?? null,
               result_query_params: ((r as unknown as { result_query_params?: Array<{ paramName: string; paramValue: string }> }).result_query_params) ?? [],
+              visible_for_software_ids: ((r as unknown as { visible_for_software_ids?: string[] | null }).visible_for_software_ids) ?? [],
             }));
 
           setSoftwareResources(software);
@@ -1160,6 +1186,7 @@ const OrgGateway = () => {
         dataResources={dataResources}
         serviceChains={serviceChains}
         customVisualizations={customVisualizations}
+        dataSelectionSettings={dataSelectionSettings}
       />
     </ProcessSessionProvider>
   );
