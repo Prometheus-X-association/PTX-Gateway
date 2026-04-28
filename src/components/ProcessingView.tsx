@@ -101,6 +101,7 @@ interface ProcessingViewProps {
   onBack?: () => void;
   allowContinueOnPdcError?: boolean;
   onContinueWithDummyResult?: (error: unknown) => void;
+  pendingWaitSeconds?: number;
 }
 
 type ProcessExecutionStatus = "running" | "completed" | "failed";
@@ -115,7 +116,7 @@ interface ProcessExecutionRecord {
 const getExecutionStorageKey = (executionKey: string) => `ptx_process_execution_${executionKey}`;
 const PROCESS_TAB_ID_KEY = "ptx_process_tab_id";
 const RUNNING_LOCK_STALE_MS = 30 * 60 * 1000;
-const PENDING_TRANSITION_DELAY_MS = 60_000;
+const DEFAULT_PENDING_TRANSITION_DELAY_MS = 60_000;
 const INITIAL_PENDING_POLL_INTERVAL_MS = 10_000;
 const RETRY_PENDING_POLL_INTERVAL_MS = 5_000;
 
@@ -223,6 +224,7 @@ const ProcessingView = ({
   onBack,
   allowContinueOnPdcError = false,
   onContinueWithDummyResult,
+  pendingWaitSeconds = 60,
 }: ProcessingViewProps) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -234,6 +236,10 @@ const ProcessingView = ({
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [canRetryPendingAvailability, setCanRetryPendingAvailability] = useState(false);
   const executionInFlightRef = useRef(false);
+  const pendingTransitionDelayMs = Math.max(
+    5_000,
+    Math.min(600_000, Math.round(pendingWaitSeconds) * 1000 || DEFAULT_PENDING_TRANSITION_DELAY_MS),
+  );
 
   const probeResultAvailability = useCallback(async (): Promise<boolean> => {
     if (!resultUrlInfo?.url) return false;
@@ -283,7 +289,9 @@ const ProcessingView = ({
       setCurrentStep(4);
       setProgress((prev) => Math.max(prev, 88));
       setPendingMessage(
-        `Status is PENDING. Data is still being processed. Waiting up to 60 seconds and checking result availability every ${
+        `Status is PENDING. Data is still being processed. Waiting up to ${Math.round(
+          pendingTransitionDelayMs / 1000,
+        )} seconds and checking result availability every ${
           pollIntervalMs / 1000
         } seconds.`
       );
@@ -291,7 +299,7 @@ const ProcessingView = ({
       const startedAt = Date.now();
       let resultReady = false;
 
-      while (Date.now() - startedAt < PENDING_TRANSITION_DELAY_MS) {
+      while (Date.now() - startedAt < pendingTransitionDelayMs) {
         setProgress((prev) => Math.min(prev + 1, 97));
         resultReady = await probeResultAvailability();
         if (resultReady) break;
@@ -301,7 +309,7 @@ const ProcessingView = ({
       setPendingMessage(null);
       return resultReady;
     },
-    [probeResultAvailability]
+    [pendingTransitionDelayMs, probeResultAvailability]
   );
 
   const executePdc = useCallback(async () => {

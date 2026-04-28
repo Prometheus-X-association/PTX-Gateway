@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap } from "lucide-react";
+import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { ResultUrlInfo, formatResultUrlWithParams, buildResultRequestBody } from "@/utils/resultUrlResolver";
 import { isDebugMode } from "@/config/global.config";
 import { supabase } from "@/integrations/supabase/client";
-import { AnalyticsOption, CustomVisualizationConfig, ExportApiConfig } from "@/types/dataspace";
+import { AnalyticsOption, CustomVisualizationConfig, DataResource, ExportApiConfig } from "@/types/dataspace";
 import D3InsightChart, { LlmVisualizationSpec } from "@/components/results/D3InsightChart";
 
 interface ResultsViewProps {
@@ -23,6 +23,7 @@ interface ResultsViewProps {
   orgExecutionToken?: string | null;
   llmPromptContext?: string | null;
   selectedAnalytics?: AnalyticsOption | null;
+  selectedDataResources?: DataResource[] | null;
   selectedAnalyticsTargetId?: string | null;
   customVisualizations?: CustomVisualizationConfig[];
   showDebugApiExportConfig?: boolean;
@@ -40,6 +41,12 @@ interface ApiRequestPreview {
   hasAuthorization: boolean;
   forEachMode: boolean;
   forEachRange?: string;
+}
+
+interface PostImportButtonConfig {
+  id: string;
+  text: string;
+  url: string;
 }
 
 interface TemplateTagHelp {
@@ -112,6 +119,37 @@ const validateJsonAgainstSchema = (
 
 const escapeHtml = (value: string): string =>
   value.replace(/[<>&]/g, (char) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[char] || char));
+
+const formatDateTime = (value: Date | string | number | null | undefined): string => {
+  if (value === null || value === undefined) return "N/A";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "N/A";
+  return date.toLocaleString();
+};
+
+const extractFirstMatchingValue = (
+  source: unknown,
+  predicate: (key: string, value: unknown) => boolean,
+  maxDepth = 6,
+  depth = 0,
+): unknown => {
+  if (source === null || source === undefined || depth > maxDepth) return undefined;
+  if (Array.isArray(source)) {
+    for (const item of source) {
+      const found = extractFirstMatchingValue(item, predicate, maxDepth, depth + 1);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (typeof source !== "object") return undefined;
+  const record = source as Record<string, unknown>;
+  for (const [key, value] of Object.entries(record)) {
+    if (predicate(key, value)) return value;
+    const found = extractFirstMatchingValue(value, predicate, maxDepth, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+};
 
 const CUSTOM_VISUALIZATION_ELEMENT = "ptx-custom-visualization";
 
@@ -1953,7 +1991,8 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
     const enforceTabulatorButtonsVisible = () => {
       const saveButtons = Array.from(shadowRoot.querySelectorAll<HTMLElement>(".tabulator-save-button"));
       const resetButtons = Array.from(shadowRoot.querySelectorAll<HTMLElement>(".tabulator-reset-button"));
-      [...saveButtons, ...resetButtons].forEach((button) => {
+      const deleteButtons = Array.from(shadowRoot.querySelectorAll<HTMLElement>(".tabulator-delete-button"));
+      [...saveButtons, ...resetButtons, ...deleteButtons].forEach((button) => {
         button.style.setProperty("display", "inline-flex", "important");
         button.style.setProperty("visibility", "visible", "important");
         button.style.setProperty("opacity", "1", "important");
@@ -2122,6 +2161,7 @@ const ResultsView = ({
   orgExecutionToken,
   llmPromptContext,
   selectedAnalytics,
+  selectedDataResources = [],
   selectedAnalyticsTargetId,
   customVisualizations = [],
   showDebugApiExportConfig = false,
@@ -2139,6 +2179,9 @@ const ResultsView = ({
   const [isSendingToApi, setIsSendingToApi] = useState(false);
   const [isTagHelpOpen, setIsTagHelpOpen] = useState(false);
   const [selectedTagHelp, setSelectedTagHelp] = useState<TemplateTagHelp | null>(null);
+  const [postImportButtons, setPostImportButtons] = useState<PostImportButtonConfig[]>([]);
+  const [isPostImportAttentionActive, setIsPostImportAttentionActive] = useState(false);
+  const [reportPerformedAt] = useState<Date>(new Date());
   const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
   const [llmInsightsEnabled, setLlmInsightsEnabled] = useState(false);
   const [insightError, setInsightError] = useState<string | null>(null);
@@ -2162,6 +2205,20 @@ const ResultsView = ({
       return true;
     });
   }, [exportApiConfigs, selectedTargetId]);
+  const importButtonText = useMemo(() => {
+    if (compatibleExportApiConfigs.length === 0) return "Import to LMS";
+    if (compatibleExportApiConfigs.length === 1) {
+      return compatibleExportApiConfigs[0].import_button_text?.trim() || "Import to LMS";
+    }
+    const labels = Array.from(
+      new Set(
+        compatibleExportApiConfigs
+          .map((config) => config.import_button_text?.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    return labels.length === 1 ? labels[0] : "Import to LMS";
+  }, [compatibleExportApiConfigs]);
   const activeCustomVisualization = useMemo(() => {
     if (!selectedTargetId) return null;
     return customVisualizations.find((visualization) =>
@@ -2368,6 +2425,11 @@ const ResultsView = ({
   }, [resultData]);
 
   useEffect(() => {
+    setPostImportButtons([]);
+    setIsPostImportAttentionActive(false);
+  }, [selectedTargetId]);
+
+  useEffect(() => {
     if (!llmInsightsEnabled) {
       setLlmInsight(null);
       setInsightError(null);
@@ -2441,6 +2503,193 @@ const ResultsView = ({
   }, [resultData]);
 
   const handleExport = (format: string) => {
+    if (format === "pdf") {
+      const analyticsKind = selectedAnalytics?.type === "serviceChain" ? "Service Chain" : "Software Resource";
+      const analyticsProvider =
+        selectedAnalytics?.type === "software"
+          ? selectedAnalytics.data.provider || "N/A"
+          : "N/A";
+
+      const dataKinds = (selectedDataResources || []).map((resource) =>
+        resource.visualization_type || (resource.upload_file ? "upload_document" : "data_api"),
+      );
+      const dataProviderSummary = (selectedDataResources || [])
+        .map((resource) => resource.provider || "N/A")
+        .filter((value, index, self) => self.indexOf(value) === index)
+        .join(", ") || "N/A";
+
+      const processingDurationRaw = extractFirstMatchingValue(
+        resultData,
+        (key, value) =>
+          ["processingTime", "processing_time", "durationMs", "duration_ms", "elapsedMs", "elapsed_ms"].includes(key) &&
+          (typeof value === "string" || typeof value === "number"),
+      );
+      const processedAtRaw = extractFirstMatchingValue(
+        resultData,
+        (key, value) =>
+          ["processedAt", "processed_at", "updatedAt", "updated_at", "completedAt", "completed_at"].includes(key) &&
+          (typeof value === "string" || typeof value === "number"),
+      );
+
+      const processingDuration =
+        typeof processingDurationRaw === "number"
+          ? `${processingDurationRaw} ms`
+          : typeof processingDurationRaw === "string"
+            ? processingDurationRaw
+            : "N/A";
+      const processedAt = formatDateTime(
+        typeof processedAtRaw === "string" || typeof processedAtRaw === "number" ? processedAtRaw : null,
+      );
+
+      const serviceChainDetails =
+        selectedAnalytics?.type === "serviceChain"
+          ? {
+              name: selectedAnalytics.data.basis_information?.name || selectedAnalytics.data.catalog_id,
+              description: selectedAnalytics.data.basis_information?.description || "N/A",
+              provider: "N/A",
+              contract: selectedAnalytics.data.contract_url,
+              embeddedResources: (selectedAnalytics.data.embedded_resources || []).map((embedded) => ({
+                serviceIndex: embedded.service_index,
+                type: embedded.resource_type,
+                name: embedded.resource_name || "N/A",
+                provider: embedded.provider || "N/A",
+                serviceOffering: embedded.service_offering || "N/A",
+                resourceUrl: embedded.resource_url,
+                contractUrl: embedded.contract_url,
+              })),
+            }
+          : null;
+
+      const customVisualizationHost = document.querySelector("ptx-custom-visualization");
+      const customVisualizationShadow = customVisualizationHost?.shadowRoot || null;
+      const customVisualizationContainer = customVisualizationShadow?.querySelector(".ptx-custom-visualization-container");
+      const customVisualizationHtml =
+        customVisualizationContainer instanceof HTMLElement
+          ? customVisualizationContainer.innerHTML
+          : "";
+
+      const reportHtml = `
+        <!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <title>Analytics Report</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 24px; color: #0f172a; line-height: 1.45; }
+              h1, h2, h3 { margin: 0 0 10px; }
+              h1 { font-size: 24px; color: #1d4ed8; }
+              h2 { font-size: 18px; margin-top: 20px; color: #1e293b; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
+              p { margin: 5px 0; }
+              .meta-grid { display: grid; grid-template-columns: 240px 1fr; gap: 8px 14px; margin-top: 10px; }
+              .meta-grid .label { color: #475569; font-weight: 700; }
+              .card { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; margin: 10px 0; background: #f8fafc; }
+              .small { color: #64748b; font-size: 12px; }
+              .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
+              .list { margin: 8px 0 0 18px; }
+              .embed-row { border: 1px solid #dbeafe; background: #eff6ff; border-radius: 8px; padding: 10px; margin: 8px 0; }
+              .viz-wrap { border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; background: #fff; overflow: auto; }
+            </style>
+          </head>
+          <body>
+            <h1>Analytics Export Report</h1>
+            <p class="small">Generated at ${escapeHtml(formatDateTime(new Date()))}</p>
+
+            <h2>Execution Overview</h2>
+            <div class="meta-grid">
+              <div class="label">Selected analytics</div><div>${escapeHtml(analyticsType || "N/A")}</div>
+              <div class="label">Analytics type</div><div>${escapeHtml(analyticsKind)}</div>
+              <div class="label">Analytics provider</div><div>${escapeHtml(analyticsProvider)}</div>
+              <div class="label">Performed at</div><div>${escapeHtml(formatDateTime(reportPerformedAt))}</div>
+              <div class="label">Processed at</div><div>${escapeHtml(processedAt)}</div>
+              <div class="label">Processing duration</div><div>${escapeHtml(processingDuration)}</div>
+              <div class="label">Where processed</div><div>${escapeHtml(resultUrlInfo?.url || "N/A")}</div>
+              <div class="label">Result source description</div><div>${escapeHtml(resultUrlInfo?.description || "N/A")}</div>
+              <div class="label">Data kind(s)</div><div>${escapeHtml(dataKinds.length > 0 ? dataKinds.join(", ") : "N/A")}</div>
+              <div class="label">Data provider(s)</div><div>${escapeHtml(dataProviderSummary)}</div>
+            </div>
+
+            <h2>Selected Data Resources</h2>
+            ${
+              (selectedDataResources || []).length === 0
+                ? "<p>No data resources selected.</p>"
+                : (selectedDataResources || [])
+                    .map(
+                      (resource, index) => `
+                        <div class="card">
+                          <p><strong>#${index + 1}</strong> ${escapeHtml(resource.resource_name || "Unnamed data resource")}</p>
+                          <p><strong>Provider:</strong> ${escapeHtml(resource.provider || "N/A")}</p>
+                          <p><strong>Data type:</strong> ${escapeHtml(resource.visualization_type || (resource.upload_file ? "upload_document" : "data_api"))}</p>
+                          <p><strong>Resource URL:</strong> ${escapeHtml(resource.resource_url)}</p>
+                          <p><strong>Contract URL:</strong> ${escapeHtml(resource.contract_url)}</p>
+                        </div>
+                      `,
+                    )
+                    .join("")
+            }
+
+            ${
+              serviceChainDetails
+                ? `
+                  <h2>Service Chain Details</h2>
+                  <div class="card">
+                    <p><strong>Name:</strong> ${escapeHtml(serviceChainDetails.name)}</p>
+                    <p><strong>Description:</strong> ${escapeHtml(serviceChainDetails.description)}</p>
+                    <p><strong>Provider:</strong> ${escapeHtml(serviceChainDetails.provider)}</p>
+                    <p><strong>Contract URL:</strong> ${escapeHtml(serviceChainDetails.contract)}</p>
+                  </div>
+                  <h3>Embedded Services/Data</h3>
+                  ${
+                    serviceChainDetails.embeddedResources.length === 0
+                      ? "<p>No embedded resource details available.</p>"
+                      : serviceChainDetails.embeddedResources
+                          .map(
+                            (embedded) => `
+                              <div class="embed-row">
+                                <p><strong>Service index:</strong> ${embedded.serviceIndex}</p>
+                                <p><strong>Type:</strong> ${escapeHtml(embedded.type)}</p>
+                                <p><strong>Name:</strong> ${escapeHtml(embedded.name)}</p>
+                                <p><strong>Provider:</strong> ${escapeHtml(embedded.provider)}</p>
+                                <p><strong>Service offering:</strong> ${escapeHtml(embedded.serviceOffering)}</p>
+                                <p><strong>Resource URL:</strong> ${escapeHtml(embedded.resourceUrl)}</p>
+                                <p><strong>Contract URL:</strong> ${escapeHtml(embedded.contractUrl)}</p>
+                              </div>
+                            `,
+                          )
+                          .join("")
+                  }
+                `
+                : ""
+            }
+
+            <h2>Custom Visualization Snapshot</h2>
+            ${
+              customVisualizationHtml
+                ? `<div class="viz-wrap">${customVisualizationHtml}</div>`
+                : "<p>Custom visualization is not available in current view.</p>"
+            }
+
+            <h2>Result JSON</h2>
+            <pre class="mono">${escapeHtml(JSON.stringify(resultData, null, 2))}</pre>
+          </body>
+        </html>
+      `;
+
+      const reportWindow = window.open("", "_blank", "noopener,noreferrer");
+      if (!reportWindow) {
+        toast.error("Popup blocked. Please allow popups to export PDF.");
+        return;
+      }
+      reportWindow.document.open();
+      reportWindow.document.write(reportHtml);
+      reportWindow.document.close();
+      reportWindow.focus();
+      setTimeout(() => {
+        reportWindow.print();
+      }, 300);
+      toast.success("PDF report prepared. Use the print dialog to save as PDF.");
+      return;
+    }
+
     let content: string;
     let mimeType: string;
     let extension: string;
@@ -2589,6 +2838,23 @@ const ResultsView = ({
           ? `Data sent to API successfully (${successCount} requests)`
           : "Data sent to API successfully!"
       );
+
+      const matchedConfig = selectedExportApi
+        ? compatibleExportApiConfigs.find((config) => config.name === selectedExportApi)
+        : compatibleExportApiConfigs.find((config) => config.url === apiUrl);
+      const postImportUrl = matchedConfig?.post_import_button_url?.trim();
+      const postImportText = matchedConfig?.post_import_button_text?.trim();
+      if (matchedConfig && postImportUrl && postImportText) {
+        setPostImportButtons([
+          {
+            id: matchedConfig.id || matchedConfig.name || postImportUrl,
+            url: postImportUrl,
+            text: postImportText,
+          },
+        ]);
+        setIsPostImportAttentionActive(true);
+      }
+
       if (isDebugMode()) {
         console.log("API Export URL:", request.targetUrl);
         console.log("API Export Bodies:", request.bodies);
@@ -2598,7 +2864,7 @@ const ResultsView = ({
     } finally {
       setIsSendingToApi(false);
     }
-  }, [apiAuthorization, buildApiRequestPreview]);
+  }, [apiAuthorization, apiUrl, buildApiRequestPreview, compatibleExportApiConfigs, selectedExportApi]);
 
   const handleConfirmApiExport = useCallback(async () => {
     setIsPreviewOpen(false);
@@ -2613,6 +2879,7 @@ const ResultsView = ({
       const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/result-proxy`;
       let endpointCount = 0;
       let requestCount = 0;
+      const followUpButtons: PostImportButtonConfig[] = [];
 
       for (const config of compatibleExportApiConfigs) {
         const request = buildApiRequestPreviewForConfig(config);
@@ -2642,6 +2909,23 @@ const ResultsView = ({
         }
 
         endpointCount += 1;
+        const buttonUrl = config.post_import_button_url?.trim();
+        const buttonText = config.post_import_button_text?.trim();
+        if (buttonUrl && buttonText) {
+          followUpButtons.push({
+            id: config.id || config.name || buttonUrl,
+            text: buttonText,
+            url: buttonUrl,
+          });
+        }
+      }
+
+      if (followUpButtons.length > 0) {
+        const deduped = Array.from(
+          new Map(followUpButtons.map((item) => [item.id, item])).values(),
+        );
+        setPostImportButtons(deduped);
+        setIsPostImportAttentionActive(true);
       }
 
       toast.success(
@@ -2679,6 +2963,13 @@ const ResultsView = ({
 
   return (
     <div className="animate-fade-in">
+      <style>{`
+        @keyframes ptxLightSweep {
+          0% { background-position: 0% 50%; box-shadow: 0 0 0 rgba(0,0,0,0); }
+          50% { background-position: 100% 50%; box-shadow: 0 0 18px rgba(59, 130, 246, 0.28); }
+          100% { background-position: 0% 50%; box-shadow: 0 0 0 rgba(0,0,0,0); }
+        }
+      `}</style>
       <div className="text-center mb-8">
         <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-primary/20 flex items-center justify-center">
           {isLoading ? (
@@ -2850,24 +3141,20 @@ const ResultsView = ({
 
       {/* Export Options */}
       <div className="mb-8">
-        <h3 className="font-semibold mb-4 flex items-center gap-2">
-          <Download className="w-5 h-5 text-primary" />
-          Export Results
-        </h3>
         <div className={`grid grid-cols-1 ${compatibleExportApiConfigs.length > 0 ? "sm:grid-cols-4" : "sm:grid-cols-3"} gap-4`}>
           <button onClick={() => handleExport("pdf")} className="export-btn">
             <FileText className="w-8 h-8 text-primary" />
-            <span className="font-medium">PDF Report</span>
+            <span className="font-medium">Export as PDF</span>
             <span className="text-xs text-muted-foreground">Full formatted report</span>
           </button>
           <button onClick={() => handleExport("json")} className="export-btn">
             <FileJson className="w-8 h-8 text-primary" />
-            <span className="font-medium">JSON Data</span>
+            <span className="font-medium">Export as JSON</span>
             <span className="text-xs text-muted-foreground">Raw structured data</span>
           </button>
           <button onClick={() => handleExport("csv")} className="export-btn">
             <TableIcon className="w-8 h-8 text-primary" />
-            <span className="font-medium">CSV Export</span>
+            <span className="font-medium">Export as CSV</span>
             <span className="text-xs text-muted-foreground">Spreadsheet compatible</span>
           </button>
           {compatibleExportApiConfigs.length > 0 && (
@@ -2881,7 +3168,7 @@ const ResultsView = ({
               ) : (
                 <GraduationCap className="w-8 h-8 text-primary" />
               )}
-              <span className="font-medium">Import to LMS</span>
+              <span className="font-medium">{importButtonText}</span>
               <span className="text-xs text-muted-foreground">
                 {compatibleExportApiConfigs.length === 1
                   ? compatibleExportApiConfigs[0].name || "Connected endpoint"
@@ -2890,6 +3177,42 @@ const ResultsView = ({
             </button>
           )}
         </div>
+        {postImportButtons.length > 0 && (
+          <div className="mt-4 rounded-xl border border-primary/35 bg-primary/10 p-5 text-center animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+            <p className="text-sm font-semibold text-primary mb-3">
+              Import completed. Open the destination page to verify import result:
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              {postImportButtons.map((button) => (
+                <a
+                  key={button.id}
+                  href={button.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setIsPostImportAttentionActive(false)}
+                  className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-all duration-200 hover:scale-[1.02] ${
+                    isPostImportAttentionActive
+                      ? "border-primary/55 text-primary ring-4 ring-primary/25 hover:opacity-95"
+                      : "border-primary/35 bg-primary/15 text-primary hover:bg-primary/25"
+                  }`}
+                  style={
+                    isPostImportAttentionActive
+                      ? {
+                          backgroundImage:
+                            "linear-gradient(110deg, rgba(59,130,246,0.20) 18%, rgba(147,197,253,0.42) 45%, rgba(59,130,246,0.20) 72%)",
+                          backgroundSize: "220% 100%",
+                          animation: "ptxLightSweep 1.9s linear infinite",
+                        }
+                      : undefined
+                  }
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  <span>{button.text}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
 
         {showDebugApiExportConfig && (
           <div className="glass-card p-6 mt-4">

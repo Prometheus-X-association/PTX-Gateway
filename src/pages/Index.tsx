@@ -47,6 +47,7 @@ const IndexContent = () => {
     serviceChains,
     customVisualizations,
     dataSelectionSettings,
+    processingPageSettings,
     isLoading: configLoading, 
     error: configError 
   } = useDataspaceConfig();
@@ -325,6 +326,7 @@ const IndexContent = () => {
               onComplete={handleProcessingComplete}
               onError={handleProcessingError}
               onBack={handleProcessingBack}
+              pendingWaitSeconds={processingPageSettings?.pendingWaitSeconds}
             />
           )}
             {getCurrentStepName() === "Results" && selectedAnalytics && (
@@ -336,6 +338,7 @@ const IndexContent = () => {
                 organizationId={pdcConfig?.organization_id ?? null}
                 llmPromptContext={llmPromptContext}
                 selectedAnalytics={selectedAnalytics}
+                selectedDataResources={selectedData?.selectedDataResources || []}
                 customVisualizations={customVisualizations}
                 showDebugApiExportConfig={isDebugMode}
               />

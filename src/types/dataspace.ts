@@ -8,6 +8,7 @@ export type VisualizationType = 'upload_document' | 'manual_json_input' | 'data_
 export interface ExportApiConfig {
   id?: string;
   name: string;
+  import_button_text?: string;
   url: string;
   api_version?: string;
   is_active?: boolean;
@@ -15,6 +16,8 @@ export interface ExportApiConfig {
   params?: Array<{ key: string; value: string }>;
   body_template?: string;
   target_resources?: string[];
+  post_import_button_text?: string;
+  post_import_button_url?: string;
 }
 
 export interface CustomVisualizationLibraryFile {
@@ -61,6 +64,10 @@ export interface DataSelectionSettings {
   customApiTargetSoftwareIds?: string[];
   customApiTargetServiceChainIds?: string[];
   dataPagePlugins?: DataPagePluginConfig[];
+}
+
+export interface ProcessingPageSettings {
+  pendingWaitSeconds?: number;
 }
 
 export interface PdcConfig {
@@ -238,6 +245,7 @@ export interface DataspaceConfig {
   serviceChains: ServiceChain[];
   customVisualizations: CustomVisualizationConfig[];
   dataSelectionSettings?: DataSelectionSettings | null;
+  processingPageSettings?: ProcessingPageSettings | null;
   isLoading: boolean;
   error: string | null;
 }

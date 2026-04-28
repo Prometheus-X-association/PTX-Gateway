@@ -523,6 +523,23 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       gap: 10px;
       align-items: center;
     }
+    .tabulator-save-status {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      background: #f8fafc;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 10px;
+      line-height: 1;
+    }
+    .tabulator-save-status.is-dirty {
+      border-color: rgba(245, 158, 11, 0.45);
+      background: #fffbeb;
+      color: #92400e;
+    }
     .tabulator-save-button {
       display: inline-flex;
       border: 0;
@@ -532,12 +549,30 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       color: white;
       font-weight: 600;
       cursor: pointer;
+      transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
     }
     .tabulator-save-button.is-visible {
       display: inline-flex !important;
     }
+    .tabulator-save-button.needs-save {
+      box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.28);
+      animation: tabulatorSavePulse 1.3s ease-in-out infinite;
+    }
     .tabulator-save-button:hover {
       background: #047857;
+    }
+    .tabulator-delete-button {
+      display: inline-flex;
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 14px;
+      background: #dc2626;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tabulator-delete-button:hover {
+      background: #b91c1c;
     }
     .tabulator-toolbar .hint {
       font-size: 12px;
@@ -569,6 +604,11 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     .tabulator-row .tabulator-cell {
       white-space: normal;
     }
+    @keyframes tabulatorSavePulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+      100% { transform: scale(1); }
+    }
   \`;
   shadowRoot.appendChild(style);
 
@@ -590,11 +630,20 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   saveButton.className = "tabulator-save-button";
   saveButton.textContent = "Save changes to JSON";
 
+  const saveStatus = document.createElement("span");
+  saveStatus.className = "tabulator-save-status";
+  saveStatus.textContent = "Saved";
+
+  const deleteButton = document.createElement("button");
+  deleteButton.type = "button";
+  deleteButton.className = "tabulator-delete-button";
+  deleteButton.textContent = "Delete selected rows";
+
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent = "Edit cells directly, then click Save changes to synchronize with the JSON view.";
+  hint.textContent = "Edit cells directly, select rows to delete, then click Save changes to synchronize with the JSON view.";
 
-  toolbarActions.append(saveButton);
+  toolbarActions.append(saveStatus, deleteButton, saveButton);
   toolbar.append(searchInput, toolbarActions, hint);
 
   const tableHost = document.createElement("div");
@@ -605,10 +654,13 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
   const setDirty = (dirty) => {
     saveButton.classList.toggle("is-visible", dirty);
+    saveButton.classList.toggle("needs-save", dirty);
+    saveStatus.classList.toggle("is-dirty", dirty);
+    saveStatus.textContent = dirty ? "Unsaved changes" : "Saved";
     saveButton.style.setProperty("display", "inline-flex", "important");
     hint.textContent = dirty
-      ? "You have unsaved table edits. Click Save changes to update the JSON view."
-      : "Edit cells directly, then click Save changes to synchronize with the JSON view.";
+      ? "You have unsaved table edits. Click Save changes to JSON to synchronize now."
+      : "Edit cells directly, select rows to delete, then click Save changes to synchronize with the JSON view.";
   };
 
   const applyRowsToJson = (tableRows) => {
@@ -673,6 +725,16 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     paginationSize: 12,
     paginationSizeSelector: [12, 25, 50, true],
     placeholder: "No skills found in the result JSON.",
+    selectableRows: "highlight",
+    rowHeader: {
+      formatter: "rowSelection",
+      titleFormatter: "rowSelection",
+      hozAlign: "center",
+      headerSort: false,
+      width: 52,
+      resizable: false,
+      frozen: true,
+    },
     columns: [
       {
         title: "Skills Name",
@@ -690,11 +752,22 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
         minWidth: 420,
       },
     ],
-    cellEdited: () => setDirty(true),
-    dataChanged: () => setDirty(true),
   });
 
+  table.on("cellEdited", () => setDirty(true));
+  table.on("dataChanged", () => setDirty(true));
+
   setDirty(false);
+
+  deleteButton.addEventListener("click", () => {
+    const selectedRows = table.getSelectedRows();
+    if (!selectedRows.length) {
+      alert("Select one or more rows to delete.");
+      return;
+    }
+    selectedRows.forEach((row) => row.delete());
+    setDirty(true);
+  });
 
   saveButton.addEventListener("click", () => {
     try {
@@ -723,6 +796,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 const emptyExportApi = (): ExportApiConfig => ({
   id: crypto.randomUUID(),
   name: "",
+  import_button_text: "",
   url: "",
   api_version: "",
   is_active: false,
@@ -730,6 +804,8 @@ const emptyExportApi = (): ExportApiConfig => ({
   params: [],
   body_template: '{\n  "data": ##result\n}',
   target_resources: [],
+  post_import_button_text: "",
+  post_import_button_url: "",
 });
 
 const emptyCustomVisualization = (): CustomVisualizationConfig => ({
@@ -1649,6 +1725,14 @@ const ResultPageSettingsSection = () => {
                           </div>
                         </div>
                         <div className="space-y-1">
+                          <Label className="text-xs">Result Page Button Text (optional)</Label>
+                          <Input
+                            value={editingExportApi.import_button_text || ""}
+                            onChange={(e) => updateApi(editingExportApiIndex, { import_button_text: e.target.value })}
+                            placeholder="Import to LMS"
+                          />
+                        </div>
+                        <div className="space-y-1">
                           <Label className="text-xs">Authorization</Label>
                           <Input
                             type="password"
@@ -1656,6 +1740,24 @@ const ResultPageSettingsSection = () => {
                             onChange={(e) => updateApi(editingExportApiIndex, { authorization: e.target.value })}
                             placeholder="Bearer <token>"
                           />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Post-Import Button Text (optional)</Label>
+                            <Input
+                              value={editingExportApi.post_import_button_text || ""}
+                              onChange={(e) => updateApi(editingExportApiIndex, { post_import_button_text: e.target.value })}
+                              placeholder="Check Import Result"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Post-Import Button URL (optional)</Label>
+                            <Input
+                              value={editingExportApi.post_import_button_url || ""}
+                              onChange={(e) => updateApi(editingExportApiIndex, { post_import_button_url: e.target.value })}
+                              placeholder="https://lms.example.com/import/status"
+                            />
+                          </div>
                         </div>
                         <div className="space-y-2">
                           <div className="flex items-center justify-between">

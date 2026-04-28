@@ -16,7 +16,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import UserMenu from "@/components/UserMenu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AnalyticsOption, CustomVisualizationConfig, CustomVisualizationLibraryBundle, DataResource, DataSelectionSettings, ExportApiConfig, PdcConfig, SoftwareResource, ServiceChain } from "@/types/dataspace";
+import { AnalyticsOption, CustomVisualizationConfig, CustomVisualizationLibraryBundle, DataResource, DataSelectionSettings, ExportApiConfig, PdcConfig, ProcessingPageSettings, SoftwareResource, ServiceChain } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { Json } from "@/integrations/supabase/types";
@@ -334,6 +334,16 @@ const getDataSelectionSettings = (features: unknown): DataSelectionSettings | nu
   };
 };
 
+const getProcessingPageSettings = (features: unknown): ProcessingPageSettings | null => {
+  if (!isRecord(features)) return null;
+  const processingPage = isRecord(features.processingPage) ? features.processingPage : {};
+  const pendingWaitSeconds =
+    typeof processingPage.pendingWaitSeconds === "number" && Number.isFinite(processingPage.pendingWaitSeconds)
+      ? Math.max(5, Math.min(600, Math.round(processingPage.pendingWaitSeconds)))
+      : 60;
+  return { pendingWaitSeconds };
+};
+
 const buildDummySkillResult = (error: unknown, organizationName: string) => {
   const categories = [
     "Data Management",
@@ -393,6 +403,7 @@ const OrgGatewayContent = ({
   orgExecutionToken,
   customVisualizations,
   dataSelectionSettings,
+  processingPageSettings,
   softwareResources,
   dataResources,
   serviceChains,
@@ -402,6 +413,7 @@ const OrgGatewayContent = ({
   orgExecutionToken: string | null;
   customVisualizations: CustomVisualizationConfig[];
   dataSelectionSettings: DataSelectionSettings | null;
+  processingPageSettings: ProcessingPageSettings | null;
   softwareResources: SoftwareResource[];
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
@@ -850,6 +862,7 @@ const OrgGatewayContent = ({
               onBack={handleProcessingBack}
               allowContinueOnPdcError={allowContinueOnPdcError}
               onContinueWithDummyResult={handleContinueWithDummyResult}
+              pendingWaitSeconds={processingPageSettings?.pendingWaitSeconds}
             />
           )}
           {currentStepName === "Results" && activeAnalyticsType && (
@@ -864,6 +877,7 @@ const OrgGatewayContent = ({
               orgExecutionToken={orgExecutionToken}
               llmPromptContext={activeLlmPromptContext}
               selectedAnalytics={selectedAnalytics}
+              selectedDataResources={selectedData?.selectedDataResources || []}
               selectedAnalyticsTargetId={activeAnalyticsTargetId}
               customVisualizations={customVisualizations}
               showDebugApiExportConfig={isDebugMode}
@@ -893,6 +907,7 @@ const OrgGateway = () => {
   const [serviceChains, setServiceChains] = useState<ServiceChain[]>([]);
   const [customVisualizations, setCustomVisualizations] = useState<CustomVisualizationConfig[]>([]);
   const [dataSelectionSettings, setDataSelectionSettings] = useState<DataSelectionSettings | null>(null);
+  const [processingPageSettings, setProcessingPageSettings] = useState<ProcessingPageSettings | null>(null);
   const themeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -929,6 +944,7 @@ const OrgGateway = () => {
         setServiceChains([]);
         setCustomVisualizations([]);
         setDataSelectionSettings(null);
+        setProcessingPageSettings(null);
 
         themeCleanupRef.current?.();
         themeCleanupRef.current = null;
@@ -984,8 +1000,10 @@ const OrgGateway = () => {
         const resultPageExportConfigs = getResultPageExportApiConfigs(globalConfigData?.features);
         const resultPageCustomVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
         const dataSelectionConfig = getDataSelectionSettings(globalConfigData?.features);
+        const processingPageConfig = getProcessingPageSettings(globalConfigData?.features);
         setCustomVisualizations(resultPageCustomVisualizations);
         setDataSelectionSettings(dataSelectionConfig);
+        setProcessingPageSettings(processingPageConfig);
 
         // Fetch PDC config for this organization
         const { data: pdcData } = await supabase
@@ -1187,6 +1205,7 @@ const OrgGateway = () => {
         serviceChains={serviceChains}
         customVisualizations={customVisualizations}
         dataSelectionSettings={dataSelectionSettings}
+        processingPageSettings={processingPageSettings}
       />
     </ProcessSessionProvider>
   );

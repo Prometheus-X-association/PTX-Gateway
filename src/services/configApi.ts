@@ -5,6 +5,7 @@ import {
   CustomVisualizationLibraryBundle,
   DataSelectionSettings,
   ExportApiConfig,
+  ProcessingPageSettings,
 } from "@/types/dataspace";
 
 const CONFIG_API_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/config-api`;
@@ -136,6 +137,7 @@ export interface GlobalConfigData {
     maxFilesCount?: number;
     resultPage?: ResultPageSettingsBackup;
     dataSelection?: DataSelectionSettings;
+    processingPage?: ProcessingPageSettings;
   };
   logging?: {
     enabled?: boolean;

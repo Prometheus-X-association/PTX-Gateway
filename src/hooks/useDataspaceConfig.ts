@@ -16,6 +16,7 @@ import {
   CustomVisualizationConfig,
   CustomVisualizationLibraryBundle,
   DataSelectionSettings,
+  ProcessingPageSettings,
 } from "@/types/dataspace";
 import { Json } from "@/integrations/supabase/types";
 
@@ -171,6 +172,18 @@ const getDataSelectionSettings = (features: unknown): DataSelectionSettings | nu
   };
 };
 
+const getProcessingPageSettings = (features: unknown): ProcessingPageSettings | null => {
+  if (!isRecord(features)) return null;
+  const processingPage = isRecord(features.processingPage) ? features.processingPage : {};
+  const pendingWaitSecondsRaw = processingPage.pendingWaitSeconds;
+  const pendingWaitSeconds =
+    typeof pendingWaitSecondsRaw === "number" && Number.isFinite(pendingWaitSecondsRaw)
+      ? Math.max(5, Math.min(600, Math.round(pendingWaitSecondsRaw)))
+      : 60;
+
+  return { pendingWaitSeconds };
+};
+
 export const useDataspaceConfig = (
   organizationId?: string,
   options?: { enabled?: boolean }
@@ -183,6 +196,7 @@ export const useDataspaceConfig = (
     serviceChains: [],
     customVisualizations: [],
     dataSelectionSettings: null,
+    processingPageSettings: null,
     isLoading: true,
     error: null,
   });
@@ -261,6 +275,7 @@ export const useDataspaceConfig = (
         : legacyExportApiConfigs;
       const customVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
       const dataSelectionSettings = getDataSelectionSettings(globalConfigData?.features);
+      const processingPageSettings = getProcessingPageSettings(globalConfigData?.features);
 
       // Parse PDC config
       const pdcConfig: PdcConfig | null = pdcData
@@ -351,6 +366,7 @@ export const useDataspaceConfig = (
         serviceChains,
         customVisualizations,
         dataSelectionSettings,
+        processingPageSettings,
         isLoading: false,
         error: null,
       });

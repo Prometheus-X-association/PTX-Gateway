@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { Settings, Database, Globe, Users, Shield, ArrowLeft, Building2, Palette, Link2, Brain, FileJson } from "lucide-react";
+import { Settings, Database, Globe, Users, Shield, ArrowLeft, Building2, Palette, Link2, Brain, FileJson, Timer } from "lucide-react";
 import { Download, Upload, Loader2, Copy, Info } from "lucide-react";
 import PdcConfigSection from "./PdcConfigSection";
 import ResourcesConfigSection from "./ResourcesConfigSection";
@@ -29,6 +29,8 @@ import EmbedAccessSection from "./EmbedAccessSection";
 import LlmSettingsSection from "./LlmSettingsSection";
 import ResultPageSettingsSection from "./ResultPageSettingsSection";
 import DataSelectionSettingsSection from "./DataSelectionSettingsSection";
+import ProcessingPageSettingsSection from "./ProcessingPageSettingsSection";
+import ChooseAnalyticsPageSettingsSection from "./ChooseAnalyticsPageSettingsSection";
 import {
   exportSettingsBackup,
   importSettingsBackup,
@@ -296,31 +298,41 @@ const AdminDashboard = () => {
         </header>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-flex">
+          <TabsList className="grid w-full grid-cols-7 lg:w-auto lg:inline-flex">
             <TabsTrigger value="pdc" className="flex items-center gap-2">
               <Globe className="h-4 w-4" />
               <span className="hidden sm:inline">PDC Config</span>
               <span className="sm:hidden">PDC</span>
-            </TabsTrigger>
-            <TabsTrigger value="resources" className="flex items-center gap-2">
-              <Database className="h-4 w-4" />
-              <span className="hidden sm:inline">Resources</span>
-              <span className="sm:hidden">Data</span>
             </TabsTrigger>
             <TabsTrigger value="global" className="flex items-center gap-2">
               <Settings className="h-4 w-4" />
               <span className="hidden sm:inline">Global Settings</span>
               <span className="sm:hidden">Settings</span>
             </TabsTrigger>
-            <TabsTrigger value="result" className="flex items-center gap-2">
-              <FileJson className="h-4 w-4" />
-              <span className="hidden sm:inline">Result Page</span>
-              <span className="sm:hidden">Result</span>
+            <TabsTrigger value="resources" className="flex items-center gap-2">
+              <Database className="h-4 w-4" />
+              <span className="hidden sm:inline">Resources</span>
+              <span className="sm:hidden">Data</span>
+            </TabsTrigger>
+            <TabsTrigger value="choose-analytics-page" className="flex items-center gap-2">
+              <Database className="h-4 w-4" />
+              <span className="hidden sm:inline">Choose Analytics Page</span>
+              <span className="sm:hidden">Analytics</span>
             </TabsTrigger>
             <TabsTrigger value="data-selection" className="flex items-center gap-2">
               <Database className="h-4 w-4" />
               <span className="hidden sm:inline">Data Selection</span>
               <span className="sm:hidden">Data Sel</span>
+            </TabsTrigger>
+            <TabsTrigger value="processing-page" className="flex items-center gap-2">
+              <Timer className="h-4 w-4" />
+              <span className="hidden sm:inline">Show Processing Page</span>
+              <span className="sm:hidden">Processing</span>
+            </TabsTrigger>
+            <TabsTrigger value="result" className="flex items-center gap-2">
+              <FileJson className="h-4 w-4" />
+              <span className="hidden sm:inline">Result Page</span>
+              <span className="sm:hidden">Result</span>
             </TabsTrigger>
           </TabsList>
 
@@ -330,6 +342,10 @@ const AdminDashboard = () => {
 
           <TabsContent value="resources">
             <ResourcesConfigSection />
+          </TabsContent>
+
+          <TabsContent value="choose-analytics-page">
+            <ChooseAnalyticsPageSettingsSection />
           </TabsContent>
 
           <TabsContent value="global">
@@ -415,12 +431,16 @@ const AdminDashboard = () => {
             </Tabs>
           </TabsContent>
 
-          <TabsContent value="result">
-            <ResultPageSettingsSection />
-          </TabsContent>
-
           <TabsContent value="data-selection">
             <DataSelectionSettingsSection />
+          </TabsContent>
+
+          <TabsContent value="processing-page">
+            <ProcessingPageSettingsSection />
+          </TabsContent>
+
+          <TabsContent value="result">
+            <ResultPageSettingsSection />
           </TabsContent>
 
         </Tabs>
