@@ -770,6 +770,21 @@ const OrgGatewayContent = ({
   const activeAnalyticsTargetId = analyticsTargetId
     ?? persistedFlow?.analyticsTargetId
     ?? inferAnalyticsTargetIdFromPayload(activePdcPayload, softwareResources, serviceChains);
+  const activeSelectedAnalytics = useMemo<AnalyticsOption | null>(() => {
+    if (selectedAnalytics) return selectedAnalytics;
+    if (!activeAnalyticsTargetId) return null;
+    if (activeAnalyticsTargetId.startsWith("software:")) {
+      const softwareId = activeAnalyticsTargetId.slice("software:".length);
+      const software = softwareResources.find((item) => item.id === softwareId);
+      return software ? { type: "software", data: software } : null;
+    }
+    if (activeAnalyticsTargetId.startsWith("serviceChain:")) {
+      const serviceChainId = activeAnalyticsTargetId.slice("serviceChain:".length);
+      const chain = serviceChains.find((item) => item.id === serviceChainId);
+      return chain ? { type: "serviceChain", data: chain } : null;
+    }
+    return null;
+  }, [activeAnalyticsTargetId, selectedAnalytics, serviceChains, softwareResources]);
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
@@ -876,7 +891,7 @@ const OrgGatewayContent = ({
               organizationId={organization.id}
               orgExecutionToken={orgExecutionToken}
               llmPromptContext={activeLlmPromptContext}
-              selectedAnalytics={selectedAnalytics}
+              selectedAnalytics={activeSelectedAnalytics}
               selectedDataResources={selectedData?.selectedDataResources || []}
               selectedAnalyticsTargetId={activeAnalyticsTargetId}
               customVisualizations={customVisualizations}

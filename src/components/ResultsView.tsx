@@ -2150,6 +2150,26 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
   );
 };
 
+const extractCustomVisualizationSnapshotHtml = (container: HTMLElement | null): string => {
+  if (!container) return "";
+  const host = container.querySelector("ptx-custom-visualization");
+  if (!host) return "";
+  const shadowRoot = (host as HTMLElement).shadowRoot;
+  if (!shadowRoot) return "";
+
+  const tabulatorRoot = shadowRoot.querySelector(".tabulator");
+  if (tabulatorRoot) {
+    return `<div class="tabulator-print-wrap">${tabulatorRoot.outerHTML}</div>`;
+  }
+
+  const customContainer = shadowRoot.querySelector(".ptx-custom-visualization-container");
+  if (customContainer instanceof HTMLElement) {
+    return customContainer.innerHTML;
+  }
+
+  return shadowRoot.innerHTML;
+};
+
 const ResultsView = ({
   analyticsType,
   onRestart,
@@ -2166,6 +2186,7 @@ const ResultsView = ({
   customVisualizations = [],
   showDebugApiExportConfig = false,
 }: ResultsViewProps) => {
+  const customVisualizationMountRef = useRef<HTMLDivElement | null>(null);
   const [resultData, setResultData] = useState<unknown>(fallbackResultData);
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -2560,13 +2581,7 @@ const ResultsView = ({
             }
           : null;
 
-      const customVisualizationHost = document.querySelector("ptx-custom-visualization");
-      const customVisualizationShadow = customVisualizationHost?.shadowRoot || null;
-      const customVisualizationContainer = customVisualizationShadow?.querySelector(".ptx-custom-visualization-container");
-      const customVisualizationHtml =
-        customVisualizationContainer instanceof HTMLElement
-          ? customVisualizationContainer.innerHTML
-          : "";
+      const customVisualizationHtml = extractCustomVisualizationSnapshotHtml(customVisualizationMountRef.current);
 
       const reportHtml = `
         <!doctype html>
@@ -2588,6 +2603,11 @@ const ResultsView = ({
               .list { margin: 8px 0 0 18px; }
               .embed-row { border: 1px solid #dbeafe; background: #eff6ff; border-radius: 8px; padding: 10px; margin: 8px 0; }
               .viz-wrap { border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; background: #fff; overflow: auto; }
+              .tabulator-print-wrap table { border-collapse: collapse; width: 100%; font-size: 12px; }
+              .tabulator-print-wrap .tabulator-header, .tabulator-print-wrap .tabulator-footer, .tabulator-print-wrap .tabulator-paginator, .tabulator-print-wrap .tabulator-col-resize-handle, .tabulator-print-wrap .tabulator-row-handle { display: none !important; }
+              .tabulator-print-wrap .tabulator-tableholder { overflow: visible !important; }
+              .tabulator-print-wrap .tabulator-row { border-bottom: 1px solid #e2e8f0; }
+              .tabulator-print-wrap .tabulator-cell, .tabulator-print-wrap .tabulator-col-content { padding: 6px 8px; vertical-align: top; }
             </style>
           </head>
           <body>
@@ -2674,10 +2694,15 @@ const ResultsView = ({
         </html>
       `;
 
-      const reportWindow = window.open("", "_blank", "noopener,noreferrer");
+      const reportWindow = window.open("", "_blank");
       if (!reportWindow) {
         toast.error("Popup blocked. Please allow popups to export PDF.");
         return;
+      }
+      try {
+        reportWindow.opener = null;
+      } catch {
+        // Some browsers may prevent setting opener directly.
       }
       reportWindow.document.open();
       reportWindow.document.write(reportHtml);
@@ -3116,11 +3141,13 @@ const ResultsView = ({
 
             {activeCustomVisualization && (
               <TabsContent value="custom">
-                <CustomVisualizationRuntime
-                  visualization={activeCustomVisualization}
-                  resultData={resultData}
-                  onResultDataChange={setResultData}
-                />
+                <div ref={customVisualizationMountRef}>
+                  <CustomVisualizationRuntime
+                    visualization={activeCustomVisualization}
+                    resultData={resultData}
+                    onResultDataChange={setResultData}
+                  />
+                </div>
               </TabsContent>
             )}
             
