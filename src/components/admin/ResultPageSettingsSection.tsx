@@ -462,6 +462,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   const tabulatorState = runtime.__ptxTabulatorStateStore[stateKey] || {
     validated: false,
     rowsSnapshot: null,
+    workingRows: null,
     skipNextJsonHydration: false,
     lastChangeSource: "initial",
     lastResultSignature: null,
@@ -533,18 +534,44 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       validated_changed_skill_description: Boolean(tabulatorState.validatedDiffByKey?.[skillKey]?.skill_description),
     };
   });
+  const cloneRows = (sourceRows) => (sourceRows || []).map((row) => ({ ...row }));
 
   const useSnapshotForThisRender =
     Boolean(tabulatorState.skipNextJsonHydration) &&
     Array.isArray(tabulatorState.rowsSnapshot);
   const currentResultSignature = JSON.stringify(resultRoot);
+  const hasWorkingRows = Array.isArray(tabulatorState.workingRows) && tabulatorState.workingRows.length > 0;
+  const freshRowsFromJson = buildRowsFromResult(resultRoot);
+  const mergeExternalJsonIntoWorkingRows = (freshRows, workingRows) => {
+    const workingByKey = new Map(
+      (workingRows || []).map((row) => [row.original_key || row.row_uid || row.skill_name, row])
+    );
+    return freshRows.map((freshRow) => {
+      const previous = workingByKey.get(freshRow.original_key);
+      if (!previous) return freshRow;
+      return {
+        ...freshRow,
+        row_uid: previous.row_uid || freshRow.row_uid,
+        visual_deleted: Boolean(previous.visual_deleted),
+        skill_name: previous.visual_deleted ? "" : freshRow.skill_name,
+        skill_description: previous.visual_deleted ? "" : freshRow.skill_description,
+        validated_changed_skill_name: Boolean(previous.validated_changed_skill_name),
+        validated_changed_skill_description: Boolean(previous.validated_changed_skill_description),
+      };
+    });
+  };
 
   const rows = useSnapshotForThisRender
     ? tabulatorState.rowsSnapshot.map((row, index) => ({
       row_uid: row.row_uid || ((row.original_key || "row") + "__" + index),
       ...row,
     }))
-    : buildRowsFromResult(resultRoot);
+    : (tabulatorState.lastChangeSource === "external" && hasWorkingRows)
+      ? mergeExternalJsonIntoWorkingRows(freshRowsFromJson, tabulatorState.workingRows)
+      : hasWorkingRows
+        ? cloneRows(tabulatorState.workingRows)
+        : freshRowsFromJson;
+  tabulatorState.workingRows = cloneRows(rows);
 
   // Consume the one-shot flag so only direct Tabulator-originated JSON updates
   // skip hydration once; later external JSON edits will refresh table content.
@@ -697,8 +724,8 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       font-weight: 600;
     }
     .tabulator-cell-deleted {
-      background: #fee2e2 !important;
-      color: #991b1b;
+      background: #fde68a !important;
+      color: #7c2d12;
       font-style: italic;
     }
     .tabulator-row-soft-deleted .tabulator-cell {
@@ -842,6 +869,10 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   let isExternalImmediateMode = !useSnapshotForThisRender && tabulatorState.lastChangeSource === "external";
 
   const normalizeDiffValue = (value) => String(value ?? "").trim();
+  const persistWorkingRowsFromTable = () => {
+    if (!table) return;
+    tabulatorState.workingRows = table.getData().map((row) => ({ ...row }));
+  };
   const isTrackedField = (field) => field === "skill_name" || field === "skill_description";
   const isCellChanged = (rowData, field) => {
     if (!isTrackedField(field)) return false;
@@ -1163,10 +1194,12 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     ) {
       hidePopover();
     }
+    persistWorkingRowsFromTable();
     setDirty(true);
   });
   table.on("dataChanged", () => {
     if (isProgrammaticUpdate) return;
+    persistWorkingRowsFromTable();
     setDirty(true);
   });
 
@@ -1188,6 +1221,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     });
     table.deselectRow();
     table.redraw(true);
+    persistWorkingRowsFromTable();
     setDirty(true);
   });
 
@@ -1219,6 +1253,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       showValidatedDiff = true;
       tabulatorState.validated = true;
       tabulatorState.rowsSnapshot = nextRows.map((row) => ({ ...row }));
+      tabulatorState.workingRows = nextRows.map((row) => ({ ...row }));
       table.redraw(true);
       setDirty(false);
       window.setTimeout(() => {
