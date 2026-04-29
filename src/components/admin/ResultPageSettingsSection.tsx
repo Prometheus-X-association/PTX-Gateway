@@ -467,6 +467,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     lastResultSignature: null,
     baselineResult: null,
     baselineRows: null,
+    validatedDiffByKey: {},
   };
   if (!tabulatorState.baselineResult) {
     tabulatorState.baselineResult = JSON.parse(JSON.stringify(resultRoot));
@@ -528,8 +529,8 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       skill_name: toDisplayName(skillKey),
       skill_description: description,
       visual_deleted: false,
-      validated_changed_skill_name: false,
-      validated_changed_skill_description: false,
+      validated_changed_skill_name: Boolean(tabulatorState.validatedDiffByKey?.[skillKey]?.skill_name),
+      validated_changed_skill_description: Boolean(tabulatorState.validatedDiffByKey?.[skillKey]?.skill_description),
     };
   });
 
@@ -649,6 +650,22 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       font-size: 12px;
       color: #64748b;
     }
+    .tabulator-toolbar .info-grid {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-top: 2px;
+    }
+    .tabulator-toolbar .info-card {
+      min-height: 38px;
+      border: 1px solid rgba(148, 163, 184, 0.32);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: rgba(248, 250, 252, 0.85);
+      display: flex;
+      align-items: center;
+    }
     .tabulator-toolbar .legend {
       display: inline-flex;
       align-items: center;
@@ -663,6 +680,12 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       border: 1px solid rgba(124, 45, 18, 0.24);
       background: #fde68a;
       flex: 0 0 auto;
+    }
+    @media (min-width: 960px) {
+      .tabulator-toolbar .info-grid {
+        grid-template-columns: 1fr 1fr;
+        align-items: stretch;
+      }
     }
     .tabulator-table-host {
       min-height: 560px;
@@ -785,15 +808,19 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   deleteButton.textContent = "Delete selected rows";
 
   const hint = document.createElement("div");
-  hint.className = "hint";
+  hint.className = "hint info-card";
   hint.textContent = "Changed cells are highlighted. Hover a changed cell to view original value and restore it.";
 
   const legend = document.createElement("div");
-  legend.className = "legend";
+  legend.className = "legend info-card";
   legend.innerHTML = '<span class="legend-swatch" aria-hidden="true"></span><span>Highlighted cell: value differs from original extracted skills</span>';
 
+  const infoGrid = document.createElement("div");
+  infoGrid.className = "info-grid";
+  infoGrid.append(legend, hint);
+
   toolbarActions.append(saveStatus, deleteButton, saveButton);
-  toolbar.append(searchInput, toolbarActions, hint, legend);
+  toolbar.append(searchInput, toolbarActions, infoGrid);
 
   const tableHost = document.createElement("div");
   tableHost.className = "tabulator-table-host";
@@ -1174,6 +1201,15 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
         rowData.validated_changed_skill_name = rowData.visual_deleted ? true : changedName;
         rowData.validated_changed_skill_description = rowData.visual_deleted ? true : changedDescription;
       });
+      const validatedDiffByKey = {};
+      nextRows.forEach((rowData) => {
+        const key = rowData.original_key || rowData.skill_name || rowData.row_uid;
+        validatedDiffByKey[key] = {
+          skill_name: Boolean(rowData.validated_changed_skill_name),
+          skill_description: Boolean(rowData.validated_changed_skill_description),
+        };
+      });
+      tabulatorState.validatedDiffByKey = validatedDiffByKey;
       applyRowsToJson(nextRows);
       isProgrammaticUpdate = true;
       showValidatedDiff = true;
