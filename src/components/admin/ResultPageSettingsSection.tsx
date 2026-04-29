@@ -1068,11 +1068,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
     tableRows.forEach((rowData) => {
       if (rowData.visual_deleted) {
-        const keepKey = rowData.original_key;
-        if (keepKey && !usedKeys.has(keepKey) && mutableRoot[keepKey]) {
-          usedKeys.add(keepKey);
-          orderedEntries.push([keepKey, JSON.parse(JSON.stringify(mutableRoot[keepKey]))]);
-        }
+        // Explicit delete: do not carry this key into the next JSON root.
         return;
       }
       const previousKey = rowData.original_key;
