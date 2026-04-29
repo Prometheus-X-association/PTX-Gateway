@@ -2094,6 +2094,11 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
     const runVisualization = async () => {
       container.innerHTML = "";
       try {
+        if (!visualization.render_code?.trim()) {
+          // Ensure prior interactive state from older scripts cannot leak visually.
+          delete (shadowRoot as unknown as { __ptxTabulatorState?: unknown }).__ptxTabulatorState;
+          return;
+        }
         await loadLibraries();
         if (disposed) return;
 
@@ -2243,7 +2248,9 @@ const ResultsView = ({
   const activeCustomVisualization = useMemo(() => {
     if (!selectedTargetId) return null;
     return customVisualizations.find((visualization) =>
-      visualization.is_active && (visualization.target_resources || []).includes(selectedTargetId)
+      visualization.is_active &&
+      Boolean(visualization.render_code?.trim()) &&
+      (visualization.target_resources || []).includes(selectedTargetId)
     ) || null;
   }, [customVisualizations, selectedTargetId]);
   const activeCustomVisualizationLabel = activeCustomVisualization?.name?.trim() || "Custom Visualization";

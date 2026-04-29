@@ -456,6 +456,22 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     throw new Error("Expected result object at resultData.data.content.data.result.");
   }
 
+  const runtime = window;
+  runtime.__ptxTabulatorStateStore = runtime.__ptxTabulatorStateStore || {};
+  const stateKey = String(config?.id || "default_tabulator");
+  const tabulatorState = runtime.__ptxTabulatorStateStore[stateKey] || {
+    validated: false,
+    rowsSnapshot: null,
+    skipNextJsonHydration: false,
+    lastChangeSource: "initial",
+    lastResultSignature: null,
+    baselineResult: null,
+    baselineRows: null,
+  };
+  if (!tabulatorState.baselineResult) {
+    tabulatorState.baselineResult = JSON.parse(JSON.stringify(resultRoot));
+  }
+
   const toDisplayName = (key) => String(key || "").replaceAll("_", " ");
   const toJsonKey = (name) =>
     String(name || "")
@@ -463,6 +479,19 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       .toLowerCase()
       .replace(/\\s+/g, "_")
       .replace(/_+/g, "_");
+  if (!Array.isArray(tabulatorState.baselineRows)) {
+    tabulatorState.baselineRows = Object.entries(tabulatorState.baselineResult || {}).map(([skillKey, value]) => {
+      const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      const skills = Array.isArray(record.skills) ? record.skills : [];
+      const firstSkill = skills[0] && typeof skills[0] === "object" ? skills[0] : {};
+      return {
+        key: skillKey,
+        name: toDisplayName(skillKey),
+        description: firstSkill?.description?.literal || "",
+      };
+    });
+  }
+  runtime.__ptxTabulatorStateStore[stateKey] = tabulatorState;
 
   const cloneResultData = () => JSON.parse(JSON.stringify(resultData));
   const getMutableResultRoot = (draft) => {
@@ -473,19 +502,61 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     return null;
   };
 
-  const rows = Object.entries(resultRoot).map(([skillKey, value]) => {
+  const buildRowsFromResult = (sourceResult) => Object.entries(sourceResult).map(([skillKey, value], index) => {
     const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const skills = Array.isArray(record.skills) ? record.skills : [];
     const firstSkill = skills[0] && typeof skills[0] === "object" ? skills[0] : {};
     const description = firstSkill?.description?.literal || "";
+    const baselineValue = tabulatorState.baselineResult?.[skillKey];
+    const baselineRecord = baselineValue && typeof baselineValue === "object" && !Array.isArray(baselineValue) ? baselineValue : {};
+    const baselineSkills = Array.isArray(baselineRecord.skills) ? baselineRecord.skills : [];
+    const baselineFirstSkill = baselineSkills[0] && typeof baselineSkills[0] === "object" ? baselineSkills[0] : {};
+    const baselineByIndex = Array.isArray(tabulatorState.baselineRows) ? tabulatorState.baselineRows[index] : null;
+    const hasBaseline = Boolean(tabulatorState.baselineResult?.[skillKey] || baselineByIndex);
+    const baselineName = tabulatorState.baselineResult?.[skillKey]
+      ? toDisplayName(skillKey)
+      : String(baselineByIndex?.name || "");
+    const baselineDescription = tabulatorState.baselineResult?.[skillKey]
+      ? (baselineFirstSkill?.description?.literal || "")
+      : String(baselineByIndex?.description || "");
 
     return {
-      id: skillKey,
+      row_uid: skillKey + "__" + index,
       original_key: skillKey,
+      original_skill_name: hasBaseline ? baselineName : "",
+      original_skill_description: baselineDescription,
       skill_name: toDisplayName(skillKey),
       skill_description: description,
+      visual_deleted: false,
+      validated_changed_skill_name: false,
+      validated_changed_skill_description: false,
     };
   });
+
+  const useSnapshotForThisRender =
+    Boolean(tabulatorState.skipNextJsonHydration) &&
+    Array.isArray(tabulatorState.rowsSnapshot);
+  const currentResultSignature = JSON.stringify(resultRoot);
+
+  const rows = useSnapshotForThisRender
+    ? tabulatorState.rowsSnapshot.map((row, index) => ({
+      row_uid: row.row_uid || ((row.original_key || "row") + "__" + index),
+      ...row,
+    }))
+    : buildRowsFromResult(resultRoot);
+
+  // Consume the one-shot flag so only direct Tabulator-originated JSON updates
+  // skip hydration once; later external JSON edits will refresh table content.
+  if (tabulatorState.skipNextJsonHydration) {
+    tabulatorState.skipNextJsonHydration = false;
+  } else {
+    if (tabulatorState.lastResultSignature !== null && tabulatorState.lastResultSignature !== currentResultSignature) {
+      tabulatorState.lastChangeSource = "external";
+    } else if (tabulatorState.lastChangeSource === "initial") {
+      tabulatorState.lastChangeSource = "initial";
+    }
+  }
+  tabulatorState.lastResultSignature = currentResultSignature;
 
   container.innerHTML = "";
 
@@ -578,9 +649,83 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       font-size: 12px;
       color: #64748b;
     }
+    .tabulator-toolbar .legend {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #64748b;
+    }
+    .tabulator-toolbar .legend-swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      border: 1px solid rgba(124, 45, 18, 0.24);
+      background: #fde68a;
+      flex: 0 0 auto;
+    }
     .tabulator-table-host {
       min-height: 560px;
       width: 100%;
+    }
+    .tabulator-cell-changed {
+      background: #fde68a !important;
+      color: #7c2d12;
+      font-weight: 600;
+    }
+    .tabulator-cell-deleted {
+      background: #fee2e2 !important;
+      color: #991b1b;
+      font-style: italic;
+    }
+    .tabulator-row-soft-deleted .tabulator-cell {
+      opacity: 0.85;
+    }
+    .tabulator-change-popover {
+      position: fixed;
+      max-width: 280px;
+      z-index: 100000;
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      background: #ffffff;
+      color: #1f2937;
+      box-shadow: 0 14px 30px rgba(15, 23, 42, 0.24);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .tabulator-change-popover::after {
+      content: "";
+      position: absolute;
+      left: 18px;
+      bottom: -8px;
+      border-width: 8px 8px 0 8px;
+      border-style: solid;
+      border-color: #ffffff transparent transparent transparent;
+      filter: drop-shadow(0 2px 0 rgba(148, 163, 184, 0.25));
+    }
+    .tabulator-change-popover .label {
+      font-weight: 700;
+      color: #374151;
+      margin-bottom: 4px;
+    }
+    .tabulator-change-popover .value {
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #111827;
+      margin-bottom: 8px;
+    }
+    .tabulator-change-popover .revert-btn {
+      border: 0;
+      border-radius: 8px;
+      padding: 7px 10px;
+      background: #0f766e;
+      color: #ffffff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tabulator-change-popover .revert-btn:hover {
+      background: #0d5f58;
     }
     .tabulator {
       border-radius: 14px;
@@ -628,7 +773,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   const saveButton = document.createElement("button");
   saveButton.type = "button";
   saveButton.className = "tabulator-save-button";
-  saveButton.textContent = "Save changes to JSON";
+  saveButton.textContent = "Validate changes";
 
   const saveStatus = document.createElement("span");
   saveStatus.className = "tabulator-save-status";
@@ -641,10 +786,14 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent = "Edit cells directly, select rows to delete, then click Save changes to synchronize with the JSON view.";
+  hint.textContent = "Changed cells are highlighted. Hover a changed cell to view original value and restore it.";
+
+  const legend = document.createElement("div");
+  legend.className = "legend";
+  legend.innerHTML = '<span class="legend-swatch" aria-hidden="true"></span><span>Highlighted cell: value differs from original extracted skills</span>';
 
   toolbarActions.append(saveStatus, deleteButton, saveButton);
-  toolbar.append(searchInput, toolbarActions, hint);
+  toolbar.append(searchInput, toolbarActions, hint, legend);
 
   const tableHost = document.createElement("div");
   tableHost.className = "tabulator-table-host";
@@ -652,15 +801,201 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   shell.append(toolbar, tableHost);
   container.appendChild(shell);
 
+  let activePopover = null;
+  let activePopoverLeaveHandler = null;
+  let activePopoverCell = null;
+  let isPopoverPinned = false;
+  let suppressNextCellClick = false;
+  let globalOutsideMouseDownHandler = null;
+  let hoverCloseTimer = null;
+  let showValidatedDiff = Boolean(tabulatorState.validated) || (
+    !useSnapshotForThisRender && tabulatorState.lastChangeSource === "external"
+  );
+  let isProgrammaticUpdate = false;
+  let isExternalImmediateMode = !useSnapshotForThisRender && tabulatorState.lastChangeSource === "external";
+
+  const normalizeDiffValue = (value) => String(value ?? "").trim();
+  const isTrackedField = (field) => field === "skill_name" || field === "skill_description";
+  const isCellChanged = (rowData, field) => {
+    if (!isTrackedField(field)) return false;
+    if (!rowData) return false;
+    if (rowData.visual_deleted) return true;
+    if (isExternalImmediateMode) {
+      const originalField = field === "skill_name"
+        ? "original_skill_name"
+        : "original_skill_description";
+      return normalizeDiffValue(rowData[field]) !== normalizeDiffValue(rowData[originalField]);
+    }
+    const validatedField = field === "skill_name"
+      ? "validated_changed_skill_name"
+      : "validated_changed_skill_description";
+    return Boolean(rowData[validatedField]);
+  };
+
+  const hidePopover = () => {
+    if (hoverCloseTimer) {
+      window.clearTimeout(hoverCloseTimer);
+      hoverCloseTimer = null;
+    }
+    if (globalOutsideMouseDownHandler) {
+      window.removeEventListener("mousedown", globalOutsideMouseDownHandler, true);
+      globalOutsideMouseDownHandler = null;
+    }
+    if (activePopoverLeaveHandler) {
+      activePopover.removeEventListener("mouseleave", activePopoverLeaveHandler);
+      activePopoverLeaveHandler = null;
+    }
+    if (activePopover?.isConnected) activePopover.remove();
+    activePopover = null;
+    activePopoverCell = null;
+    isPopoverPinned = false;
+  };
+
+  const keepHoverPopoverOpenOrClose = () => {
+    if (!activePopover || !activePopoverCell || isPopoverPinned) return;
+    const overCell = activePopoverCell.getElement().matches(":hover");
+    const overPopover = activePopover.matches(":hover");
+    if (!overCell && !overPopover) {
+      hidePopover();
+    }
+  };
+
+  const restoreCell = (cell) => {
+    const row = cell.getRow();
+    const rowData = row.getData();
+    const field = cell.getField();
+    if (!isTrackedField(field)) return;
+    const originalField = field === "skill_name" ? "original_skill_name" : "original_skill_description";
+    const nextData = { [field]: rowData[originalField] || "" };
+    if (rowData.visual_deleted) {
+      nextData.visual_deleted = false;
+      nextData.skill_name = rowData.original_skill_name || rowData.skill_name || "";
+      nextData.skill_description = rowData.original_skill_description || rowData.skill_description || "";
+    }
+    row.update(nextData);
+    setDirty(true);
+    table.redraw(true);
+    hidePopover();
+  };
+
+  const showPopover = (cell, originalValue, pinned = false) => {
+    hidePopover();
+    const pop = document.createElement("div");
+    pop.className = "tabulator-change-popover";
+    pop.style.position = "fixed";
+    pop.style.maxWidth = "280px";
+    pop.style.zIndex = "2147483000";
+    pop.style.padding = "10px";
+    pop.style.borderRadius = "12px";
+    pop.style.border = "1px solid rgba(148, 163, 184, 0.45)";
+    pop.style.background = "#ffffff";
+    pop.style.color = "#1f2937";
+    pop.style.boxShadow = "0 14px 30px rgba(15, 23, 42, 0.24)";
+    pop.style.fontSize = "12px";
+    pop.style.lineHeight = "1.45";
+    pop.style.pointerEvents = "auto";
+
+    const tail = document.createElement("div");
+    tail.style.position = "absolute";
+    tail.style.left = "18px";
+    tail.style.bottom = "-8px";
+    tail.style.width = "0";
+    tail.style.height = "0";
+    tail.style.borderLeft = "8px solid transparent";
+    tail.style.borderRight = "8px solid transparent";
+    tail.style.borderTop = "8px solid #ffffff";
+    pop.appendChild(tail);
+
+    pop.innerHTML = \`
+      <div class="label">Original value</div>
+      <div class="value"></div>
+      <button type="button" class="revert-btn">Revert to original</button>
+    \`;
+    pop.appendChild(tail);
+    const label = pop.querySelector(".label");
+    const valueEl = pop.querySelector(".value");
+    const revertBtn = pop.querySelector(".revert-btn");
+    if (label instanceof HTMLElement) {
+      label.style.fontWeight = "700";
+      label.style.color = "#374151";
+      label.style.marginBottom = "4px";
+    }
+    if (valueEl instanceof HTMLElement) {
+      valueEl.style.whiteSpace = "pre-wrap";
+      valueEl.style.wordBreak = "break-word";
+      valueEl.style.color = "#111827";
+      valueEl.style.marginBottom = "8px";
+    }
+    if (revertBtn instanceof HTMLElement) {
+      revertBtn.style.border = "0";
+      revertBtn.style.borderRadius = "8px";
+      revertBtn.style.padding = "7px 10px";
+      revertBtn.style.background = "#0f766e";
+      revertBtn.style.color = "#ffffff";
+      revertBtn.style.fontWeight = "600";
+      revertBtn.style.cursor = "pointer";
+    }
+    const originalText = String(originalValue ?? "");
+    pop.querySelector(".value").textContent = originalText.trim() ? originalText : "(empty or unavailable original value)";
+    pop.querySelector(".revert-btn").addEventListener("click", () => restoreCell(cell));
+    document.body.appendChild(pop);
+
+    const rect = cell.getElement().getBoundingClientRect();
+    const top = Math.max(8, rect.top - pop.offsetHeight - 2);
+    const left = Math.min(
+      Math.max(8, rect.left),
+      window.innerWidth - pop.offsetWidth - 8
+    );
+    pop.style.top = \`\${top}px\`;
+    pop.style.left = \`\${left}px\`;
+
+    activePopover = pop;
+    activePopoverCell = cell;
+    isPopoverPinned = pinned;
+    activePopoverLeaveHandler = () => {
+      if (isPopoverPinned) return;
+      keepHoverPopoverOpenOrClose();
+    };
+    if (!pinned) {
+      pop.addEventListener("mouseleave", activePopoverLeaveHandler);
+    } else {
+      globalOutsideMouseDownHandler = (event) => {
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        const isInPopover = pop.contains(target);
+        const isOnPinnedCell = activePopoverCell?.getElement()?.contains(target);
+        if (!isInPopover && !isOnPinnedCell) {
+          suppressNextCellClick = true;
+          hidePopover();
+          window.setTimeout(() => {
+            suppressNextCellClick = false;
+          }, 0);
+        }
+      };
+      window.addEventListener("mousedown", globalOutsideMouseDownHandler, true);
+    }
+  };
+
   const setDirty = (dirty) => {
+    if (dirty && isProgrammaticUpdate) {
+      return;
+    }
     saveButton.classList.toggle("is-visible", dirty);
     saveButton.classList.toggle("needs-save", dirty);
     saveStatus.classList.toggle("is-dirty", dirty);
     saveStatus.textContent = dirty ? "Unsaved changes" : "Saved";
     saveButton.style.setProperty("display", "inline-flex", "important");
+    if (dirty) {
+      isExternalImmediateMode = false;
+      tabulatorState.lastChangeSource = "tabulator";
+      hidePopover();
+      table?.redraw(true);
+    }
     hint.textContent = dirty
-      ? "You have unsaved table edits. Click Save changes to JSON to synchronize now."
-      : "Edit cells directly, select rows to delete, then click Save changes to synchronize with the JSON view.";
+      ? "You have unsaved edits. Click Validate changes to see highlighted differences."
+      : showValidatedDiff
+        ? "Validated differences are highlighted. Hover or click a highlighted cell to view original value and restore it."
+        : "Edit cells and click Validate changes to inspect differences versus original incoming data.";
   };
 
   const applyRowsToJson = (tableRows) => {
@@ -671,9 +1006,17 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     }
 
     const usedKeys = new Set();
-    const nextRoot = {};
+    const orderedEntries = [];
 
     tableRows.forEach((rowData) => {
+      if (rowData.visual_deleted) {
+        const keepKey = rowData.original_key;
+        if (keepKey && !usedKeys.has(keepKey) && mutableRoot[keepKey]) {
+          usedKeys.add(keepKey);
+          orderedEntries.push([keepKey, JSON.parse(JSON.stringify(mutableRoot[keepKey]))]);
+        }
+        return;
+      }
       const previousKey = rowData.original_key;
       const nextKey = toJsonKey(rowData.skill_name);
       if (!nextKey) {
@@ -684,11 +1027,15 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       }
       usedKeys.add(nextKey);
 
-      const originalRecord = mutableRoot[previousKey] || {
+      const originalRecord = mutableRoot[previousKey] || mutableRoot[nextKey] || {
         skills: [{ description: { literal: "", mimetype: "plain/text" } }],
       };
 
-      const record = JSON.parse(JSON.stringify(originalRecord));
+      const clonedRecord = JSON.parse(JSON.stringify(originalRecord));
+      const record =
+        clonedRecord && typeof clonedRecord === "object" && !Array.isArray(clonedRecord)
+          ? clonedRecord
+          : { skills: [{ description: { literal: "", mimetype: "plain/text" } }] };
 
       if (!Array.isArray(record.skills)) {
         record.skills = [{ description: { literal: "", mimetype: "plain/text" } }];
@@ -703,20 +1050,41 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       record.skills[0].description.literal = rowData.skill_description || "";
       record.skills[0].description.mimetype = record.skills[0].description.mimetype || "plain/text";
 
-      nextRoot[nextKey] = record;
-      rowData.id = nextKey;
-      rowData.original_key = nextKey;
-      rowData.skill_name = toDisplayName(nextKey);
+      orderedEntries.push([nextKey, record]);
+      // Keep original_key/original_* as the initial incoming baseline reference
+      // so highlight compares against original source, not post-validate JSON.
+      rowData.visual_deleted = false;
     });
 
     Object.keys(mutableRoot).forEach((key) => delete mutableRoot[key]);
-    Object.assign(mutableRoot, nextRoot);
+    orderedEntries.forEach(([key, value]) => {
+      mutableRoot[key] = value;
+    });
 
+    // Mark that the next render comes from Tabulator's own write-back and should
+    // keep the in-memory table snapshot instead of rehydrating from JSON.
+    tabulatorState.skipNextJsonHydration = true;
+    tabulatorState.lastChangeSource = "tabulator";
     updateResultData(draft);
+  };
+
+  const cellFormatter = (cell) => {
+    const rowData = cell.getRow().getData();
+    const element = cell.getElement();
+    element.classList.remove("tabulator-cell-changed", "tabulator-cell-deleted");
+    if (rowData.visual_deleted) {
+      element.classList.add("tabulator-cell-deleted");
+      return "";
+    }
+    if (showValidatedDiff && isCellChanged(rowData, cell.getField())) {
+      element.classList.add("tabulator-cell-changed");
+    }
+    return cell.getValue() ?? "";
   };
 
   const table = new window.Tabulator(tableHost, {
     data: rows,
+    index: "row_uid",
     layout: "fitColumns",
     reactiveData: false,
     height: "560px",
@@ -726,6 +1094,9 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     paginationSizeSelector: [12, 25, 50, true],
     placeholder: "No skills found in the result JSON.",
     selectableRows: "highlight",
+    rowFormatter: (row) => {
+      row.getElement().classList.toggle("tabulator-row-soft-deleted", Boolean(row.getData().visual_deleted));
+    },
     rowHeader: {
       formatter: "rowSelection",
       titleFormatter: "rowSelection",
@@ -742,20 +1113,35 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
         editor: "input",
         sorter: "string",
         width: 240,
+        formatter: cellFormatter,
       },
       {
         title: "Skills Description",
         field: "skill_description",
         editor: "textarea",
         sorter: "string",
-        formatter: "textarea",
+        formatter: cellFormatter,
         minWidth: 420,
       },
     ],
   });
 
-  table.on("cellEdited", () => setDirty(true));
-  table.on("dataChanged", () => setDirty(true));
+  table.on("cellEdited", (cell) => {
+    if (isProgrammaticUpdate) return;
+    if (
+      isPopoverPinned &&
+      activePopoverCell &&
+      activePopoverCell.getRow().getIndex() === cell?.getRow?.().getIndex?.() &&
+      activePopoverCell.getField() === cell?.getField?.()
+    ) {
+      hidePopover();
+    }
+    setDirty(true);
+  });
+  table.on("dataChanged", () => {
+    if (isProgrammaticUpdate) return;
+    setDirty(true);
+  });
 
   setDirty(false);
 
@@ -765,17 +1151,95 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       alert("Select one or more rows to delete.");
       return;
     }
-    selectedRows.forEach((row) => row.delete());
+    selectedRows.forEach((row) => {
+      const rowData = row.getData();
+      row.update({
+        visual_deleted: true,
+        skill_name: "",
+        skill_description: "",
+      });
+    });
+    table.deselectRow();
+    table.redraw(true);
     setDirty(true);
   });
 
-  saveButton.addEventListener("click", () => {
+  saveButton.addEventListener("click", async () => {
     try {
-      applyRowsToJson(table.getData());
+      const nextRows = table.getData().map((row) => ({ ...row }));
+      nextRows.forEach((rowData) => {
+        const changedName = normalizeDiffValue(rowData.skill_name) !== normalizeDiffValue(rowData.original_skill_name);
+        const changedDescription =
+          normalizeDiffValue(rowData.skill_description) !== normalizeDiffValue(rowData.original_skill_description);
+        rowData.validated_changed_skill_name = rowData.visual_deleted ? true : changedName;
+        rowData.validated_changed_skill_description = rowData.visual_deleted ? true : changedDescription;
+      });
+      applyRowsToJson(nextRows);
+      isProgrammaticUpdate = true;
+      showValidatedDiff = true;
+      tabulatorState.validated = true;
+      tabulatorState.rowsSnapshot = nextRows.map((row) => ({ ...row }));
+      await table.replaceData(nextRows);
+      showValidatedDiff = true;
+      tabulatorState.validated = true;
+      tabulatorState.rowsSnapshot = nextRows.map((row) => ({ ...row }));
+      table.redraw(true);
       setDirty(false);
+      window.setTimeout(() => {
+        isProgrammaticUpdate = false;
+      }, 0);
     } catch (error) {
+      isProgrammaticUpdate = false;
       alert(error instanceof Error ? error.message : "Could not update JSON.");
     }
+  });
+
+  table.on("cellMouseEnter", (event, cell) => {
+    if (hoverCloseTimer) {
+      window.clearTimeout(hoverCloseTimer);
+      hoverCloseTimer = null;
+    }
+    if (isPopoverPinned) return;
+    if (!showValidatedDiff) return;
+    const rowData = cell.getRow().getData();
+    const field = cell.getField();
+    if (!isTrackedField(field)) return;
+    if (!isCellChanged(rowData, field)) return;
+    const originalField = field === "skill_name" ? "original_skill_name" : "original_skill_description";
+    showPopover(cell, rowData[originalField], false);
+  });
+
+  table.on("cellMouseLeave", (event, cell) => {
+    if (isPopoverPinned) return;
+    hoverCloseTimer = window.setTimeout(() => {
+      if (!activePopover || !activePopoverCell) return;
+      keepHoverPopoverOpenOrClose();
+    }, 5);
+  });
+
+  table.on("cellClick", (event, cell) => {
+    if (suppressNextCellClick) {
+      suppressNextCellClick = false;
+      return;
+    }
+    if (!showValidatedDiff) return;
+    const rowData = cell.getRow().getData();
+    const field = cell.getField();
+    if (!isTrackedField(field)) return;
+    if (!isCellChanged(rowData, field)) return;
+
+    if (
+      isPopoverPinned &&
+      activePopoverCell &&
+      activePopoverCell.getRow().getIndex() === cell.getRow().getIndex() &&
+      activePopoverCell.getField() === field
+    ) {
+      hidePopover();
+      return;
+    }
+
+    const originalField = field === "skill_name" ? "original_skill_name" : "original_skill_description";
+    showPopover(cell, rowData[originalField], true);
   });
 
   searchInput.addEventListener("input", () => {
@@ -1281,7 +1745,7 @@ const ResultPageSettingsSection = () => {
   const handleApplyTabulatorExample = (index: number) => {
     if (!customVisualizations[index]) return;
     updateCustomVisualization(index, { render_code: TABULATOR_RENDER_CODE_EXAMPLE });
-    toast.success("Tabulator interactive table example applied to render code");
+    toast.success("Tabulator example applied. Click Save Result Page Settings to publish the comparison table changes.");
   };
 
   const getVisualizationLibrarySummary = (visualization: CustomVisualizationConfig) => {
