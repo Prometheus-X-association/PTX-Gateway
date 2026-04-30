@@ -131,6 +131,22 @@ export interface GlobalConfigData {
       responseType?: string;
       responseMode?: string;
       clientAuthMethod?: 'client_secret_basic' | 'client_secret_post';
+      usePkce?: boolean;
+      additionalTokenParams?: string;
+    };
+    externalOauth2Client?: {
+      enabled?: boolean;
+      grantType?: 'client_credentials' | 'authorization_code';
+      clientId?: string;
+      authorizationEndpoint?: string;
+      tokenEndpoint?: string;
+      discoveryUrl?: string;
+      issuerUrl?: string;
+      scope?: string;
+      audience?: string;
+      resource?: string;
+      clientAuthMethod?: 'client_secret_basic' | 'client_secret_post';
+      usePkce?: boolean;
       additionalTokenParams?: string;
     };
     maxFileSizeMB?: number;

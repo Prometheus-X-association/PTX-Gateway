@@ -27,10 +27,11 @@ import {
 type Environment = "development" | "staging" | "production";
 type LogLevel = "debug" | "info" | "warn" | "error";
 type ClientAuthMethod = "client_secret_basic" | "client_secret_post";
+type OAuth2GrantType = "client_credentials" | "authorization_code";
 
 interface ExternalOidcConfig {
   enabled: boolean;
-  grantType: "client_credentials" | "authorization_code";
+  grantType: OAuth2GrantType;
   authorizationEndpoint: string;
   loginEndpoint: string;
   tokenEndpoint: string;
@@ -44,6 +45,23 @@ interface ExternalOidcConfig {
   responseType: string;
   responseMode: string;
   clientAuthMethod: ClientAuthMethod;
+  usePkce: boolean;
+  additionalTokenParams: string;
+}
+
+interface ExternalOauth2ClientConfig {
+  enabled: boolean;
+  grantType: OAuth2GrantType;
+  clientId: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  discoveryUrl: string;
+  issuerUrl: string;
+  scope: string;
+  audience: string;
+  resource: string;
+  clientAuthMethod: ClientAuthMethod;
+  usePkce: boolean;
   additionalTokenParams: string;
 }
 
@@ -67,6 +85,7 @@ interface GlobalConfigState {
       promptTemplate: string;
     };
     externalOidc: ExternalOidcConfig;
+    externalOauth2Client: ExternalOauth2ClientConfig;
     maxFileSizeMB: number;
     maxFilesCount: number;
   };
@@ -92,6 +111,23 @@ const DEFAULT_EXTERNAL_OIDC: ExternalOidcConfig = {
   responseType: "code",
   responseMode: "",
   clientAuthMethod: "client_secret_basic",
+  usePkce: true,
+  additionalTokenParams: "",
+};
+
+const DEFAULT_EXTERNAL_OAUTH2_CLIENT: ExternalOauth2ClientConfig = {
+  enabled: false,
+  grantType: "client_credentials",
+  clientId: "",
+  authorizationEndpoint: "",
+  tokenEndpoint: "",
+  discoveryUrl: "",
+  issuerUrl: "",
+  scope: "",
+  audience: "",
+  resource: "",
+  clientAuthMethod: "client_secret_basic",
+  usePkce: true,
   additionalTokenParams: "",
 };
 
@@ -115,6 +151,7 @@ const DEFAULT_CONFIG: GlobalConfigState = {
         "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide matching structure: data[] for cartesian/pie/radial, nodes[]+links[] for network, hierarchy for treemap, and data[] with lat/lng for map. Keep labels concise and aggregate long-tail items as 'Other'. User can switch to another compatible chart type in UI.",
     },
     externalOidc: DEFAULT_EXTERNAL_OIDC,
+    externalOauth2Client: DEFAULT_EXTERNAL_OAUTH2_CLIENT,
     maxFileSizeMB: 50,
     maxFilesCount: 10,
   },
@@ -125,7 +162,7 @@ const DEFAULT_CONFIG: GlobalConfigState = {
 };
 
 interface GlobalConfigSectionProps {
-  section?: "all" | "general" | "external-oidc";
+  section?: "all" | "general" | "external-oidc" | "external-oauth2";
 }
 
 const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
@@ -167,6 +204,7 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
           const features = data.features || {};
           const llmInsights = features.llmInsights || DEFAULT_CONFIG.features.llmInsights;
           const externalOidc = features.externalOidc || DEFAULT_EXTERNAL_OIDC;
+          const externalOauth2Client = features.externalOauth2Client || DEFAULT_EXTERNAL_OAUTH2_CLIENT;
 
           setConfig({
             id: data.id,
@@ -183,6 +221,10 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
               externalOidc: {
                 ...DEFAULT_EXTERNAL_OIDC,
                 ...externalOidc,
+              },
+              externalOauth2Client: {
+                ...DEFAULT_EXTERNAL_OAUTH2_CLIENT,
+                ...externalOauth2Client,
               },
             },
             logging: {
@@ -301,6 +343,19 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
     }));
   };
 
+  const setExternalOauth2Client = (next: Partial<ExternalOauth2ClientConfig>) => {
+    setConfig((current) => ({
+      ...current,
+      features: {
+        ...current.features,
+        externalOauth2Client: {
+          ...current.features.externalOauth2Client,
+          ...next,
+        },
+      },
+    }));
+  };
+
   const handleConnectAuthorizationCode = async () => {
     if (!user?.organization?.id) return;
 
@@ -317,7 +372,9 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
 
     setIsConnectingExternalOidc(true);
     try {
-      const authState = await createExternalOidcAuthState(user.organization.id);
+      const authState = await createExternalOidcAuthState(user.organization.id, {
+        usePkce: externalOidc.usePkce,
+      });
       const connectUrl = buildExternalOidcConnectUrl({
         config: externalOidc,
         state: authState.state,
@@ -373,7 +430,12 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
     );
   }
 
-  const activeSection = section === "external-oidc" ? "external-oidc" : "general";
+  const activeSection =
+    section === "external-oidc"
+      ? "external-oidc"
+      : section === "external-oauth2"
+        ? "external-oauth2"
+        : "general";
 
   return (
     <div className="space-y-6">
@@ -390,9 +452,10 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
         <CardContent className="space-y-6">
           <Tabs defaultValue={activeSection} className="w-full">
             {section === "all" && (
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="general">General</TabsTrigger>
                 <TabsTrigger value="external-oidc">External OIDC</TabsTrigger>
+                <TabsTrigger value="external-oauth2">OAuth2 Client</TabsTrigger>
               </TabsList>
             )}
 
@@ -597,31 +660,31 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
             </TabsContent>
 
             <TabsContent value="external-oidc" className="space-y-6 pt-4">
-              <Alert>
-                <LockKeyhole className="h-4 w-4" />
-                <AlertDescription>
-                  Use this when the external platform requires PTX Gateway to obtain an access token from an OIDC token endpoint before every outbound call. This does not change how users log in to PTX Gateway.
-                </AlertDescription>
-              </Alert>
+                  <Alert>
+                    <LockKeyhole className="h-4 w-4" />
+                    <AlertDescription>
+                      Use this when the external platform requires PTX Gateway to obtain an access token from an OIDC token endpoint before every outbound call. This does not change how users log in to PTX Gateway.
+                    </AlertDescription>
+                  </Alert>
 
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div>
-                  <p className="font-medium">Enable External OIDC For PDC Calls</p>
-                  <p className="text-sm text-muted-foreground">
-                    Configure PTX Gateway as an OAuth 2.0 / OpenID Connect client for the partner platform. Use
-                    <code> client_credentials </code>
-                    for server-to-server access, or
-                    <code> authorization_code </code>
-                    when an admin must sign in on the partner platform first.
-                  </p>
-                </div>
-                <Switch
-                  checked={config.features.externalOidc.enabled}
-                  onCheckedChange={(value) => setExternalOidc({ enabled: value })}
-                />
-              </div>
+                  <div className="flex items-center justify-between rounded-lg border p-4">
+                    <div>
+                      <p className="font-medium">Enable External OIDC For PDC Calls</p>
+                      <p className="text-sm text-muted-foreground">
+                        Configure PTX Gateway as an OAuth 2.0 / OpenID Connect client for the partner platform. Use
+                        <code> client_credentials </code>
+                        for server-to-server access, or
+                        <code> authorization_code </code>
+                        when an admin must sign in on the partner platform first.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={config.features.externalOidc.enabled}
+                      onCheckedChange={(value) => setExternalOidc({ enabled: value })}
+                    />
+                  </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label>Grant Type</Label>
                   <Select
@@ -707,6 +770,18 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
                   <p className="text-xs text-muted-foreground">
                     Match the partner token endpoint expectation exactly. Most providers use <code>client_secret_basic</code>.
                   </p>
+                </div>
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div>
+                    <p className="text-sm font-medium">Use PKCE</p>
+                    <p className="text-xs text-muted-foreground">
+                      Recommended for <code>authorization_code</code>. Turn off only if partner explicitly does not support PKCE.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.features.externalOidc.usePkce}
+                    onCheckedChange={(value) => setExternalOidc({ usePkce: value })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Response Type</Label>
@@ -810,9 +885,9 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
                     <code> {"{\"tenant\":\"org-a\"}"} </code>
                   </p>
                 </div>
-              </div>
+                  </div>
 
-              <Card className="border-dashed">
+                  <Card className="border-dashed">
                 <CardHeader>
                   <CardTitle className="text-base">Client Secret</CardTitle>
                   <CardDescription>
@@ -848,9 +923,9 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
                     </Button>
                   </div>
                 </CardContent>
-              </Card>
+                  </Card>
 
-              <Card className="border-dashed">
+                  <Card className="border-dashed">
                 <CardHeader>
                   <CardTitle className="text-base">Authorization-Code Connection</CardTitle>
                   <CardDescription>
@@ -870,7 +945,8 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
                     <AlertDescription>
                       Before clicking connect, make sure the partner has registered this exact callback URL, enabled
                       <code> authorization_code </code>
-                      for the client, and supports PKCE with
+                      for the client, and
+                      {config.features.externalOidc.usePkce ? " supports PKCE with" : " supports no-PKCE authorization code with"}
                       <code> response_type=code </code>
                       and
                       <code> response_mode=query </code>.
@@ -912,10 +988,10 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
                     </Button>
                   </div>
                 </CardContent>
-              </Card>
+                  </Card>
 
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                <Card>
+                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                    <Card>
                   <CardHeader>
                     <CardTitle className="text-base">Example: Partner Login With Authorization Code</CardTitle>
                     <CardDescription>
@@ -945,9 +1021,9 @@ Client Auth Method: client_secret_basic`}
                       audience or resource, and token endpoint auth method.
                     </p>
                   </CardContent>
-                </Card>
+                    </Card>
 
-                <Card>
+                    <Card>
                   <CardHeader>
                     <CardTitle className="text-base">Example: Server-To-Server Client Credentials</CardTitle>
                     <CardDescription>
@@ -969,16 +1045,192 @@ Requested scopes: pdc.execute pdc.read`}
                       required scope, and any mandatory audience, resource, or custom token parameters.
                     </p>
                   </CardContent>
-                </Card>
-              </div>
+                    </Card>
+                  </div>
 
-              <Alert>
-                <AlertDescription>
-                  This page makes PTX Gateway an OIDC client of the partner platform. If the partner asks PTX to act as the identity
-                  provider for them, that is a different integration pattern and is not implemented here.
-                </AlertDescription>
-              </Alert>
-            </TabsContent>
+                  <Alert>
+                    <AlertDescription>
+                      This page makes PTX Gateway an OIDC client of the partner platform. If the partner asks PTX to act as the identity
+                      provider for them, that is a different integration pattern and is not implemented here.
+                    </AlertDescription>
+                  </Alert>
+                </TabsContent>
+
+                <TabsContent value="external-oauth2" className="space-y-6 pt-4">
+                  <Alert>
+                    <AlertDescription>
+                      Use this to configure PTX Gateway as a generic OAuth2 client for partner APIs. This subpage stores integration settings and setup guidance.
+                    </AlertDescription>
+                  </Alert>
+
+                  <div className="flex items-center justify-between rounded-lg border p-4">
+                    <div>
+                      <p className="font-medium">Enable External OAuth2 Client</p>
+                      <p className="text-sm text-muted-foreground">
+                        Turn this on when partner API access should use OAuth2 client settings. Keep OIDC tab enabled if your current runtime flow still uses External OIDC fields.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={config.features.externalOauth2Client.enabled}
+                      onCheckedChange={(value) => setExternalOauth2Client({ enabled: value })}
+                    />
+                  </div>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">Required Inputs</CardTitle>
+                      <CardDescription>
+                        Minimum values to configure PTX Gateway as an OAuth2 client.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>Grant Type</Label>
+                        <Select
+                          value={config.features.externalOauth2Client.grantType}
+                          onValueChange={(value) => setExternalOauth2Client({ grantType: value as OAuth2GrantType })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="client_credentials">client_credentials</SelectItem>
+                            <SelectItem value="authorization_code">authorization_code</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Client ID</Label>
+                        <Input
+                          value={config.features.externalOauth2Client.clientId}
+                          onChange={(e) => setExternalOauth2Client({ clientId: e.target.value })}
+                          placeholder="ptx-gateway-org-a"
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label>Token Endpoint</Label>
+                        <Input
+                          value={config.features.externalOauth2Client.tokenEndpoint}
+                          onChange={(e) => setExternalOauth2Client({ tokenEndpoint: e.target.value })}
+                          placeholder="https://idp.partner.example.com/oauth2/token"
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label>Scope</Label>
+                        <Input
+                          value={config.features.externalOauth2Client.scope}
+                          onChange={(e) => setExternalOauth2Client({ scope: e.target.value })}
+                          placeholder="pdc.execute pdc.read"
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">Optional Inputs</CardTitle>
+                      <CardDescription>
+                        Fill these only if the partner requires them.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="space-y-2 md:col-span-2">
+                        <Label>Authorization Endpoint</Label>
+                        <Input
+                          value={config.features.externalOauth2Client.authorizationEndpoint}
+                          onChange={(e) => setExternalOauth2Client({ authorizationEndpoint: e.target.value })}
+                          placeholder="https://idp.partner.example.com/oauth2/authorize"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Discovery URL</Label>
+                        <Input
+                          value={config.features.externalOauth2Client.discoveryUrl}
+                          onChange={(e) => setExternalOauth2Client({ discoveryUrl: e.target.value })}
+                          placeholder="https://idp.partner.example.com/.well-known/openid-configuration"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Issuer URL</Label>
+                        <Input
+                          value={config.features.externalOauth2Client.issuerUrl}
+                          onChange={(e) => setExternalOauth2Client({ issuerUrl: e.target.value })}
+                          placeholder="https://idp.partner.example.com"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Audience</Label>
+                        <Input
+                          value={config.features.externalOauth2Client.audience}
+                          onChange={(e) => setExternalOauth2Client({ audience: e.target.value })}
+                          placeholder="https://api.partner.example.com"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Resource</Label>
+                        <Input
+                          value={config.features.externalOauth2Client.resource}
+                          onChange={(e) => setExternalOauth2Client({ resource: e.target.value })}
+                          placeholder="api://partner-platform"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Client Auth Method</Label>
+                        <Select
+                          value={config.features.externalOauth2Client.clientAuthMethod}
+                          onValueChange={(value) => setExternalOauth2Client({ clientAuthMethod: value as ClientAuthMethod })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="client_secret_basic">client_secret_basic</SelectItem>
+                            <SelectItem value="client_secret_post">client_secret_post</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-center justify-between rounded-lg border p-3">
+                        <div>
+                          <p className="text-sm font-medium">Use PKCE</p>
+                          <p className="text-xs text-muted-foreground">Recommended for authorization_code</p>
+                        </div>
+                        <Switch
+                          checked={config.features.externalOauth2Client.usePkce}
+                          onCheckedChange={(value) => setExternalOauth2Client({ usePkce: value })}
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label>Additional Token Params JSON</Label>
+                        <Textarea
+                          value={config.features.externalOauth2Client.additionalTokenParams}
+                          onChange={(e) => setExternalOauth2Client({ additionalTokenParams: e.target.value })}
+                          rows={4}
+                          placeholder='{"tenant":"org-a"}'
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">Quick Setup Guide</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm">
+                      <p className="font-medium">On PTX Gateway:</p>
+                      <p className="text-muted-foreground">
+                        Enable External OAuth2 Client, fill required fields, set optional fields only when mandated by partner docs, and save configuration.
+                      </p>
+                      <p className="font-medium">On Partner Platform:</p>
+                      <p className="text-muted-foreground">
+                        Register PTX Gateway as OAuth2 client, enable required grant type, issue Client ID and secret, allow requested scopes, and share token/authorize endpoints.
+                      </p>
+                      <p className="text-muted-foreground">
+                        For <code>authorization_code</code>, register callback URL:
+                        <code> {typeof window !== "undefined" ? `${window.location.origin}/oidc/callback` : "/oidc/callback"} </code>
+                      </p>
+                    </CardContent>
+                  </Card>
+                </TabsContent>
           </Tabs>
 
           <div className="pt-4">
@@ -999,7 +1251,7 @@ Requested scopes: pdc.execute pdc.read`}
         </CardContent>
       </Card>
 
-      {section !== "external-oidc" && <PlaceholdersConfigSection />}
+      {section === "all" && <PlaceholdersConfigSection />}
     </div>
   );
 };

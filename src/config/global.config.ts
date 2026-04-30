@@ -83,6 +83,7 @@ export const globalConfig: GlobalConfig = {
       responseType: "code",
       responseMode: "",
       clientAuthMethod: "client_secret_basic",
+      usePkce: true,
       additionalTokenParams: "",
     },
     maxFileSizeMB: 50,

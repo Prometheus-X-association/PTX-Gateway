@@ -581,6 +581,8 @@ const ResourcesConfigSection = () => {
                 result_url_source: existing.result_url_source,
                 custom_result_url: existing.custom_result_url,
                 result_authorization: existing.result_authorization,
+                // Preserve admin-edited embedded query params across re-extraction.
+                result_query_params: existing.result_query_params ?? er.result_query_params,
               };
             }
             return er;

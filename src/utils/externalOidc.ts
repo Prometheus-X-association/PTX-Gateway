@@ -11,12 +11,13 @@ export interface ExternalOidcClientConfig {
   resource: string;
   responseType: string;
   responseMode: string;
+  usePkce?: boolean;
 }
 
 export interface ExternalOidcAuthState {
   organizationId: string;
   state: string;
-  codeVerifier: string;
+  codeVerifier?: string;
   redirectUri: string;
   createdAt: number;
 }
@@ -40,13 +41,20 @@ const randomBase64Url = (length = 32): string => {
 export const createExternalOidcRedirectUri = (): string =>
   `${window.location.origin}/oidc/callback`;
 
-export const createExternalOidcAuthState = async (organizationId: string) => {
+export const createExternalOidcAuthState = async (
+  organizationId: string,
+  options?: { usePkce?: boolean },
+) => {
+  const usePkce = options?.usePkce !== false;
   const state = randomBase64Url(24);
-  const codeVerifier = randomBase64Url(48);
   const redirectUri = createExternalOidcRedirectUri();
-  const data = new TextEncoder().encode(codeVerifier);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  const codeChallenge = toBase64Url(new Uint8Array(digest));
+  const codeVerifier = usePkce ? randomBase64Url(48) : undefined;
+  let codeChallenge: string | undefined;
+  if (codeVerifier) {
+    const data = new TextEncoder().encode(codeVerifier);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    codeChallenge = toBase64Url(new Uint8Array(digest));
+  }
 
   const payload: ExternalOidcAuthState = {
     organizationId,
@@ -86,7 +94,7 @@ export const buildExternalOidcConnectUrl = ({
 }: {
   config: ExternalOidcClientConfig;
   state: string;
-  codeChallenge: string;
+  codeChallenge?: string;
   redirectUri: string;
 }): string => {
   // Prefer the standards-based authorization endpoint when both are configured.
@@ -98,8 +106,10 @@ export const buildExternalOidcConnectUrl = ({
   const url = new URL(baseUrl);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
-  url.searchParams.set("code_challenge", codeChallenge);
-  url.searchParams.set("code_challenge_method", "S256");
+  if (config.usePkce !== false && codeChallenge) {
+    url.searchParams.set("code_challenge", codeChallenge);
+    url.searchParams.set("code_challenge_method", "S256");
+  }
 
   if (config.provider) url.searchParams.set("provider", config.provider);
   if (config.clientId) url.searchParams.set("client_id", config.clientId);

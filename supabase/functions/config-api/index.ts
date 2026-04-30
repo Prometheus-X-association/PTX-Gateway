@@ -83,6 +83,22 @@ const FeaturesSchema = z.object({
     responseType: z.string().max(100).optional(),
     responseMode: z.string().max(100).optional(),
     clientAuthMethod: z.enum(["client_secret_basic", "client_secret_post"]).optional(),
+    usePkce: z.boolean().optional(),
+    additionalTokenParams: z.string().max(5000).optional(),
+  }).optional(),
+  externalOauth2Client: z.object({
+    enabled: z.boolean().optional(),
+    grantType: z.enum(["client_credentials", "authorization_code"]).optional(),
+    clientId: z.string().max(500).optional(),
+    authorizationEndpoint: z.string().url().max(1000).optional().or(z.literal("")),
+    tokenEndpoint: z.string().url().max(1000).optional().or(z.literal("")),
+    discoveryUrl: z.string().url().max(1000).optional().or(z.literal("")),
+    issuerUrl: z.string().url().max(1000).optional().or(z.literal("")),
+    scope: z.string().max(2000).optional(),
+    audience: z.string().max(1000).optional(),
+    resource: z.string().max(1000).optional(),
+    clientAuthMethod: z.enum(["client_secret_basic", "client_secret_post"]).optional(),
+    usePkce: z.boolean().optional(),
     additionalTokenParams: z.string().max(5000).optional(),
   }).optional(),
   resultPage: z.record(z.unknown()).optional(),
@@ -328,9 +344,6 @@ const sanitizeCustomVisualization = (value: unknown): Record<string, unknown> | 
     library_files: libraryFiles,
     json_schema: typeof value.json_schema === 'string' ? value.json_schema : '',
     render_code: typeof value.render_code === 'string' ? value.render_code : '',
-    target_resources: Array.isArray(value.target_resources)
-      ? value.target_resources.map((target) => String(target)).filter((target) => target.trim().length > 0)
-      : [],
   };
 };
 
@@ -347,12 +360,6 @@ const sanitizeExportApiConfig = (value: unknown): Record<string, unknown> | null
       .filter((param) => param.key.trim().length > 0 || param.value.trim().length > 0)
     : [];
 
-  const targetResources = Array.isArray(value.target_resources)
-    ? value.target_resources
-      .map((target) => String(target))
-      .filter((target) => target.trim().length > 0)
-    : [];
-
   return {
     id: typeof value.id === 'string' && value.id.trim() ? value.id : crypto.randomUUID(),
     name: typeof value.name === 'string' ? value.name : '',
@@ -362,7 +369,6 @@ const sanitizeExportApiConfig = (value: unknown): Record<string, unknown> | null
     authorization: typeof value.authorization === 'string' ? value.authorization : '',
     params,
     body_template: typeof value.body_template === 'string' ? value.body_template : '{\n  "data": ##result\n}',
-    target_resources: targetResources,
     import_button_text: typeof value.import_button_text === 'string' ? value.import_button_text : '',
     post_import_button_text: typeof value.post_import_button_text === 'string' ? value.post_import_button_text : '',
     post_import_button_url: typeof value.post_import_button_url === 'string' ? value.post_import_button_url : '',
@@ -1222,7 +1228,11 @@ const importSettingsIntoOrganization = async ({
             result_url_source: importedResource.result_url_source,
             custom_result_url: importedResource.custom_result_url,
             result_authorization: importedResource.result_authorization,
-            result_query_params: importedResource.result_query_params,
+            // Keep embedded-resource-specific query params from the chain backup.
+            // These can differ from top-level resource defaults.
+            result_query_params: Array.isArray(resource.result_query_params)
+              ? resource.result_query_params
+              : importedResource.result_query_params,
           };
         });
 

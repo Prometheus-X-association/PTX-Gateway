@@ -29,10 +29,95 @@ const getCallbackParams = (): URLSearchParams => {
   return merged;
 };
 
+interface OidcFailureDetails {
+  summary: string;
+  received: string[];
+  guidance: string[];
+}
+
+const buildGenericGuidance = (): string[] => [
+  "Verify the callback URL is exactly registered as `${PTX_ORIGIN}/oidc/callback` on the partner side.",
+  "Confirm `grant_type=authorization_code`, `response_type=code`, `response_mode=query`, and PKCE are enabled for this client.",
+  "Check Client ID, Client Secret, Authorization Endpoint, and Token Endpoint/Discovery URL in Admin > External OIDC.",
+];
+
+const buildFailureFromCallback = (params: {
+  error: string;
+  errorDescription: string | null;
+  errorUri: string | null;
+}): OidcFailureDetails => {
+  const { error, errorDescription, errorUri } = params;
+  const guidance = [...buildGenericGuidance()];
+
+  if (error === "access_denied") {
+    guidance.unshift("The partner denied access or login was cancelled. Retry login and ensure the selected account is allowed for this client.");
+  } else if (error === "unauthorized_client") {
+    guidance.unshift("Enable `authorization_code` for this client and confirm this callback URL is on the partner's allowlist.");
+  } else if (error === "unsupported_response_type") {
+    guidance.unshift("Set PTX response type to `code` and confirm partner supports authorization-code flow.");
+  } else if (error === "invalid_scope") {
+    guidance.unshift("Adjust scope to exactly match the partner-allowed scopes for this client.");
+  } else if (error === "invalid_request") {
+    guidance.unshift("Confirm required authorize params are accepted by the partner, especially redirect URI and response mode.");
+  }
+
+  return {
+    summary: "The partner authorization endpoint returned an OAuth/OIDC error before code exchange.",
+    received: [
+      `error: ${error}`,
+      errorDescription ? `error_description: ${errorDescription}` : "error_description: (not provided)",
+      errorUri ? `error_uri: ${errorUri}` : "error_uri: (not provided)",
+    ],
+    guidance,
+  };
+};
+
+const toReadableDetails = (details: unknown): string[] => {
+  if (!details || typeof details !== "object") return [];
+  const record = details as Record<string, unknown>;
+  const rows: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (value === undefined) continue;
+    rows.push(`${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`);
+  }
+  return rows;
+};
+
+const buildFailureFromExchangeResponse = (payload: unknown): OidcFailureDetails => {
+  const data = (payload ?? {}) as { error?: string; details?: unknown };
+  const detailRows = toReadableDetails(data.details);
+  const providerError =
+    typeof data.details === "object" && data.details !== null
+      ? (data.details as Record<string, unknown>).error
+      : undefined;
+
+  const guidance = [...buildGenericGuidance()];
+  if (providerError === "invalid_grant") {
+    guidance.unshift("`invalid_grant` usually means redirect URI mismatch, reused/expired code, or PKCE verifier mismatch. Retry immediately and verify callback + PKCE setup.");
+  } else if (providerError === "invalid_client") {
+    guidance.unshift("`invalid_client` indicates wrong client credentials or auth method. Check Client ID, secret, and token auth method (`client_secret_basic` vs `client_secret_post`).");
+  } else if (providerError === "invalid_scope") {
+    guidance.unshift("`invalid_scope` indicates unsupported scope(s). Use only the scope values the partner issued for this client.");
+  }
+
+  return {
+    summary: typeof data.error === "string" ? data.error : "Failed to exchange authorization code.",
+    received: detailRows.length > 0 ? detailRows : ["No structured provider details were returned by the token endpoint."],
+    guidance,
+  };
+};
+
+const buildFailureFromMessage = (message: string): OidcFailureDetails => ({
+  summary: message,
+  received: ["No additional structured details were captured."],
+  guidance: buildGenericGuidance(),
+});
+
 const ExternalOidcCallbackPage = () => {
   const navigate = useNavigate();
   const [status, setStatus] = useState<"working" | "success" | "error">("working");
   const [message, setMessage] = useState("Completing external OIDC connection...");
+  const [failure, setFailure] = useState<OidcFailureDetails | null>(null);
 
   useEffect(() => {
     const run = async () => {
@@ -41,9 +126,11 @@ const ExternalOidcCallbackPage = () => {
       const state = callbackParams.get("state");
       const error = callbackParams.get("error");
       const errorDescription = callbackParams.get("error_description");
+      const errorUri = callbackParams.get("error_uri");
 
       if (error) {
         setStatus("error");
+        setFailure(buildFailureFromCallback({ error, errorDescription, errorUri }));
         setMessage(errorDescription || error);
         return;
       }
@@ -51,13 +138,22 @@ const ExternalOidcCallbackPage = () => {
       const savedState = readExternalOidcAuthState();
       if (!code || !state || !savedState) {
         setStatus("error");
-        setMessage("Missing authorization code or saved callback state. Check that the provider redirects back with `response_type=code` and `response_mode=query`.");
+        const summary = "Missing authorization code or saved callback state.";
+        setFailure(
+          buildFailureFromMessage(
+            `${summary} Check that the provider redirects back with response_type=code and response_mode=query.`,
+          ),
+        );
+        setMessage(summary);
         return;
       }
 
       if (savedState.state !== state) {
         clearExternalOidcAuthState();
         setStatus("error");
+        setFailure(
+          buildFailureFromMessage("OIDC state mismatch. This can happen if callback comes from a different login attempt or tab."),
+        );
         setMessage("OIDC state mismatch. Please retry the connection flow.");
         return;
       }
@@ -78,7 +174,11 @@ const ExternalOidcCallbackPage = () => {
         }
 
         if ((data as { error?: string } | null)?.error) {
-          throw new Error((data as { error: string }).error);
+          setStatus("error");
+          setFailure(buildFailureFromExchangeResponse(data));
+          setMessage((data as { error: string }).error);
+          clearExternalOidcAuthState();
+          return;
         }
 
         clearExternalOidcAuthState();
@@ -87,7 +187,9 @@ const ExternalOidcCallbackPage = () => {
       } catch (err) {
         clearExternalOidcAuthState();
         setStatus("error");
-        setMessage(err instanceof Error ? err.message : "Failed to exchange authorization code.");
+        const fallbackMessage = err instanceof Error ? err.message : "Failed to exchange authorization code.";
+        setFailure(buildFailureFromMessage(fallbackMessage));
+        setMessage(fallbackMessage);
       }
     };
 
@@ -122,7 +224,29 @@ const ExternalOidcCallbackPage = () => {
             <Alert variant="destructive">
               <ShieldAlert className="h-4 w-4" />
               <AlertTitle>Connection failed</AlertTitle>
-              <AlertDescription>{message}</AlertDescription>
+              <AlertDescription className="space-y-3">
+                <p>{failure?.summary || message}</p>
+                {failure?.received?.length ? (
+                  <div>
+                    <p className="font-medium">What PTX received</p>
+                    <ul className="list-disc pl-5 text-xs">
+                      {failure.received.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {failure?.guidance?.length ? (
+                  <div>
+                    <p className="font-medium">How to fix</p>
+                    <ul className="list-disc pl-5 text-xs">
+                      {failure.guidance.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </AlertDescription>
             </Alert>
           ) : null}
 
