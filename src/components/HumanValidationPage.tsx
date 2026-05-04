@@ -1,9 +1,10 @@
 import { useState, useMemo } from "react";
 import { UserCheck, FileText, Database, Globe, Type, CheckCircle2, XCircle, AlertTriangle, Code, ChevronDown, ChevronRight, Copy, Check, ExternalLink } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
-import { AnalyticsOption, DataResource, getParamActionsMap } from "@/types/dataspace";
+import { AnalyticsOption, DataResource } from "@/types/dataspace";
 import { resolveResultUrl, formatResultUrlWithParams, ResultUrlInfo } from "@/utils/resultUrlResolver";
-import { sanitizeParams, sanitizeParamsArray, shouldIgnoreParam, resolveParamValue } from "@/utils/paramSanitizer";
+import { sanitizeParamsArray, shouldIgnoreParam, resolveParamValue } from "@/utils/paramSanitizer";
+import { generatePdcPayload } from "@/utils/pdcPayloadGenerator";
 interface HumanValidationPageProps {
   selectedData: {
     files: File[];
@@ -175,172 +176,15 @@ const HumanValidationPage = ({
   }, [selectedAnalytics, selectedData, sessionId]);
 
   const pdcPayload = useMemo(() => {
-    // Get contract info from selected analytics
-    const contract = selectedAnalytics.data.contract_url;
-    
-    // Handle service chain analytics
-    if (selectedAnalytics.type === "serviceChain") {
-      const catalogId = selectedAnalytics.data.catalog_id;
-      const embeddedResources = selectedAnalytics.data.embedded_resources || [];
-      
-      // Sort by service_index
-      const sortedResources = [...embeddedResources].sort((a, b) => a.service_index - b.service_index);
-      
-      if (sortedResources.length === 0) {
-        return {
-          contract,
-          serviceChainId: catalogId,
-          resources: [],
-          purposes: [],
-        };
-      }
-      
-      // Merge serviceChainResourceParams with apiParams (serviceChainResourceParams takes priority for service chains)
-      const mergedParams: Record<string, Record<string, string>> = { ...selectedData.apiParams };
-      if (selectedData.serviceChainResourceParams) {
-        Object.entries(selectedData.serviceChainResourceParams).forEach(([resourceUrl, params]) => {
-          mergedParams[resourceUrl] = { ...(mergedParams[resourceUrl] || {}), ...params };
-        });
-      }
-      
-      // First resource goes to resources array
-      const firstResource = sortedResources[0];
-      const firstParamActions = getParamActionsMap(firstResource.parameters);
-      const firstParams = mergedParams[firstResource.resource_url] || {};
-      const sanitizedFirstParams = sanitizeParams(firstParams, sessionId, true, "payload", firstParamActions);
-      const firstParamsArray = Object.entries(sanitizedFirstParams).map(([k, v]) => ({ [k]: v }));
-      
-      const resourcesArray = [{
-        resource: firstResource.resource_url,
-        ...(firstParamsArray.length > 0 ? { params: { query: firstParamsArray } } : {}),
-      }];
-      
-      // Last resource goes to purposes array
-      const lastResource = sortedResources[sortedResources.length - 1];
-      const lastParamActions = getParamActionsMap(lastResource.parameters);
-      const lastParams = mergedParams[lastResource.resource_url] || {};
-      const sanitizedLastParams = sanitizeParams(lastParams, sessionId, true, "payload", lastParamActions);
-      const lastParamsArray = Object.entries(sanitizedLastParams).map(([k, v]) => ({ [k]: v }));
-      
-      const purposesArray = sortedResources.length > 1 ? [{
-        resource: lastResource.resource_url,
-        ...(lastParamsArray.length > 0 ? { params: { query: lastParamsArray } } : {}),
-      }] : [];
-      
-      // Middle resources go to serviceChainParams
-      const serviceChainParams: Array<{ resource: string; params?: { query: Array<Record<string, string>> } }> = [];
-      for (let i = 1; i < sortedResources.length - 1; i++) {
-        const middleResource = sortedResources[i];
-        const middleParamActions = getParamActionsMap(middleResource.parameters);
-        const middleParams = mergedParams[middleResource.resource_url] || {};
-        const sanitizedMiddleParams = sanitizeParams(middleParams, sessionId, true, "payload", middleParamActions);
-        const middleParamsArray = Object.entries(sanitizedMiddleParams).map(([k, v]) => ({ [k]: v }));
-        
-        serviceChainParams.push({
-          resource: middleResource.resource_url,
-          ...(middleParamsArray.length > 0 ? { params: { query: middleParamsArray } } : {}),
-        });
-      }
-      
-      return {
-        contract,
-        serviceChainId: catalogId,
-        resources: resourcesArray,
-        purposes: purposesArray,
-        ...(serviceChainParams.length > 0 ? { serviceChainParams } : {}),
-      };
-    }
-    
-    // Handle software analytics (existing logic)
-    const purposeId = selectedAnalytics.data.service_offering || "";
-    const purposeResource = selectedAnalytics.data.resource_url;
-
-    // Build purposes array with analytics params - sanitized
-    const purposes: Array<{
-      resource: string;
-      params?: { query: Array<Record<string, string>> };
-    }> = [];
-    
-    // Get paramActions for analytics resource
-    const analyticsParams = selectedAnalytics.data.parameters;
-    const analyticsParamActions = getParamActionsMap(analyticsParams);
-    
-    // Sanitize analytics params - remove #ignoreParam, #ignorePayload and resolve #genSessionId
-    const sanitizedAnalyticsParams = sanitizeParams(analyticsQueryParams, sessionId, true, "payload", analyticsParamActions);
-    const analyticsParamsArray = Object.entries(sanitizedAnalyticsParams)
-      .map(([key, value]) => ({ [key]: value }));
-    
-    if (purposeResource) {
-      const purposeEntry: { resource: string; params?: { query: Array<Record<string, string>> } } = {
-        resource: purposeResource,
-      };
-      
-      // Only add params if there are non-empty sanitized query params
-      if (analyticsParamsArray.length > 0) {
-        purposeEntry.params = {
-          query: analyticsParamsArray
-        };
-      }
-      
-      purposes.push(purposeEntry);
-    }
-
-    // Build resources array from selected data resources
-    const resources: Array<{
-      resource: string;
-      params?: { query: Array<Record<string, string>> };
-    }> = [];
-
-    // Get first resource's service_offering for resourceId
-    let resourceId = "";
-    if (selectedData.selectedDataResources.length > 0) {
-      resourceId = selectedData.selectedDataResources[0].service_offering || "";
-    }
-
-    // Process each selected data resource
-    selectedData.selectedDataResources.forEach((dataResource) => {
-      // Get params for this resource
-      let rawParams: Record<string, string> = {};
-      
-      // Check if this is an upload resource (params in uploadResourceParams)
-      if (dataResource.upload_file && selectedData.uploadResourceParams) {
-        rawParams = { ...selectedData.uploadResourceParams };
-      }
-      
-      // Check if this is an API resource (params in apiParams)
-      if (!dataResource.upload_file && selectedData.apiParams[dataResource.resource_url]) {
-        rawParams = { ...selectedData.apiParams[dataResource.resource_url] };
-      }
-
-      // Get paramActions for this resource
-      const resourceParamActions = getParamActionsMap(dataResource.parameters);
-
-      // Sanitize params - removes #ignoreParam, #ignorePayload and resolves #genSessionId
-      const sanitizedParams = sanitizeParams(rawParams, sessionId, true, "payload", resourceParamActions);
-      const resourceParams = Object.entries(sanitizedParams)
-        .map(([key, value]) => ({ [key]: value }));
-
-      const resourceEntry: { resource: string; params?: { query: Array<Record<string, string>> } } = {
-        resource: dataResource.resource_url,
-      };
-      
-      // Only add params if there are non-empty sanitized query params
-      if (resourceParams.length > 0) {
-        resourceEntry.params = {
-          query: resourceParams
-        };
-      }
-
-      resources.push(resourceEntry);
-    });
-
-    return {
-      contract,
-      purposeId,
-      resourceId,
-      resources,
-      purposes
-    };
+    return generatePdcPayload(
+      selectedAnalytics,
+      selectedData.selectedDataResources,
+      analyticsQueryParams,
+      selectedData.apiParams,
+      selectedData.uploadResourceParams,
+      sessionId,
+      selectedData.serviceChainResourceParams
+    );
   }, [selectedAnalytics, analyticsQueryParams, selectedData, sessionId]);
 
   const handleCopyPayload = async () => {

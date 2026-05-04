@@ -6,6 +6,7 @@ import CenterFocusCarousel from "./CenterFocusCarousel";
 import DocumentUploadZone, { UploadConfig } from "./DocumentUploadZone";
 import ManualJsonInput from "./ManualJsonInput";
 import { useProcessSession } from "@/contexts/ProcessSessionContext";
+import { toast } from "@/hooks/use-toast";
 import { 
   DataResource, 
   AnalyticsOption,
@@ -38,6 +39,7 @@ interface DataSelectionProps {
     uploadResourceParams?: Record<string, string>;
     manualJsonData?: string;
     serviceChainResourceParams?: Record<string, Record<string, string>>;
+    processSessionId?: string;
   }) => void;
   onBack: () => void;
   dataResources: DataResource[];
@@ -74,7 +76,7 @@ const DataSelection = ({
   isDebugMode = false,
   dataSelectionSettings = null,
 }: DataSelectionProps) => {
-  const { sessionId } = useProcessSession();
+  const { sessionId, resetSession } = useProcessSession();
 
   // State for debug-mode result query param overrides (keyed by resource_url)
   const [resultQueryParamOverrides, setResultQueryParamOverrides] = useState<Record<string, Array<{ paramName: string; paramValue: string }>>>({});
@@ -177,6 +179,9 @@ const DataSelection = ({
   
   // State for upload resource query params (from dataResource config)
   const [uploadResourceParams, setUploadResourceParams] = useState<Record<string, string>>({});
+  const [hasUploadAttempted, setHasUploadAttempted] = useState(false);
+  const [latestUploadSessionId, setLatestUploadSessionId] = useState<string | null>(null);
+  const [latestUploadParams, setLatestUploadParams] = useState<Record<string, string> | null>(null);
   const [showUploadParamsDialog, setShowUploadParamsDialog] = useState(false);
   const [pendingUploadResource, setPendingUploadResource] = useState<UploadResource | null>(null);
   const [isEditingParams, setIsEditingParams] = useState(false);
@@ -468,6 +473,79 @@ const DataSelection = ({
     }
     setIsEditingParams(false);
   };
+
+  const handleUploadAttempt = useCallback((attemptCount: number) => {
+    if (attemptCount >= 1) {
+      setHasUploadAttempted(true);
+    }
+  }, []);
+
+  const handleUploadSessionResolved = useCallback((resolvedSessionId: string, params: Record<string, string>) => {
+    setLatestUploadSessionId(resolvedSessionId);
+    setLatestUploadParams(params);
+  }, []);
+
+  const handleBack = useCallback(() => {
+    if (hasUploadAttempted) {
+      resetSession();
+    }
+    onBack();
+  }, [hasUploadAttempted, onBack, resetSession]);
+
+  const handleContinue = useCallback(() => {
+    if (selectedUploadResource && hasUploadAttempted && latestUploadSessionId) {
+      const sessionParamNames = (selectedUploadResource.fullData.parameters || [])
+        .filter((param) => param.paramValue === "#genSessionId")
+        .map((param) => param.paramName);
+
+      const paramsToCheck = latestUploadParams ?? uploadResourceParams;
+      const hasMismatch = sessionParamNames.some(
+        (paramName) => paramsToCheck[paramName] !== latestUploadSessionId
+      );
+
+      if (hasMismatch) {
+        toast({
+          title: "Session mismatch detected",
+          description: "Upload session parameter does not match the active generated session. Please try Convert again.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    const effectiveUploadParams = latestUploadParams && Object.keys(latestUploadParams).length > 0
+      ? latestUploadParams
+      : uploadResourceParams;
+
+    onNext({ 
+      files, 
+      apis: selectedApis, 
+      textData: manualJsonData,
+      customApiUrl, 
+      apiParams,
+      selectedDataResources: getSelectedDataResources(),
+      uploadConfig: uploadConfig || undefined,
+      uploadResourceParams: Object.keys(effectiveUploadParams).length > 0 ? effectiveUploadParams : undefined,
+      manualJsonData: manualJsonData || undefined,
+      serviceChainResourceParams: Object.keys(serviceChainResourceParams).length > 0 ? serviceChainResourceParams : undefined,
+      processSessionId: latestUploadSessionId ?? sessionId,
+    });
+  }, [
+    selectedUploadResource,
+    hasUploadAttempted,
+    latestUploadSessionId,
+    latestUploadParams,
+    uploadResourceParams,
+    files,
+    selectedApis,
+    manualJsonData,
+    customApiUrl,
+    apiParams,
+    uploadConfig,
+    serviceChainResourceParams,
+    sessionId,
+    onNext,
+  ]);
 
   // API handling - toggle selection
   const handleApiSelect = (item: { id: string; name: string; provider: string; description: string; queryParams: string[] }) => {
@@ -790,7 +868,13 @@ const DataSelection = ({
                           onParamValuesChange={setUploadResourceParams}
                           onUploadSuccess={() => setUploadSuccessful(true)}
                           onUploadReset={() => setUploadSuccessful(false)}
+                          onUploadAttempt={handleUploadAttempt}
+                          onUploadSessionResolved={handleUploadSessionResolved}
                           isDebugMode={isDebugMode}
+                          uploadAllowMultipleFiles={dataSelectionSettings?.uploadAllowMultipleFiles ?? true}
+                          uploadMaxFiles={dataSelectionSettings?.uploadMaxFiles ?? 10}
+                          uploadMaxFileSizeMB={dataSelectionSettings?.uploadMaxFileSizeMB ?? 50}
+                          uploadAcceptedFileTypes={dataSelectionSettings?.uploadAcceptedFileTypes ?? ".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv"}
                         />
                       )}
                     </div>
@@ -1045,24 +1129,13 @@ const DataSelection = ({
 
       <div className="flex justify-between">
         <button
-          onClick={onBack}
+          onClick={handleBack}
           className="px-6 py-3 rounded-lg font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors"
         >
           Back
         </button>
         <button
-          onClick={() => onNext({ 
-            files, 
-            apis: selectedApis, 
-            textData: manualJsonData,
-            customApiUrl, 
-            apiParams,
-            selectedDataResources: getSelectedDataResources(),
-            uploadConfig: uploadConfig || undefined,
-            uploadResourceParams: Object.keys(uploadResourceParams).length > 0 ? uploadResourceParams : undefined,
-            manualJsonData: manualJsonData || undefined,
-            serviceChainResourceParams: Object.keys(serviceChainResourceParams).length > 0 ? serviceChainResourceParams : undefined,
-          })}
+          onClick={handleContinue}
           disabled={!hasData}
           className={`px-6 py-3 rounded-lg font-medium transition-all duration-300 ${
             hasData

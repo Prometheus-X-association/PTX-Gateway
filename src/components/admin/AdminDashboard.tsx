@@ -31,6 +31,7 @@ import ResultPageSettingsSection from "./ResultPageSettingsSection";
 import DataSelectionSettingsSection from "./DataSelectionSettingsSection";
 import ProcessingPageSettingsSection from "./ProcessingPageSettingsSection";
 import ChooseAnalyticsPageSettingsSection from "./ChooseAnalyticsPageSettingsSection";
+import PlaceholdersConfigSection from "./PlaceholdersConfigSection";
 import {
   exportSettingsBackup,
   importSettingsBackup,
@@ -361,6 +362,12 @@ const AdminDashboard = () => {
                       General
                     </TabsTrigger>
                     <TabsTrigger
+                      value="placeholders"
+                      className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                    >
+                      Placeholders
+                    </TabsTrigger>
+                    <TabsTrigger
                       value="external-oidc"
                       className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
                     >
@@ -412,6 +419,9 @@ const AdminDashboard = () => {
 
               <TabsContent value="global" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
                 <GlobalConfigSection section="general" />
+              </TabsContent>
+              <TabsContent value="placeholders" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                <PlaceholdersConfigSection />
               </TabsContent>
               <TabsContent value="external-oidc" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
                 <GlobalConfigSection section="external-oidc" />

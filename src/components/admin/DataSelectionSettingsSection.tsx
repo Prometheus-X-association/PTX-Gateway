@@ -5,6 +5,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plug, Save } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,6 +20,10 @@ const defaultSettings: DataSelectionSettings = {
   customApiDebugOnly: true,
   customApiTargetSoftwareIds: [],
   customApiTargetServiceChainIds: [],
+  uploadAllowMultipleFiles: true,
+  uploadMaxFiles: 10,
+  uploadMaxFileSizeMB: 50,
+  uploadAcceptedFileTypes: ".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv",
   dataPagePlugins: [],
 };
 
@@ -75,6 +81,20 @@ const DataSelectionSettingsSection = () => {
           customApiTargetServiceChainIds: Array.isArray(dataSelection.customApiTargetServiceChainIds)
             ? (dataSelection.customApiTargetServiceChainIds as string[])
             : [],
+          uploadAllowMultipleFiles:
+            typeof dataSelection.uploadAllowMultipleFiles === "boolean" ? dataSelection.uploadAllowMultipleFiles : true,
+          uploadMaxFiles:
+            typeof dataSelection.uploadMaxFiles === "number" && Number.isFinite(dataSelection.uploadMaxFiles)
+              ? Math.max(1, Math.min(50, Math.round(dataSelection.uploadMaxFiles)))
+              : 10,
+          uploadMaxFileSizeMB:
+            typeof dataSelection.uploadMaxFileSizeMB === "number" && Number.isFinite(dataSelection.uploadMaxFileSizeMB)
+              ? Math.max(1, Math.min(1024, Math.round(dataSelection.uploadMaxFileSizeMB)))
+              : 50,
+          uploadAcceptedFileTypes:
+            typeof dataSelection.uploadAcceptedFileTypes === "string" && dataSelection.uploadAcceptedFileTypes.trim()
+              ? dataSelection.uploadAcceptedFileTypes
+              : ".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv",
           dataPagePlugins: Array.isArray(dataSelection.dataPagePlugins)
             ? (dataSelection.dataPagePlugins as DataPagePluginConfig[])
             : [],
@@ -139,6 +159,10 @@ const DataSelectionSettingsSection = () => {
           customApiDebugOnly: settings.customApiDebugOnly ?? true,
           customApiTargetSoftwareIds: settings.customApiTargetSoftwareIds || [],
           customApiTargetServiceChainIds: settings.customApiTargetServiceChainIds || [],
+          uploadAllowMultipleFiles: settings.uploadAllowMultipleFiles ?? true,
+          uploadMaxFiles: settings.uploadMaxFiles ?? 10,
+          uploadMaxFileSizeMB: settings.uploadMaxFileSizeMB ?? 50,
+          uploadAcceptedFileTypes: settings.uploadAcceptedFileTypes || ".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv",
           dataPagePlugins: settings.dataPagePlugins || [],
         },
       };
@@ -168,51 +192,100 @@ const DataSelectionSettingsSection = () => {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Custom API Visibility</CardTitle>
+          <CardTitle>Data Selection Settings</CardTitle>
           <CardDescription>
-            Default behavior is debug-only. You can additionally allow Custom API on specific analytics options.
+            Configure Custom API visibility and Upload behavior for the data selection page.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="flex items-center justify-between">
-            <Label>Show Custom API only in debug mode by default</Label>
-            <Switch
-              checked={settings.customApiDebugOnly ?? true}
-              onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, customApiDebugOnly: checked }))}
-            />
-          </div>
+          <Tabs defaultValue="custom-api" className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="custom-api">Custom API Visibility</TabsTrigger>
+              <TabsTrigger value="upload">Upload Settings</TabsTrigger>
+            </TabsList>
 
-          <div className="space-y-2">
-            <Label>Show Custom API for selected software analytics</Label>
-            <div className="space-y-2 rounded-md border p-3 max-h-48 overflow-y-auto">
-              {softwareOptions.length === 0 && <p className="text-xs text-muted-foreground">No software resources.</p>}
-              {softwareOptions.map((option) => (
-                <label key={option.id} className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={(settings.customApiTargetSoftwareIds || []).includes(option.id)}
-                    onCheckedChange={(checked) => toggleTarget("software", option.id, checked === true)}
-                  />
-                  <span>{option.name}</span>
-                </label>
-              ))}
-            </div>
-          </div>
+            <TabsContent value="custom-api" className="space-y-6 mt-4">
+              <div className="flex items-center justify-between">
+                <Label>Show Custom API only in debug mode by default</Label>
+                <Switch
+                  checked={settings.customApiDebugOnly ?? true}
+                  onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, customApiDebugOnly: checked }))}
+                />
+              </div>
 
-          <div className="space-y-2">
-            <Label>Show Custom API for selected service chains</Label>
-            <div className="space-y-2 rounded-md border p-3 max-h-48 overflow-y-auto">
-              {serviceChainOptions.length === 0 && <p className="text-xs text-muted-foreground">No service chains.</p>}
-              {serviceChainOptions.map((option) => (
-                <label key={option.id} className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={(settings.customApiTargetServiceChainIds || []).includes(option.id)}
-                    onCheckedChange={(checked) => toggleTarget("serviceChain", option.id, checked === true)}
+              <div className="space-y-2">
+                <Label>Show Custom API for selected software analytics</Label>
+                <div className="space-y-2 rounded-md border p-3 max-h-48 overflow-y-auto">
+                  {softwareOptions.length === 0 && <p className="text-xs text-muted-foreground">No software resources.</p>}
+                  {softwareOptions.map((option) => (
+                    <label key={option.id} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={(settings.customApiTargetSoftwareIds || []).includes(option.id)}
+                        onCheckedChange={(checked) => toggleTarget("software", option.id, checked === true)}
+                      />
+                      <span>{option.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Show Custom API for selected service chains</Label>
+                <div className="space-y-2 rounded-md border p-3 max-h-48 overflow-y-auto">
+                  {serviceChainOptions.length === 0 && <p className="text-xs text-muted-foreground">No service chains.</p>}
+                  {serviceChainOptions.map((option) => (
+                    <label key={option.id} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={(settings.customApiTargetServiceChainIds || []).includes(option.id)}
+                        onCheckedChange={(checked) => toggleTarget("serviceChain", option.id, checked === true)}
+                      />
+                      <span>{option.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="upload" className="space-y-4 mt-4">
+              <div className="flex items-center justify-between">
+                <Label>Allow multiple files</Label>
+                <Switch
+                  checked={settings.uploadAllowMultipleFiles ?? true}
+                  onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, uploadAllowMultipleFiles: checked }))}
+                />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Max files</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={settings.uploadMaxFiles ?? 10}
+                    onChange={(e) => setSettings((prev) => ({ ...prev, uploadMaxFiles: Number(e.target.value || 10) }))}
                   />
-                  <span>{option.name}</span>
-                </label>
-              ))}
-            </div>
-          </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Max file size (MB)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={1024}
+                    value={settings.uploadMaxFileSizeMB ?? 50}
+                    onChange={(e) => setSettings((prev) => ({ ...prev, uploadMaxFileSizeMB: Number(e.target.value || 50) }))}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Accepted file types</Label>
+                <Input
+                  placeholder=".txt,.json,.pdf"
+                  value={settings.uploadAcceptedFileTypes ?? ""}
+                  onChange={(e) => setSettings((prev) => ({ ...prev, uploadAcceptedFileTypes: e.target.value }))}
+                />
+              </div>
+            </TabsContent>
+          </Tabs>
 
           <Button onClick={saveSettings} disabled={isSaving}>
             <Save className="h-4 w-4 mr-2" />

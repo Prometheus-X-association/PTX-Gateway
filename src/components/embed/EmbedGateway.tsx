@@ -28,6 +28,7 @@ interface SelectedDataType {
   uploadResourceParams?: Record<string, string>;
   manualJsonData?: string;
   serviceChainResourceParams?: Record<string, Record<string, string>>;
+  processSessionId?: string;
 }
 
 const findPreselectedAnalytics = (
@@ -236,6 +237,17 @@ const EmbedGatewayContent = () => {
   const [selectedAnalytics, setSelectedAnalytics] = useState<AnalyticsOption | null>(null);
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
+  const activeProcessSessionId = selectedData?.processSessionId ?? sessionId;
+  const effectiveAnalyticsQueryParams = useMemo(() => {
+    if (!selectedData?.processSessionId || selectedData.processSessionId === sessionId) {
+      return analyticsQueryParams;
+    }
+    const remapped: Record<string, string> = {};
+    Object.entries(analyticsQueryParams).forEach(([key, value]) => {
+      remapped[key] = value === sessionId ? selectedData.processSessionId! : value;
+    });
+    return remapped;
+  }, [analyticsQueryParams, selectedData?.processSessionId, sessionId]);
   const hasPreselection = hasPreselectionTarget(searchParams);
   const skipSelection = hasPreselection && searchParams.get("skip_selection") !== "false";
 
@@ -287,13 +299,13 @@ const EmbedGatewayContent = () => {
     return generatePdcPayload(
       selectedAnalytics,
       selectedData.selectedDataResources,
-      analyticsQueryParams,
+      effectiveAnalyticsQueryParams,
       selectedData.apiParams,
       selectedData.uploadResourceParams,
-      sessionId,
+      activeProcessSessionId,
       selectedData.serviceChainResourceParams
     );
-  }, [selectedAnalytics, selectedData, analyticsQueryParams, sessionId]);
+  }, [selectedAnalytics, selectedData, effectiveAnalyticsQueryParams, activeProcessSessionId]);
 
   const resultUrlInfo: ResultUrlInfo | null = useMemo(() => {
     if (!selectedAnalytics || !selectedData) return null;
@@ -302,11 +314,11 @@ const EmbedGatewayContent = () => {
       selectedData.selectedDataResources,
       selectedData.apiParams,
       selectedData.uploadResourceParams,
-      sessionId,
+      activeProcessSessionId,
       pdcConfig?.fallback_result_url || undefined,
       pdcConfig?.fallback_result_authorization || undefined
     );
-  }, [selectedAnalytics, selectedData, sessionId, pdcConfig]);
+  }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig]);
 
   const llmPromptContext = useMemo(() => {
     if (!selectedAnalytics) return null;

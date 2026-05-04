@@ -32,7 +32,13 @@ interface DocumentUploadZoneProps {
   // Callbacks for upload status
   onUploadSuccess?: () => void;
   onUploadReset?: () => void;
+  onUploadAttempt?: (attemptCount: number) => void;
+  onUploadSessionResolved?: (sessionId: string, params: Record<string, string>, regenerated: boolean) => void;
   isDebugMode?: boolean;
+  uploadAllowMultipleFiles?: boolean;
+  uploadMaxFiles?: number;
+  uploadMaxFileSizeMB?: number;
+  uploadAcceptedFileTypes?: string;
 }
 
 export interface UploadConfig {
@@ -51,7 +57,7 @@ interface FilePreviewState {
   text: string;
 }
 
-const acceptedFileTypes = ".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv";
+const defaultAcceptedFileTypes = ".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv";
 
 const getFilePreviewKind = (file: File): FilePreviewKind => {
   const type = file.type.toLowerCase();
@@ -78,9 +84,16 @@ const DocumentUploadZone = ({
   onParamValuesChange,
   onUploadSuccess,
   onUploadReset,
-  isDebugMode = false
+  onUploadAttempt,
+  onUploadSessionResolved,
+  isDebugMode = false,
+  uploadAllowMultipleFiles = true,
+  uploadMaxFiles = 10,
+  uploadMaxFileSizeMB = 50,
+  uploadAcceptedFileTypes = defaultAcceptedFileTypes,
 }: DocumentUploadZoneProps) => {
-  const { sessionId } = useProcessSession();
+  const { sessionId, resetSession } = useProcessSession();
+  const uploadAttemptCountRef = useRef(0);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -172,10 +185,36 @@ const DocumentUploadZone = ({
         });
       }
 
+      const attemptCount = uploadAttemptCountRef.current + 1;
+      const shouldRegenerate = attemptCount >= 2;
+      let effectiveSessionId = sessionId;
+      let effectiveParamValues = { ...paramValues };
+
+      if (shouldRegenerate) {
+        effectiveSessionId = resetSession();
+        const nextParamValues = { ...paramValues };
+        resource.parameters?.forEach((param) => {
+          if (param.paramValue === "#genSessionId") {
+            nextParamValues[param.paramName] = effectiveSessionId;
+          }
+        });
+        effectiveParamValues = nextParamValues;
+        onParamValuesChange(nextParamValues);
+        if (isDebugMode) {
+          toast({
+            title: "Session renewed for upload",
+            description: "A new #genSessionId was generated before this upload.",
+          });
+        }
+      }
+      uploadAttemptCountRef.current = attemptCount;
+      onUploadAttempt?.(attemptCount);
+      onUploadSessionResolved?.(effectiveSessionId, effectiveParamValues, shouldRegenerate);
+
       // Sanitize params - filter out #ignoreFlowData params
       const sanitizedParams = sanitizeParams(
-        paramValues, 
-        sessionId,
+        effectiveParamValues,
+        effectiveSessionId,
         true,
         "flowData", // Use flowData context to filter #ignoreFlowData
         resourceParamActions
@@ -299,13 +338,21 @@ const DocumentUploadZone = ({
     e.preventDefault();
     setIsDragging(false);
     const droppedFiles = Array.from(e.dataTransfer.files);
-    onFilesChange([...files, ...droppedFiles]);
+    const incoming = uploadAllowMultipleFiles ? [...files, ...droppedFiles] : droppedFiles.slice(0, 1);
+    const withinCount = incoming.slice(0, uploadMaxFiles);
+    const maxBytes = uploadMaxFileSizeMB * 1024 * 1024;
+    const filtered = withinCount.filter((file) => file.size <= maxBytes);
+    onFilesChange(filtered);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const selectedFiles = Array.from(e.target.files);
-      onFilesChange([...files, ...selectedFiles]);
+      const incoming = uploadAllowMultipleFiles ? [...files, ...selectedFiles] : selectedFiles.slice(0, 1);
+      const withinCount = incoming.slice(0, uploadMaxFiles);
+      const maxBytes = uploadMaxFileSizeMB * 1024 * 1024;
+      const filtered = withinCount.filter((file) => file.size <= maxBytes);
+      onFilesChange(filtered);
       // Allow re-selecting the same file(s) to trigger onChange again.
       e.target.value = "";
     }
@@ -411,10 +458,10 @@ const DocumentUploadZone = ({
         <input
           ref={fileInputRef}
           type="file"
-          multiple
+          multiple={uploadAllowMultipleFiles}
           className="hidden"
           onChange={handleFileSelect}
-          accept={acceptedFileTypes}
+          accept={uploadAcceptedFileTypes}
         />
       </div>
 

@@ -22,14 +22,31 @@ export interface PdcPayload {
   }>;
 }
 
+const forceSessionIdParams = (
+  rawParams: Record<string, string>,
+  parameters: Array<{ paramName: string; paramValue: string; paramAction?: string }> | undefined,
+  sessionId: string
+): Record<string, string> => {
+  if (!parameters || parameters.length === 0) return rawParams;
+  const next = { ...rawParams };
+  parameters.forEach((param) => {
+    if (param.paramValue === "#genSessionId") {
+      next[param.paramName] = sessionId;
+    }
+  });
+  return next;
+};
+
 // Helper to build resource entry with params
 const buildResourceEntry = (
   resourceUrl: string,
   rawParams: Record<string, string>,
+  parameters: Array<{ paramName: string; paramValue: string; paramAction?: string }> | undefined,
   paramActions: Record<string, string | undefined>,
   sessionId: string
 ): { resource: string; params?: { query: Array<Record<string, string>> } } => {
-  const sanitizedParams = sanitizeParams(rawParams, sessionId, true, "payload", paramActions);
+  const resolvedRawParams = forceSessionIdParams(rawParams, parameters, sessionId);
+  const sanitizedParams = sanitizeParams(resolvedRawParams, sessionId, true, "payload", paramActions);
   const paramsArray = Object.entries(sanitizedParams).map(([key, value]) => ({ [key]: value }));
 
   const entry: { resource: string; params?: { query: Array<Record<string, string>> } } = {
@@ -75,8 +92,13 @@ export const generatePdcPayload = (
   }> = [];
 
   const analyticsParamActions = getParamActionsMap(selectedAnalytics.data.parameters);
-  const sanitizedAnalyticsParams = sanitizeParams(
+  const resolvedAnalyticsParams = forceSessionIdParams(
     analyticsQueryParams,
+    selectedAnalytics.data.parameters,
+    sessionId
+  );
+  const sanitizedAnalyticsParams = sanitizeParams(
+    resolvedAnalyticsParams,
     sessionId,
     true,
     "payload",
@@ -126,7 +148,8 @@ export const generatePdcPayload = (
     }
 
     const resourceParamActions = getParamActionsMap(dataResource.parameters);
-    const sanitizedParams = sanitizeParams(rawParams, sessionId, true, "payload", resourceParamActions);
+    const resolvedRawParams = forceSessionIdParams(rawParams, dataResource.parameters, sessionId);
+    const sanitizedParams = sanitizeParams(resolvedRawParams, sessionId, true, "payload", resourceParamActions);
     const resourceParams = Object.entries(sanitizedParams).map(([key, value]) => ({
       [key]: value,
     }));
@@ -180,14 +203,14 @@ const generateServiceChainPayload = (
   const firstResource = sortedResources[0];
   const firstParamActions = getParamActionsMap(firstResource.parameters);
   const firstParams = resourceParams[firstResource.resource_url] || {};
-  const resourcesArray = [buildResourceEntry(firstResource.resource_url, firstParams, firstParamActions, sessionId)];
+  const resourcesArray = [buildResourceEntry(firstResource.resource_url, firstParams, firstResource.parameters, firstParamActions, sessionId)];
 
   // Last resource goes to purposes array
   const lastResource = sortedResources[sortedResources.length - 1];
   const lastParamActions = getParamActionsMap(lastResource.parameters);
   const lastParams = resourceParams[lastResource.resource_url] || {};
   const purposesArray = sortedResources.length > 1 
-    ? [buildResourceEntry(lastResource.resource_url, lastParams, lastParamActions, sessionId)]
+    ? [buildResourceEntry(lastResource.resource_url, lastParams, lastResource.parameters, lastParamActions, sessionId)]
     : [];
 
   // Middle resources go to serviceChainParams array
@@ -200,7 +223,15 @@ const generateServiceChainPayload = (
     const middleResource = sortedResources[i];
     const middleParamActions = getParamActionsMap(middleResource.parameters);
     const middleParams = resourceParams[middleResource.resource_url] || {};
-    serviceChainParams.push(buildResourceEntry(middleResource.resource_url, middleParams, middleParamActions, sessionId));
+    serviceChainParams.push(
+      buildResourceEntry(
+        middleResource.resource_url,
+        middleParams,
+        middleResource.parameters,
+        middleParamActions,
+        sessionId
+      )
+    );
   }
 
   const payload: PdcPayload = {

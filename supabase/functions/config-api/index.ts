@@ -426,10 +426,17 @@ const getResultPageSettingsFromGlobalConfig = (globalConfig: unknown): Record<st
   return sanitizeResultPageSettingsForBackup(resultPage);
 };
 
+const sanitizeDataSelectionSettingsForStorage = (settings: unknown): Record<string, unknown> | null => {
+  if (!isRecord(settings)) return null;
+  const next = { ...settings };
+  delete next.uploadDataCheckScript;
+  return next;
+};
+
 const getDataSelectionSettingsFromGlobalConfig = (globalConfig: unknown): Record<string, unknown> | null => {
   if (!isRecord(globalConfig) || !isRecord(globalConfig.features)) return null;
   const dataSelection = isRecord(globalConfig.features.dataSelection) ? globalConfig.features.dataSelection : null;
-  return isRecord(dataSelection) ? dataSelection : null;
+  return sanitizeDataSelectionSettingsForStorage(dataSelection);
 };
 
 const getProcessingPageSettingsFromGlobalConfig = (globalConfig: unknown): Record<string, unknown> | null => {
@@ -795,11 +802,13 @@ const importSettingsIntoOrganization = async ({
     }
     if (shouldImportDataSelectionSettings) {
       importedDataSelectionSettings =
-        isRecord(incoming.data_selection_settings)
-          ? incoming.data_selection_settings
-          : isRecord(incomingFeatures.dataSelection)
-            ? (incomingFeatures.dataSelection as Record<string, unknown>)
-            : null;
+        sanitizeDataSelectionSettingsForStorage(
+          isRecord(incoming.data_selection_settings)
+            ? incoming.data_selection_settings
+            : isRecord(incomingFeatures.dataSelection)
+              ? (incomingFeatures.dataSelection as Record<string, unknown>)
+              : null,
+        );
       if (importedDataSelectionSettings) {
         incomingFeatures.dataSelection = importedDataSelectionSettings;
       }
@@ -915,9 +924,11 @@ const importSettingsIntoOrganization = async ({
     }
   }
   if (!shouldImportGlobalConfig && shouldImportDataSelectionSettings) {
-    const incomingDataSelectionSettings = isRecord(incoming.data_selection_settings)
-      ? incoming.data_selection_settings
-      : getDataSelectionSettingsFromGlobalConfig(incoming.global_config);
+    const incomingDataSelectionSettings = sanitizeDataSelectionSettingsForStorage(
+      isRecord(incoming.data_selection_settings)
+        ? incoming.data_selection_settings
+        : getDataSelectionSettingsFromGlobalConfig(incoming.global_config)
+    );
 
     if (incomingDataSelectionSettings) {
       const { data: currentGlobal, error: currentGlobalError } = await supabase

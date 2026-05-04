@@ -135,6 +135,23 @@ const EMPTY_FORM: PlaceholderFormState = {
   description: "",
 };
 
+const BUILTIN_GEN_SESSION_ID: Placeholder = {
+  id: "__builtin_gen_session_id__",
+  placeholder_key: "#genSessionId",
+  placeholder_type: "dynamic",
+  static_value: null,
+  generator_type: "session_id",
+  custom_function_code: null,
+  description: "Built-in runtime placeholder. Resolves to the current process session identifier.",
+  created_at: null,
+  updated_at: null,
+};
+
+const BUILTIN_GEN_SESSION_ID_CODE = `// Equivalent implementation of built-in #genSessionId
+const timestamp = Date.now();
+const random = Math.random().toString(36).substring(2, 11);
+return \`session_\${timestamp}_\${random}\`;`;
+
 const PlaceholdersConfigSection = () => {
   const { user } = useAuth();
   const [placeholders, setPlaceholders] = useState<Placeholder[]>([]);
@@ -319,6 +336,11 @@ const PlaceholdersConfigSection = () => {
     return <Zap className="h-3 w-3 mr-1" />;
   };
 
+  const displayPlaceholders = [
+    BUILTIN_GEN_SESSION_ID,
+    ...placeholders.filter((p) => p.placeholder_key !== BUILTIN_GEN_SESSION_ID.placeholder_key),
+  ];
+
   if (isLoading) {
     return (
       <Card>
@@ -350,7 +372,29 @@ const PlaceholdersConfigSection = () => {
           </div>
         </CardHeader>
         <CardContent>
-          {placeholders.length === 0 ? (
+          <div className="mb-6 rounded-lg border bg-muted/30 p-4">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <p className="text-sm font-medium">Built-in implementation: <code>#genSessionId</code></p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(BUILTIN_GEN_SESSION_ID_CODE);
+                    toast.success("Built-in code copied");
+                  } catch {
+                    toast.error("Failed to copy code");
+                  }
+                }}
+              >
+                Copy code
+              </Button>
+            </div>
+            <pre className="text-xs font-mono bg-background p-3 rounded border overflow-x-auto whitespace-pre-wrap">
+              {BUILTIN_GEN_SESSION_ID_CODE}
+            </pre>
+          </div>
+          {displayPlaceholders.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <Variable className="h-12 w-12 mx-auto mb-3 opacity-40" />
               <p className="font-medium">No placeholders defined</p>
@@ -370,10 +414,15 @@ const PlaceholdersConfigSection = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {placeholders.map((p) => (
+                {displayPlaceholders.map((p) => {
+                  const isBuiltin = p.id === BUILTIN_GEN_SESSION_ID.id;
+                  return (
                   <TableRow key={p.id}>
                     <TableCell className="font-mono font-medium text-primary">
                       {p.placeholder_key}
+                      {isBuiltin && (
+                        <Badge variant="outline" className="ml-2">Built-in</Badge>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant={p.placeholder_type === "dynamic" ? "default" : "secondary"}>
@@ -394,7 +443,7 @@ const PlaceholdersConfigSection = () => {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        {p.placeholder_type === "dynamic" && (
+                        {p.placeholder_type === "dynamic" && !isBuiltin && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -405,21 +454,26 @@ const PlaceholdersConfigSection = () => {
                             {isTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                           </Button>
                         )}
-                        <Button variant="ghost" size="icon" onClick={() => openEdit(p)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => setDeleteConfirmId(p.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {!isBuiltin && (
+                          <>
+                            <Button variant="ghost" size="icon" onClick={() => openEdit(p)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => setDeleteConfirmId(p.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                );
+                })}
               </TableBody>
             </Table>
           )}

@@ -166,6 +166,20 @@ const getDataSelectionSettings = (features: unknown): DataSelectionSettings | nu
     customApiTargetServiceChainIds: Array.isArray(dataSelection.customApiTargetServiceChainIds)
       ? (dataSelection.customApiTargetServiceChainIds as string[])
       : [],
+    uploadAllowMultipleFiles:
+      typeof dataSelection.uploadAllowMultipleFiles === "boolean" ? dataSelection.uploadAllowMultipleFiles : true,
+    uploadMaxFiles:
+      typeof dataSelection.uploadMaxFiles === "number" && Number.isFinite(dataSelection.uploadMaxFiles)
+        ? Math.max(1, Math.min(50, Math.round(dataSelection.uploadMaxFiles)))
+        : 10,
+    uploadMaxFileSizeMB:
+      typeof dataSelection.uploadMaxFileSizeMB === "number" && Number.isFinite(dataSelection.uploadMaxFileSizeMB)
+        ? Math.max(1, Math.min(1024, Math.round(dataSelection.uploadMaxFileSizeMB)))
+        : 50,
+    uploadAcceptedFileTypes:
+      typeof dataSelection.uploadAcceptedFileTypes === "string" && dataSelection.uploadAcceptedFileTypes.trim()
+        ? dataSelection.uploadAcceptedFileTypes
+        : ".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv",
     dataPagePlugins: Array.isArray(dataSelection.dataPagePlugins)
       ? (dataSelection.dataPagePlugins as DataSelectionSettings["dataPagePlugins"])
       : [],

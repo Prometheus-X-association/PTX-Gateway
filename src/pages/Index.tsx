@@ -27,6 +27,7 @@ interface SelectedDataType {
   uploadConfig?: UploadConfig;
   uploadResourceParams?: Record<string, string>;
   serviceChainResourceParams?: Record<string, Record<string, string>>;
+  processSessionId?: string;
 }
 
 const IndexContent = () => {
@@ -75,6 +76,17 @@ const IndexContent = () => {
   const [selectedAnalytics, setSelectedAnalytics] = useState<AnalyticsOption | null>(null);
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
+  const activeProcessSessionId = selectedData?.processSessionId ?? sessionId;
+  const effectiveAnalyticsQueryParams = useMemo(() => {
+    if (!selectedData?.processSessionId || selectedData.processSessionId === sessionId) {
+      return analyticsQueryParams;
+    }
+    const remapped: Record<string, string> = {};
+    Object.entries(analyticsQueryParams).forEach(([key, value]) => {
+      remapped[key] = value === sessionId ? selectedData.processSessionId! : value;
+    });
+    return remapped;
+  }, [analyticsQueryParams, selectedData?.processSessionId, sessionId]);
 
   // Calculate actual step indices based on config
   const getStepIndex = useCallback((stepName: string): number => {
@@ -140,13 +152,13 @@ const IndexContent = () => {
     return generatePdcPayload(
       selectedAnalytics,
       selectedData.selectedDataResources,
-      analyticsQueryParams,
+      effectiveAnalyticsQueryParams,
       selectedData.apiParams,
       selectedData.uploadResourceParams,
-      sessionId,
+      activeProcessSessionId,
       selectedData.serviceChainResourceParams
     );
-  }, [selectedAnalytics, selectedData, analyticsQueryParams, sessionId]);
+  }, [selectedAnalytics, selectedData, effectiveAnalyticsQueryParams, activeProcessSessionId]);
 
   // Resolve result URL when we have analytics and data selected
   const resultUrlInfo: ResultUrlInfo | null = useMemo(() => {
@@ -156,11 +168,11 @@ const IndexContent = () => {
       selectedData.selectedDataResources,
       selectedData.apiParams,
       selectedData.uploadResourceParams,
-      sessionId,
+      activeProcessSessionId,
       pdcConfig?.fallback_result_url || undefined,
       pdcConfig?.fallback_result_authorization || undefined
     );
-  }, [selectedAnalytics, selectedData, sessionId, pdcConfig]);
+  }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig]);
 
   const llmPromptContext = useMemo(() => {
     if (!selectedAnalytics) return null;
@@ -348,8 +360,8 @@ const IndexContent = () => {
               <HumanValidationPage
                 selectedData={selectedData}
                 selectedAnalytics={selectedAnalytics}
-                analyticsQueryParams={analyticsQueryParams}
-                sessionId={sessionId}
+                analyticsQueryParams={effectiveAnalyticsQueryParams}
+                sessionId={activeProcessSessionId}
                 pdcUrl={pdcConfig?.pdc_url}
                 onApprove={handleValidationApprove}
                 onReject={handleValidationReject}

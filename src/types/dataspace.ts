@@ -63,6 +63,10 @@ export interface DataSelectionSettings {
   customApiDebugOnly?: boolean;
   customApiTargetSoftwareIds?: string[];
   customApiTargetServiceChainIds?: string[];
+  uploadAllowMultipleFiles?: boolean;
+  uploadMaxFiles?: number;
+  uploadMaxFileSizeMB?: number;
+  uploadAcceptedFileTypes?: string;
   dataPagePlugins?: DataPagePluginConfig[];
 }
 

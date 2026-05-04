@@ -15,6 +15,7 @@ export const GEN_SESSION_ID = "#genSessionId";
 export const ACTION_IGNORE_PAYLOAD = "#ignorePayload";      // Don't include in PDC payload
 export const ACTION_IGNORE_FLOW_RESULT = "#ignoreFlowResult"; // Don't include in result fetch
 export const ACTION_IGNORE_FLOW_DATA = "#ignoreFlowData";    // Don't include in data page fetch (upload)
+export const ACTION_DATA_CHECK = "#data-check#";             // Triggers upload-time data-check behavior
 
 /**
  * Flow context types for filtering parameters
