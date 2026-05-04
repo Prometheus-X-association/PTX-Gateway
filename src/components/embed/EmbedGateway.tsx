@@ -425,11 +425,16 @@ const EmbedGatewayContent = () => {
           <h1 className="text-[clamp(1.2rem,2.5vh,1.8rem)] font-bold leading-tight">Data Analytics</h1>
         </header>
 
-        {selectedAnalytics && !isVerticalProgress && (
-          <div className="text-center mb-4">
-            <p className="text-sm text-muted-foreground">
+        {!isVerticalProgress && (
+          <div className="text-center mb-4 min-h-[1.25rem]">
+            <p
+              className={`text-sm text-muted-foreground transition-opacity duration-150 ${
+                selectedAnalytics ? "opacity-100" : "opacity-0"
+              }`}
+              aria-live="polite"
+            >
               Selected analytics:{" "}
-              <span className="font-medium text-foreground">{getAnalyticsDisplayName()}</span>
+              <span className="font-medium text-foreground">{selectedAnalytics ? getAnalyticsDisplayName() : ""}</span>
             </p>
           </div>
         )}
