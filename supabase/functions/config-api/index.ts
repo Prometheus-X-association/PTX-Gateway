@@ -457,6 +457,9 @@ const sanitizeGlobalConfigForBackup = (
   } else {
     delete features.resultPage;
   }
+  if (isRecord(features.dataSelection)) {
+    features.dataSelection = sanitizeDataSelectionSettingsForStorage(features.dataSelection) ?? {};
+  }
 
   return {
     ...globalConfig,
