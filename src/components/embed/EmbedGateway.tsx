@@ -232,6 +232,7 @@ const EmbedGatewayContent = () => {
   const steps = useMemo(() => ["Select Type", "Choose Data", "Processing", "Results"], []);
 
   const [currentStep, setCurrentStep] = useState(0);
+  const [transitionDirection, setTransitionDirection] = useState<"forward" | "back">("forward");
   const [selectedAnalytics, setSelectedAnalytics] = useState<AnalyticsOption | null>(null);
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
@@ -239,6 +240,13 @@ const EmbedGatewayContent = () => {
   const skipSelection = hasPreselection && searchParams.get("skip_selection") !== "false";
 
   const getStepIndex = (stepName: string): number => steps.indexOf(stepName);
+  const goToStep = (nextStep: number): void => {
+    setCurrentStep((prevStep) => {
+      if (nextStep === prevStep) return prevStep;
+      setTransitionDirection(nextStep > prevStep ? "forward" : "back");
+      return nextStep;
+    });
+  };
 
   const getAnalyticsDisplayName = (): string => {
     if (!selectedAnalytics) return "";
@@ -257,11 +265,11 @@ const EmbedGatewayContent = () => {
 
   const handleDataSelect = (data: SelectedDataType) => {
     setSelectedData(data);
-    setCurrentStep(getStepIndex("Processing"));
+    goToStep(getStepIndex("Processing"));
   };
 
   const handleProcessingComplete = () => {
-    setCurrentStep(getStepIndex("Results"));
+    goToStep(getStepIndex("Results"));
   };
 
   const handleProcessingError = (error: unknown) => {
@@ -271,7 +279,7 @@ const EmbedGatewayContent = () => {
   const handleProcessingBack = () => {
     const processingIndex = getStepIndex("Processing");
     const previousIndex = Math.max(0, processingIndex - 1);
-    setCurrentStep(previousIndex);
+    goToStep(previousIndex);
   };
 
   const pdcPayload: PdcPayload | null = useMemo(() => {
@@ -317,15 +325,24 @@ const EmbedGatewayContent = () => {
     if (preselected) {
       setSelectedAnalytics(preselected);
       setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
-      setCurrentStep(getStepIndex("Choose Data"));
+      goToStep(getStepIndex("Choose Data"));
       return;
     }
-    setCurrentStep(0);
+    goToStep(0);
     setSelectedAnalytics(null);
     setAnalyticsQueryParams({});
   };
 
   const getCurrentStepName = (): string => steps[currentStep];
+  const isVerticalProgress = processingPageSettings?.stepProgressLayout === "vertical_right";
+  const verticalRailGap = "1.25rem";
+  const stepTransitionClass = isVerticalProgress
+    ? transitionDirection === "forward"
+      ? "step-transition-vertical-forward"
+      : "step-transition-vertical-back"
+    : transitionDirection === "forward"
+      ? "step-transition-horizontal-forward"
+      : "step-transition-horizontal-back";
 
   // Send postMessage events for parent window integration
   useEffect(() => {
@@ -353,7 +370,7 @@ const EmbedGatewayContent = () => {
     resetSession();
     setSelectedAnalytics(preselected);
     setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
-    setCurrentStep(getStepIndex("Choose Data"));
+    goToStep(getStepIndex("Choose Data"));
   }, [
     skipSelection,
     selectedAnalytics,
@@ -362,6 +379,7 @@ const EmbedGatewayContent = () => {
     serviceChains,
     resetSession,
     sessionId,
+    goToStep,
   ]);
 
   if (embedError) {
@@ -385,17 +403,17 @@ const EmbedGatewayContent = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-6 max-w-4xl">
+      <div className="container mx-auto px-4 py-5 max-w-[90vw]">
         {/* Compact Header for Embed */}
-        <header className="text-center mb-6">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 mb-3">
+        <header className="text-center mb-4 h-[clamp(84px,15vh,132px)] overflow-hidden flex flex-col justify-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 mb-2 mx-auto">
             <Sparkles className="w-3 h-3 text-primary" />
-            <span className="text-xs text-primary font-medium">PDC Gateway</span>
+            <span className="text-[clamp(10px,1.1vh,12px)] text-primary font-medium">PDC Gateway</span>
           </div>
-          <h1 className="text-2xl font-bold">Data Analytics</h1>
+          <h1 className="text-[clamp(1.2rem,2.5vh,1.8rem)] font-bold leading-tight">Data Analytics</h1>
         </header>
 
-        {selectedAnalytics && (
+        {selectedAnalytics && !isVerticalProgress && (
           <div className="text-center mb-4">
             <p className="text-sm text-muted-foreground">
               Selected analytics:{" "}
@@ -404,16 +422,36 @@ const EmbedGatewayContent = () => {
           </div>
         )}
 
-        {/* Step Indicator */}
-        <StepIndicator steps={steps} currentStep={currentStep} />
-
-        {/* Step Content */}
-        <main className="glass-card p-6 mt-6">
+        {isVerticalProgress ? (
+          <div className="lg:hidden">
+            <StepIndicator steps={steps} currentStep={currentStep} />
+          </div>
+        ) : (
+          <StepIndicator steps={steps} currentStep={currentStep} />
+        )}
+        <div className={isVerticalProgress ? "grid grid-cols-1 lg:grid-cols-[max-content_minmax(0,1fr)] gap-6 mt-2 items-start" : ""}>
+          {isVerticalProgress ? (
+            <aside className="hidden lg:block self-start sticky w-max max-w-[320px]" style={{ top: verticalRailGap }}>
+              <div
+                className="relative pr-4"
+                style={{
+                  height: `calc(100dvh - clamp(84px, 15vh, 132px) - (2 * ${verticalRailGap}))`,
+                }}
+              >
+                <div className="absolute right-0 top-0 w-px bg-border/60" style={{ bottom: verticalRailGap }} />
+                <StepIndicator steps={steps} currentStep={currentStep} orientation="vertical" />
+              </div>
+            </aside>
+          ) : null}
+          <main
+            key={`${currentStep}-${isVerticalProgress ? "vertical" : "horizontal"}`}
+            className={`glass-card p-6 mt-6 text-[clamp(11px,1.25vh,14px)] leading-relaxed ${stepTransitionClass}`}
+          >
           {getCurrentStepName() === "Select Type" && (
             <AnalyticsSelection
               selected={selectedAnalytics}
               onSelect={handleAnalyticsSelect}
-              onNext={() => setCurrentStep(getStepIndex("Choose Data"))}
+              onNext={() => goToStep(getStepIndex("Choose Data"))}
               queryParams={analyticsQueryParams}
               onQueryParamChange={setAnalyticsQueryParams}
               softwareResources={softwareResources}
@@ -423,7 +461,7 @@ const EmbedGatewayContent = () => {
           {getCurrentStepName() === "Choose Data" && (
             <DataSelection
               onNext={handleDataSelect}
-              onBack={() => setCurrentStep(getStepIndex("Select Type"))}
+              onBack={() => goToStep(getStepIndex("Select Type"))}
               dataResources={dataResources}
               selectedAnalytics={selectedAnalytics}
             />
@@ -452,7 +490,8 @@ const EmbedGatewayContent = () => {
               customVisualizations={customVisualizations}
             />
           )}
-        </main>
+          </main>
+        </div>
       </div>
     </div>
   );

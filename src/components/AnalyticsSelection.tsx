@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Link2, X, Cpu } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -46,6 +46,14 @@ const AnalyticsSelection = ({
   const descriptionRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
 
   const [serviceChainDetails, setServiceChainDetails] = useState<ServiceChain | null>(null);
+
+  const areSetsEqual = (a: Set<string>, b: Set<string>): boolean => {
+    if (a.size !== b.size) return false;
+    for (const value of a) {
+      if (!b.has(value)) return false;
+    }
+    return true;
+  };
 
   // Build options from props
   const options = useMemo(() => {
@@ -101,26 +109,26 @@ const AnalyticsSelection = ({
           newTruncated.add(id);
         }
       });
-      setTruncatedItems(newTruncated);
+      setTruncatedItems((prev) => (areSetsEqual(prev, newTruncated) ? prev : newTruncated));
     };
 
-    const timer = setTimeout(checkTruncation, 100);
+    const timer = window.requestAnimationFrame(checkTruncation);
     window.addEventListener('resize', checkTruncation);
     
     return () => {
-      clearTimeout(timer);
+      window.cancelAnimationFrame(timer);
       window.removeEventListener('resize', checkTruncation);
     };
   }, [options]);
 
   // Set ref for description element
-  const setDescriptionRef = (id: string, el: HTMLParagraphElement | null) => {
+  const setDescriptionRef = useCallback((id: string, el: HTMLParagraphElement | null) => {
     if (el) {
       descriptionRefs.current.set(id, el);
     } else {
       descriptionRefs.current.delete(id);
     }
-  };
+  }, []);
 
   // Check if current option is selected
   const isSelected = (option: AnalyticsOption): boolean => {
@@ -178,15 +186,15 @@ const AnalyticsSelection = ({
     setParamsDialogOpen(false);
   };
 
-  const openDescriptionDialog = (e: React.MouseEvent, name: string, description: string) => {
+  const openDescriptionDialog = useCallback((e: React.MouseEvent, name: string, description: string) => {
     e.stopPropagation();
     setDescriptionDialog({ name, description });
-  };
+  }, []);
 
-  const openServiceChainDetails = (e: React.MouseEvent, chain: ServiceChain) => {
+  const openServiceChainDetails = useCallback((e: React.MouseEvent, chain: ServiceChain) => {
     e.stopPropagation();
     setServiceChainDetails(chain);
-  };
+  }, []);
 
   const getServiceChainResources = (chain: ServiceChain): ServiceChainEmbeddedResource[] =>
     [...(chain.embedded_resources || [])].sort((a, b) => a.service_index - b.service_index);
@@ -199,6 +207,85 @@ const AnalyticsSelection = ({
     );
   }
 
+  const optionCards = useMemo(() => (
+    options.map((option) => {
+      const info = getDisplayInfo(option);
+      const optionSelected = isSelected(option);
+      const optionId = getOptionId(option);
+      const isTruncated = truncatedItems.has(optionId);
+      
+      return (
+        <div
+          key={optionId}
+          onClick={() => handleOptionSelect(option)}
+          className={`analytics-card ${optionSelected ? "selected" : ""} relative cursor-pointer`}
+        >
+          {option.type === "serviceChain" ? (
+            <button
+              type="button"
+              onClick={(event) => openServiceChainDetails(event, option.data)}
+              className={`theme-badge mb-4 transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-primary hover:text-primary-foreground hover:shadow-md hover:shadow-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                optionSelected
+                  ? "theme-provider-badge selected"
+                  : "theme-provider-badge"
+              }`}
+              aria-label={`Show ${info.provider} in ${info.name}`}
+            >
+              {info.provider}
+            </button>
+          ) : (
+            <div className={`theme-badge mb-4 transition-colors ${
+              optionSelected
+                ? "theme-provider-badge selected"
+                : "theme-provider-badge"
+            }`}>
+              {info.provider}
+            </div>
+          )}
+          
+          <h3 className="font-semibold text-lg mb-2 line-clamp-2">{info.name}</h3>
+          <p 
+            ref={(el) => setDescriptionRef(optionId, el)}
+            className="text-sm text-muted-foreground line-clamp-3"
+          >
+            {info.description}
+          </p>
+
+          {(isTruncated || info.isServiceChain) && (
+            <div className="mt-2 flex items-center justify-between gap-2">
+              {isTruncated ? (
+                <button
+                  onClick={(e) => openDescriptionDialog(e, info.name, info.description)}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Read full
+                </button>
+              ) : (
+                <span />
+              )}
+
+              {info.isServiceChain && (
+                <Badge className="bg-primary/20 text-primary border-primary/30 gap-1">
+                  <Link2 className="w-3 h-3" />
+                  Service Chain
+                </Badge>
+              )}
+            </div>
+          )}
+          
+          {isDebugMode && info.queryParams.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-border">
+              <span className="text-xs text-muted-foreground">
+                Parameters: {info.queryParams.join(", ")}
+              </span>
+            </div>
+          )}
+          
+        </div>
+      );
+    })
+  ), [options, truncatedItems, selected, queryParams, isDebugMode, sessionId, openDescriptionDialog, openServiceChainDetails]);
+
   return (
     <div className="animate-fade-in">
       <div className="text-center mb-8">
@@ -210,79 +297,7 @@ const AnalyticsSelection = ({
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-        {options.map((option) => {
-          const info = getDisplayInfo(option);
-          const optionSelected = isSelected(option);
-          const optionId = getOptionId(option);
-          const isTruncated = truncatedItems.has(optionId);
-          
-          return (
-            <div
-              key={optionId}
-              onClick={() => handleOptionSelect(option)}
-              className={`analytics-card ${optionSelected ? "selected" : ""} relative cursor-pointer`}
-            >
-              {info.isServiceChain && (
-                <Badge className="absolute top-3 right-3 bg-primary/20 text-primary border-primary/30 gap-1">
-                  <Link2 className="w-3 h-3" />
-                  Service Chain
-                </Badge>
-              )}
-              
-              {option.type === "serviceChain" ? (
-                <button
-                  type="button"
-                  onClick={(event) => openServiceChainDetails(event, option.data)}
-                  className={`theme-badge mb-4 transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-primary hover:text-primary-foreground hover:shadow-md hover:shadow-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
-                    optionSelected
-                      ? "theme-provider-badge selected"
-                      : "theme-provider-badge"
-                  }`}
-                  aria-label={`Show ${info.provider} in ${info.name}`}
-                >
-                  {info.provider}
-                </button>
-              ) : (
-                <div className={`theme-badge mb-4 transition-colors ${
-                  optionSelected
-                    ? "theme-provider-badge selected"
-                    : "theme-provider-badge"
-                }`}>
-                  {info.provider}
-                </div>
-              )}
-              
-              <h3 className="font-semibold text-lg mb-2 line-clamp-2">{info.name}</h3>
-              <p 
-                ref={(el) => setDescriptionRef(optionId, el)}
-                className="text-sm text-muted-foreground line-clamp-3"
-              >
-                {info.description}
-              </p>
-              
-              {/* Read full button - only show if text is truncated */}
-              {isTruncated && (
-                <button
-                  onClick={(e) => openDescriptionDialog(e, info.name, info.description)}
-                  className="text-xs text-primary hover:underline mt-1"
-                >
-                  Read full
-                </button>
-              )}
-              
-              {isDebugMode && info.queryParams.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-border">
-                  <span className="text-xs text-muted-foreground">
-                    Parameters: {info.queryParams.join(", ")}
-                  </span>
-                </div>
-              )}
-              
-            </div>
-          );
-        })}
-      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">{optionCards}</div>
 
       <div className="flex justify-center">
         <button

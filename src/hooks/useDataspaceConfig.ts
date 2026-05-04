@@ -175,13 +175,15 @@ const getDataSelectionSettings = (features: unknown): DataSelectionSettings | nu
 const getProcessingPageSettings = (features: unknown): ProcessingPageSettings | null => {
   if (!isRecord(features)) return null;
   const processingPage = isRecord(features.processingPage) ? features.processingPage : {};
+  const layoutRaw = processingPage.stepProgressLayout;
+  const stepProgressLayout = layoutRaw === "vertical_right" ? "vertical_right" : "horizontal";
   const pendingWaitSecondsRaw = processingPage.pendingWaitSeconds;
   const pendingWaitSeconds =
     typeof pendingWaitSecondsRaw === "number" && Number.isFinite(pendingWaitSecondsRaw)
       ? Math.max(5, Math.min(600, Math.round(pendingWaitSecondsRaw)))
       : 60;
 
-  return { pendingWaitSeconds };
+  return { pendingWaitSeconds, stepProgressLayout };
 };
 
 export const useDataspaceConfig = (

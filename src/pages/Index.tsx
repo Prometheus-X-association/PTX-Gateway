@@ -71,6 +71,7 @@ const IndexContent = () => {
   }, [showConfigPage, showHumanValidation]);
 
   const [currentStep, setCurrentStep] = useState(0);
+  const [transitionDirection, setTransitionDirection] = useState<"forward" | "back">("forward");
   const [selectedAnalytics, setSelectedAnalytics] = useState<AnalyticsOption | null>(null);
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
@@ -79,6 +80,14 @@ const IndexContent = () => {
   const getStepIndex = useCallback((stepName: string): number => {
     return steps.indexOf(stepName);
   }, [steps]);
+
+  const goToStep = useCallback((nextStep: number) => {
+    setCurrentStep((prevStep) => {
+      if (nextStep === prevStep) return prevStep;
+      setTransitionDirection(nextStep > prevStep ? "forward" : "back");
+      return nextStep;
+    });
+  }, []);
 
   // Get display name for selected analytics
   const getAnalyticsDisplayName = (): string => {
@@ -99,20 +108,20 @@ const IndexContent = () => {
 
   const handleDataSelect = (data: SelectedDataType) => {
     setSelectedData(data);
-    setCurrentStep(getStepIndex(showHumanValidation ? "Validation" : "Processing"));
+    goToStep(getStepIndex(showHumanValidation ? "Validation" : "Processing"));
   };
 
   const handleValidationApprove = () => {
-    setCurrentStep(getStepIndex("Processing"));
+    goToStep(getStepIndex("Processing"));
   };
 
   const handleValidationReject = () => {
-    setCurrentStep(getStepIndex("Choose Data"));
+    goToStep(getStepIndex("Choose Data"));
   };
 
   const handleProcessingComplete = useCallback(() => {
-    setCurrentStep(getStepIndex("Results"));
-  }, [getStepIndex]);
+    goToStep(getStepIndex("Results"));
+  }, [getStepIndex, goToStep]);
 
   const handleProcessingError = useCallback((error: unknown) => {
     console.error("Processing error:", error);
@@ -122,8 +131,8 @@ const IndexContent = () => {
   const handleProcessingBack = useCallback(() => {
     const processingIndex = getStepIndex("Processing");
     const previousIndex = Math.max(0, processingIndex - 1);
-    setCurrentStep(previousIndex);
-  }, [getStepIndex]);
+    goToStep(previousIndex);
+  }, [getStepIndex, goToStep]);
 
   // Generate PDC payload when we have analytics and data selected
   const pdcPayload: PdcPayload | null = useMemo(() => {
@@ -161,7 +170,7 @@ const IndexContent = () => {
   }, [selectedAnalytics]);
 
   const handleRestart = () => {
-    setCurrentStep(showConfigPage ? 0 : getStepIndex("Select Type"));
+    goToStep(showConfigPage ? 0 : getStepIndex("Select Type"));
     setSelectedAnalytics(null);
     setAnalyticsQueryParams({});
     setSelectedData(null);
@@ -186,7 +195,7 @@ const IndexContent = () => {
   // Only for non-debug users (non-logged-in or logged-in without debug mode)
   if (!hasBackendData && !isDebugMode) {
     return (
-      <div className="min-h-screen bg-background relative overflow-hidden">
+      <div className="min-h-screen bg-background relative">
         {/* Background Glow */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] opacity-30 pointer-events-none">
           <div className="absolute inset-0" style={{ background: "var(--gradient-glow)" }} />
@@ -245,50 +254,79 @@ const IndexContent = () => {
       organizationId: pdcConfig.organization_id,
     } : { organizationId: null }
   ), [pdcConfig]);
+  const isVerticalProgress = processingPageSettings?.stepProgressLayout === "vertical_right";
+  const verticalRailGap = "1.25rem";
+  const stepTransitionClass = isVerticalProgress
+    ? transitionDirection === "forward"
+      ? "step-transition-vertical-forward"
+      : "step-transition-vertical-back"
+    : transitionDirection === "forward"
+      ? "step-transition-horizontal-forward"
+      : "step-transition-horizontal-back";
 
   return (
-      <div className="min-h-screen bg-background relative overflow-hidden">
+      <div className="min-h-screen bg-background relative">
         {/* Background Glow */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] opacity-30 pointer-events-none">
           <div className="absolute inset-0" style={{ background: "var(--gradient-glow)" }} />
         </div>
 
-        <div className="relative z-10 container mx-auto px-4 py-8 max-w-5xl">
+        <div className="relative z-10 container mx-auto px-4 py-5 max-w-[90vw]">
           {/* Header with User Menu - Only show for debug mode users */}
-          <header className="text-center mb-12 relative">
+          <header className="text-center mb-4 relative h-[clamp(96px,15vh,140px)] overflow-hidden flex flex-col justify-center">
             {isDebugMode && (
               <div className="absolute top-0 right-0">
                 <UserMenu />
               </div>
             )}
             
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 mb-6">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 mb-2 mx-auto">
               <Sparkles className="w-4 h-4 text-primary" />
-              <span className="text-sm text-primary font-medium">Data Analytics Platform</span>
+              <span className="text-[clamp(11px,1.2vh,13px)] text-primary font-medium">Data Analytics Platform</span>
             </div>
-            <h1 className="text-4xl md:text-5xl font-bold mb-4">
+            <h1 className="text-[clamp(1.35rem,2.9vh,2.2rem)] font-bold mb-1 leading-tight">
               Transform Your Data Into{" "}
               <span className="gradient-text">Insights</span>
             </h1>
-            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+            <p className="text-[clamp(11px,1.35vh,15px)] text-muted-foreground max-w-2xl mx-auto leading-snug">
               Upload your data, select your analysis type, and let our platform
               generate actionable insights in minutes
             </p>
           </header>
 
-          {/* Step Indicator */}
-          <StepIndicator steps={steps} currentStep={currentStep} />
-
-          {/* Step Content */}
-          <main className="glass-card p-8">
+          {isVerticalProgress ? (
+            <div className="lg:hidden">
+              <StepIndicator steps={steps} currentStep={currentStep} />
+            </div>
+          ) : (
+            <StepIndicator steps={steps} currentStep={currentStep} />
+          )}
+          <div className={isVerticalProgress ? "grid grid-cols-1 lg:grid-cols-[max-content_minmax(0,1fr)] gap-6 items-start" : ""}>
+            {isVerticalProgress ? (
+              <aside className="hidden lg:block self-start sticky w-max max-w-[320px]" style={{ top: verticalRailGap }}>
+                <div
+                  className="relative pr-4"
+                  style={{
+                    height: `calc(100dvh - clamp(96px, 15vh, 140px) - (2 * ${verticalRailGap}))`,
+                  }}
+                >
+                  <div className="absolute right-0 top-0 w-px bg-border/60" style={{ bottom: verticalRailGap }} />
+                  <StepIndicator steps={steps} currentStep={currentStep} orientation="vertical" />
+                </div>
+              </aside>
+            ) : null}
+            <main
+              key={`${currentStep}-${isVerticalProgress ? "vertical" : "horizontal"}`}
+              className={`glass-card p-8 text-[clamp(11px,1.25vh,14px)] leading-relaxed ${stepTransitionClass}`}
+            >
             {getCurrentStepName() === "Config" && (
-              <DataspaceConfigPage onNext={() => setCurrentStep(getStepIndex("Select Type"))} />
+              <DataspaceConfigPage onNext={() => goToStep(getStepIndex("Select Type"))} />
             )}
             {getCurrentStepName() === "Select Type" && (
               <AnalyticsSelection
                 selected={selectedAnalytics}
                 onSelect={handleAnalyticsSelect}
-                onNext={() => setCurrentStep(getStepIndex("Choose Data"))}
+                onNext={() => goToStep(getStepIndex("Choose Data"))}
                 queryParams={analyticsQueryParams}
                 onQueryParamChange={setAnalyticsQueryParams}
                 softwareResources={softwareResources}
@@ -299,7 +337,7 @@ const IndexContent = () => {
             {getCurrentStepName() === "Choose Data" && (
               <DataSelection
                 onNext={handleDataSelect}
-                onBack={() => setCurrentStep(getStepIndex("Select Type"))}
+                onBack={() => goToStep(getStepIndex("Select Type"))}
                 dataResources={dataResources}
                 selectedAnalytics={selectedAnalytics}
                 isDebugMode={isDebugMode}
@@ -343,7 +381,8 @@ const IndexContent = () => {
                 showDebugApiExportConfig={isDebugMode}
               />
             )}
-          </main>
+            </main>
+          </div>
 
           {/* Footer */}
           <footer className="text-center mt-8 text-sm text-muted-foreground">

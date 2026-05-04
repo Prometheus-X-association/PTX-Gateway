@@ -337,11 +337,13 @@ const getDataSelectionSettings = (features: unknown): DataSelectionSettings | nu
 const getProcessingPageSettings = (features: unknown): ProcessingPageSettings | null => {
   if (!isRecord(features)) return null;
   const processingPage = isRecord(features.processingPage) ? features.processingPage : {};
+  const layoutRaw = processingPage.stepProgressLayout;
+  const stepProgressLayout = layoutRaw === "vertical_right" ? "vertical_right" : "horizontal";
   const pendingWaitSeconds =
     typeof processingPage.pendingWaitSeconds === "number" && Number.isFinite(processingPage.pendingWaitSeconds)
       ? Math.max(5, Math.min(600, Math.round(processingPage.pendingWaitSeconds)))
       : 60;
-  return { pendingWaitSeconds };
+  return { pendingWaitSeconds, stepProgressLayout };
 };
 
 const buildDummySkillResult = (error: unknown, organizationName: string) => {
@@ -443,6 +445,7 @@ const OrgGatewayContent = ({
   }, [showConfigPage, showHumanValidation]);
 
   const [currentStep, setCurrentStep] = useState(0);
+  const [transitionDirection, setTransitionDirection] = useState<"forward" | "back">("forward");
   const [selectedAnalytics, setSelectedAnalytics] = useState<AnalyticsOption | null>(null);
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
@@ -480,6 +483,14 @@ const OrgGatewayContent = ({
     return steps.indexOf(stepName);
   }, [steps]);
 
+  const goToStep = useCallback((nextStep: number) => {
+    setCurrentStep((prevStep) => {
+      if (nextStep === prevStep) return prevStep;
+      setTransitionDirection(nextStep > prevStep ? "forward" : "back");
+      return nextStep;
+    });
+  }, []);
+
   const analyticsDisplayName = useMemo((): string => {
     if (!selectedAnalytics) return "";
     if (selectedAnalytics.type === "software") {
@@ -512,26 +523,26 @@ const OrgGatewayContent = ({
     setForcedResultData(null);
     setForcedResultNotice(null);
     setSelectedData(data);
-    setCurrentStep(getStepIndex(showHumanValidation ? "Validation" : "Processing"));
+    goToStep(getStepIndex(showHumanValidation ? "Validation" : "Processing"));
   };
 
   const handleValidationApprove = () => {
     setProcessingFailed(false);
     setForcedResultData(null);
     setForcedResultNotice(null);
-    setCurrentStep(getStepIndex("Processing"));
+    goToStep(getStepIndex("Processing"));
   };
 
   const handleValidationReject = () => {
-    setCurrentStep(getStepIndex("Choose Data"));
+    goToStep(getStepIndex("Choose Data"));
   };
 
   const handleProcessingComplete = useCallback(() => {
     setProcessingFailed(false);
     setForcedResultData(null);
     setForcedResultNotice(null);
-    setCurrentStep(getStepIndex("Results"));
-  }, [getStepIndex]);
+    goToStep(getStepIndex("Results"));
+  }, [getStepIndex, goToStep]);
 
   const handleProcessingError = useCallback((error: unknown) => {
     console.error("Processing error:", error);
@@ -551,8 +562,8 @@ const OrgGatewayContent = ({
 
     const processingIndex = getStepIndex("Processing");
     const previousIndex = Math.max(0, processingIndex - 1);
-    setCurrentStep(previousIndex);
-  }, [organization.slug, getStepIndex]);
+    goToStep(previousIndex);
+  }, [organization.slug, getStepIndex, goToStep]);
 
   useEffect(() => {
     if (!skipSelection || selectedAnalytics) return;
@@ -568,7 +579,7 @@ const OrgGatewayContent = ({
     setForcedResultNotice(null);
     setSelectedAnalytics(preselected);
     setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
-    setCurrentStep(getStepIndex("Choose Data"));
+    goToStep(getStepIndex("Choose Data"));
   }, [
     skipSelection,
     selectedAnalytics,
@@ -579,6 +590,7 @@ const OrgGatewayContent = ({
     organization.slug,
     sessionId,
     getStepIndex,
+    goToStep,
   ]);
 
   const analyticsTargetId = useMemo(
@@ -621,7 +633,7 @@ const OrgGatewayContent = ({
     setProcessingFailed(false);
     setForcedResultData(null);
     setForcedResultNotice(null);
-    setCurrentStep(showConfigPage ? 0 : getStepIndex("Select Type"));
+    goToStep(showConfigPage ? 0 : getStepIndex("Select Type"));
     setSelectedAnalytics(null);
     setAnalyticsQueryParams({});
     setSelectedData(null);
@@ -634,8 +646,8 @@ const OrgGatewayContent = ({
     setForcedResultNotice(
       "Dummy data is displayed because PDC execution failed. This is sample fallback data for testing only."
     );
-    setCurrentStep(getStepIndex("Results"));
-  }, [organization.name, getStepIndex]);
+    goToStep(getStepIndex("Results"));
+  }, [organization.name, getStepIndex, goToStep]);
 
   const currentStepName = steps[currentStep];
 
@@ -653,8 +665,8 @@ const OrgGatewayContent = ({
     setPersistedFlow(existing);
     setForcedResultData(existing.forcedResultData ?? null);
     setForcedResultNotice(existing.forcedResultNotice ?? null);
-    setCurrentStep(getStepIndex(existing.step === "processing" ? "Processing" : "Results"));
-  }, [organization.slug, sessionId, getStepIndex]);
+    goToStep(getStepIndex(existing.step === "processing" ? "Processing" : "Results"));
+  }, [organization.slug, sessionId, getStepIndex, goToStep]);
 
   useEffect(() => {
     const storageKey = getOrgFlowStorageKey(organization.slug);
@@ -667,12 +679,12 @@ const OrgGatewayContent = ({
       setPersistedFlow(latest);
       setForcedResultData(latest.forcedResultData ?? null);
       setForcedResultNotice(latest.forcedResultNotice ?? null);
-      setCurrentStep(getStepIndex(latest.step === "processing" ? "Processing" : "Results"));
+      goToStep(getStepIndex(latest.step === "processing" ? "Processing" : "Results"));
     };
 
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [organization.slug, sessionId, getStepIndex]);
+  }, [organization.slug, sessionId, getStepIndex, goToStep]);
 
   useEffect(() => {
     if (currentStepName !== "Processing" && currentStepName !== "Results") {
@@ -785,38 +797,47 @@ const OrgGatewayContent = ({
     }
     return null;
   }, [activeAnalyticsTargetId, selectedAnalytics, serviceChains, softwareResources]);
+  const isVerticalProgress = processingPageSettings?.stepProgressLayout === "vertical_right";
+  const verticalRailGap = "1.25rem";
+  const stepTransitionClass = isVerticalProgress
+    ? transitionDirection === "forward"
+      ? "step-transition-vertical-forward"
+      : "step-transition-vertical-back"
+    : transitionDirection === "forward"
+      ? "step-transition-horizontal-forward"
+      : "step-transition-horizontal-back";
 
   return (
-    <div className="min-h-screen bg-background relative overflow-hidden">
+    <div className="min-h-screen bg-background relative">
       {/* Background Glow */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] opacity-30 pointer-events-none">
         <div className="absolute inset-0" style={{ background: "var(--gradient-glow)" }} />
       </div>
 
-      <div className="relative z-10 container mx-auto px-4 py-8 max-w-5xl">
+      <div className="relative z-10 container mx-auto px-4 py-5 max-w-[90vw]">
         {/* Header with User Menu */}
-        <header className="text-center mb-12 relative">
+        <header className="text-center mb-4 relative h-[clamp(96px,15vh,140px)] overflow-hidden flex flex-col justify-center">
           {isAuthenticated && (
             <div className="absolute top-0 right-0">
               <UserMenu />
             </div>
           )}
 
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 mb-6">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 mb-2 mx-auto">
             <Sparkles className="w-4 h-4 text-primary" />
-            <span className="text-sm text-primary font-medium">{organization.name}</span>
+            <span className="text-[clamp(11px,1.2vh,13px)] text-primary font-medium">{organization.name}</span>
           </div>
-          <h1 className="text-4xl md:text-5xl font-bold mb-4">
+          <h1 className="text-[clamp(1.35rem,2.9vh,2.2rem)] font-bold mb-1 leading-tight">
             Transform Your Data Into{" "}
             <span className="gradient-text">Insights</span>
           </h1>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+          <p className="text-[clamp(11px,1.35vh,15px)] text-muted-foreground max-w-2xl mx-auto leading-snug">
             Upload your data, select your analysis type, and let our platform
             generate actionable insights in minutes
           </p>
         </header>
 
-        {selectedAnalytics && (
+        {selectedAnalytics && !isVerticalProgress && (
           <div className="text-center mb-6">
             <p className="text-sm text-muted-foreground">
               Selected analytics:{" "}
@@ -825,19 +846,42 @@ const OrgGatewayContent = ({
           </div>
         )}
 
-        {/* Step Indicator */}
-        <StepIndicator steps={steps} currentStep={currentStep} />
-
-        {/* Step Content */}
-        <main className="glass-card p-8">
+        {isVerticalProgress ? (
+          <div className="lg:hidden">
+            <StepIndicator steps={steps} currentStep={currentStep} />
+          </div>
+        ) : (
+          <StepIndicator steps={steps} currentStep={currentStep} />
+        )}
+        <div className={isVerticalProgress ? "grid grid-cols-1 lg:grid-cols-[max-content_minmax(0,1fr)] gap-6 items-start" : ""}>
+          {isVerticalProgress ? (
+            <aside className="hidden lg:block self-start sticky w-max max-w-[320px]" style={{ top: verticalRailGap }}>
+              <div
+                className="relative pr-4"
+                style={{
+                  height: `calc(100dvh - clamp(96px, 15vh, 140px) - (2 * ${verticalRailGap}))`,
+                }}
+              >
+                <div className="absolute right-0 top-0 w-px bg-border/60" style={{ bottom: verticalRailGap }} />
+                <div className="mb-3">
+                  <p className="text-xs text-primary font-medium">{organization.name}</p>
+                </div>
+                <StepIndicator steps={steps} currentStep={currentStep} orientation="vertical" />
+              </div>
+            </aside>
+          ) : null}
+          <main
+            key={`${currentStep}-${isVerticalProgress ? "vertical" : "horizontal"}`}
+            className={`glass-card p-8 text-[clamp(11px,1.25vh,14px)] leading-relaxed ${stepTransitionClass}`}
+          >
           {currentStepName === "Config" && (
-            <DataspaceConfigPage onNext={() => setCurrentStep(getStepIndex("Select Type"))} />
+            <DataspaceConfigPage onNext={() => goToStep(getStepIndex("Select Type"))} />
           )}
           {currentStepName === "Select Type" && (
             <AnalyticsSelection
               selected={selectedAnalytics}
               onSelect={handleAnalyticsSelect}
-              onNext={() => setCurrentStep(getStepIndex("Choose Data"))}
+              onNext={() => goToStep(getStepIndex("Choose Data"))}
               queryParams={analyticsQueryParams}
               onQueryParamChange={setAnalyticsQueryParams}
               softwareResources={softwareResources}
@@ -848,7 +892,7 @@ const OrgGatewayContent = ({
           {currentStepName === "Choose Data" && (
             <DataSelection
               onNext={handleDataSelect}
-              onBack={() => setCurrentStep(getStepIndex("Select Type"))}
+              onBack={() => goToStep(getStepIndex("Select Type"))}
               dataResources={dataResources}
               selectedAnalytics={selectedAnalytics}
               isDebugMode={isDebugMode}
@@ -898,7 +942,8 @@ const OrgGatewayContent = ({
               showDebugApiExportConfig={isDebugMode}
             />
           )}
-        </main>
+          </main>
+        </div>
 
         {/* Footer */}
         <footer className="text-center mt-8 text-sm text-muted-foreground">

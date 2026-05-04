@@ -345,6 +345,22 @@
   .animate-scale-in {
     animation: scaleIn 0.3s ease-out;
   }
+
+  .step-transition-horizontal-forward {
+    animation: stepSlideHorizontalForward 280ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  .step-transition-horizontal-back {
+    animation: stepSlideHorizontalBack 280ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  .step-transition-vertical-forward {
+    animation: stepSlideVerticalForward 280ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  .step-transition-vertical-back {
+    animation: stepSlideVerticalBack 280ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
 }
 
 @keyframes fadeIn {
@@ -371,6 +387,50 @@
   to { 
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes stepSlideHorizontalForward {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes stepSlideHorizontalBack {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes stepSlideVerticalForward {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes stepSlideVerticalBack {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 

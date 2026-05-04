@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Palette, Save, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -21,6 +22,7 @@ const DEFAULT_VISUALIZATION: VisualizationSettings = {
   card_color: "",
   design_url: "",
 };
+type StepProgressLayout = "horizontal" | "vertical_right";
 
 const VisualizationConfigSection = () => {
   const { user, refreshAuth } = useAuth();
@@ -28,6 +30,8 @@ const VisualizationConfigSection = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingFavicon, setIsUploadingFavicon] = useState(false);
   const [settings, setSettings] = useState<VisualizationSettings>(DEFAULT_VISUALIZATION);
+  const [configId, setConfigId] = useState<string | null>(null);
+  const [stepProgressLayout, setStepProgressLayout] = useState<StepProgressLayout>("horizontal");
 
   const fetchVisualization = async () => {
     if (!user?.organization?.id) return;
@@ -45,6 +49,21 @@ const VisualizationConfigSection = () => {
         ...DEFAULT_VISUALIZATION,
         ...visualization,
       });
+
+      const { data: globalConfigData, error: globalConfigError } = await supabase
+        .from("global_configs")
+        .select("id, features")
+        .eq("organization_id", user.organization.id)
+        .maybeSingle();
+      if (globalConfigError) throw globalConfigError;
+      setConfigId(globalConfigData?.id ?? null);
+      const features = globalConfigData?.features && typeof globalConfigData.features === "object"
+        ? (globalConfigData.features as Record<string, unknown>)
+        : {};
+      const processingPage = features.processingPage && typeof features.processingPage === "object"
+        ? (features.processingPage as Record<string, unknown>)
+        : {};
+      setStepProgressLayout(processingPage.stepProgressLayout === "vertical_right" ? "vertical_right" : "horizontal");
     } catch {
       toast.error("Failed to load visualization settings");
     } finally {
@@ -89,6 +108,46 @@ const VisualizationConfigSection = () => {
         .update({ settings: merged })
         .eq("id", user.organization.id);
       if (error) throw error;
+
+      if (configId) {
+        const { data: existingConfig, error: existingError } = await supabase
+          .from("global_configs")
+          .select("features")
+          .eq("id", configId)
+          .maybeSingle();
+        if (existingError) throw existingError;
+        const existingFeatures = existingConfig?.features && typeof existingConfig.features === "object"
+          ? (existingConfig.features as Record<string, unknown>)
+          : {};
+        const currentProcessingPage = existingFeatures.processingPage && typeof existingFeatures.processingPage === "object"
+          ? (existingFeatures.processingPage as Record<string, unknown>)
+          : {};
+        const { error: updateConfigError } = await supabase
+          .from("global_configs")
+          .update({
+            features: {
+              ...existingFeatures,
+              processingPage: {
+                ...currentProcessingPage,
+                stepProgressLayout,
+              },
+            },
+          })
+          .eq("id", configId);
+        if (updateConfigError) throw updateConfigError;
+      } else {
+        const { error: insertConfigError } = await supabase
+          .from("global_configs")
+          .insert({
+            organization_id: user.organization.id,
+            features: {
+              processingPage: {
+                stepProgressLayout,
+              },
+            },
+          });
+        if (insertConfigError) throw insertConfigError;
+      }
 
       toast.success("Visualization settings saved");
       await refreshAuth();
@@ -280,6 +339,22 @@ const VisualizationConfigSection = () => {
         <p className="text-xs text-muted-foreground">
           Colors should be hex format (for example: #00bcd4). Empty values keep default theme colors.
         </p>
+
+        <div className="space-y-2 border-t pt-4">
+          <Label>Step Progress Layout</Label>
+          <Select value={stepProgressLayout} onValueChange={(value) => setStepProgressLayout(value as StepProgressLayout)}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="horizontal">Horizontal (Responsive Top)</SelectItem>
+              <SelectItem value="vertical_right">Vertical (Responsive Left Sticky)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            Vertical mode shows a sticky right rail with a divider and uses about 90% viewport height for step navigation.
+          </p>
+        </div>
 
         <Button onClick={handleSave} disabled={isSaving}>
           {isSaving ? (

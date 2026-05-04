@@ -677,30 +677,30 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       font-size: 12px;
       color: #64748b;
     }
-    .tabulator-toolbar .info-grid {
+    .info-grid {
       width: 100%;
       display: grid;
       grid-template-columns: 1fr;
       gap: 8px;
       margin-top: 2px;
     }
-    .tabulator-toolbar .info-card {
+    .info-card {
       min-height: 38px;
-      border: 1px solid rgba(148, 163, 184, 0.32);
+      border: 0;
       border-radius: 10px;
       padding: 8px 10px;
-      background: rgba(248, 250, 252, 0.85);
+      background: transparent;
       display: flex;
       align-items: center;
     }
-    .tabulator-toolbar .legend {
+    .legend {
       display: inline-flex;
       align-items: center;
       gap: 8px;
       font-size: 12px;
       color: #64748b;
     }
-    .tabulator-toolbar .legend-swatch {
+    .legend-swatch {
       width: 14px;
       height: 14px;
       border-radius: 4px;
@@ -709,8 +709,8 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       flex: 0 0 auto;
     }
     @media (min-width: 960px) {
-      .tabulator-toolbar .info-grid {
-        grid-template-columns: 1fr 1fr;
+      .info-grid {
+        grid-template-columns: 1fr;
         align-items: stretch;
       }
     }
@@ -820,39 +820,26 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   const toolbarActions = document.createElement("div");
   toolbarActions.className = "tabulator-toolbar-actions";
 
-  const saveButton = document.createElement("button");
-  saveButton.type = "button";
-  saveButton.className = "tabulator-save-button";
-  saveButton.textContent = "Validate changes";
-
-  const saveStatus = document.createElement("span");
-  saveStatus.className = "tabulator-save-status";
-  saveStatus.textContent = "Saved";
-
   const deleteButton = document.createElement("button");
   deleteButton.type = "button";
   deleteButton.className = "tabulator-delete-button";
   deleteButton.textContent = "Delete selected rows";
 
-  const hint = document.createElement("div");
-  hint.className = "hint info-card";
-  hint.textContent = "Changed cells are highlighted. Hover a changed cell to view original value and restore it.";
-
   const legend = document.createElement("div");
   legend.className = "legend info-card";
-  legend.innerHTML = '<span class="legend-swatch" aria-hidden="true"></span><span>Highlighted cell: value differs from original extracted skills</span>';
+  legend.innerHTML = '<span class="legend-swatch" aria-hidden="true"></span><span>Highlighted cell: this value has already been modified and differs from the original extracted cell</span>';
 
   const infoGrid = document.createElement("div");
   infoGrid.className = "info-grid";
-  infoGrid.append(legend, hint);
+  infoGrid.append(legend);
 
-  toolbarActions.append(saveStatus, deleteButton, saveButton);
-  toolbar.append(searchInput, toolbarActions, infoGrid);
+  toolbarActions.append(deleteButton);
+  toolbar.append(searchInput, toolbarActions);
 
   const tableHost = document.createElement("div");
   tableHost.className = "tabulator-table-host";
 
-  shell.append(toolbar, tableHost);
+  shell.append(toolbar, tableHost, infoGrid);
   container.appendChild(shell);
 
   let activePopover = null;
@@ -1038,22 +1025,12 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     if (dirty && isProgrammaticUpdate) {
       return;
     }
-    saveButton.classList.toggle("is-visible", dirty);
-    saveButton.classList.toggle("needs-save", dirty);
-    saveStatus.classList.toggle("is-dirty", dirty);
-    saveStatus.textContent = dirty ? "Unsaved changes" : "Saved";
-    saveButton.style.setProperty("display", "inline-flex", "important");
     if (dirty) {
       isExternalImmediateMode = false;
       tabulatorState.lastChangeSource = "tabulator";
       hidePopover();
       table?.redraw(true);
     }
-    hint.textContent = dirty
-      ? "You have unsaved edits. Click Validate changes to see highlighted differences."
-      : showValidatedDiff
-        ? "Validated differences are highlighted. Hover or click a highlighted cell to view original value and restore it."
-        : "Edit cells and click Validate changes to inspect differences versus original incoming data.";
   };
 
   const applyRowsToJson = (tableRows) => {
@@ -1180,48 +1157,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     ],
   });
 
-  table.on("cellEdited", (cell) => {
-    if (isProgrammaticUpdate) return;
-    if (
-      isPopoverPinned &&
-      activePopoverCell &&
-      activePopoverCell.getRow().getIndex() === cell?.getRow?.().getIndex?.() &&
-      activePopoverCell.getField() === cell?.getField?.()
-    ) {
-      hidePopover();
-    }
-    persistWorkingRowsFromTable();
-    setDirty(true);
-  });
-  table.on("dataChanged", () => {
-    if (isProgrammaticUpdate) return;
-    persistWorkingRowsFromTable();
-    setDirty(true);
-  });
-
-  setDirty(false);
-
-  deleteButton.addEventListener("click", () => {
-    const selectedRows = table.getSelectedRows();
-    if (!selectedRows.length) {
-      alert("Select one or more rows to delete.");
-      return;
-    }
-    selectedRows.forEach((row) => {
-      const rowData = row.getData();
-      row.update({
-        visual_deleted: true,
-        skill_name: "",
-        skill_description: "",
-      });
-    });
-    table.deselectRow();
-    table.redraw(true);
-    persistWorkingRowsFromTable();
-    setDirty(true);
-  });
-
-  saveButton.addEventListener("click", async () => {
+  const applyValidatedChanges = async () => {
     try {
       const nextRows = table.getData().map((row) => ({ ...row }));
       nextRows.forEach((rowData) => {
@@ -1259,6 +1195,43 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       isProgrammaticUpdate = false;
       alert(error instanceof Error ? error.message : "Could not update JSON.");
     }
+  };
+
+  table.on("cellEdited", (cell) => {
+    if (isProgrammaticUpdate) return;
+    if (
+      isPopoverPinned &&
+      activePopoverCell &&
+      activePopoverCell.getRow().getIndex() === cell?.getRow?.().getIndex?.() &&
+      activePopoverCell.getField() === cell?.getField?.()
+    ) {
+      hidePopover();
+    }
+    persistWorkingRowsFromTable();
+    setDirty(true);
+    void applyValidatedChanges();
+  });
+
+  setDirty(false);
+
+  deleteButton.addEventListener("click", () => {
+    const selectedRows = table.getSelectedRows();
+    if (!selectedRows.length) {
+      alert("Select one or more rows to delete.");
+      return;
+    }
+    selectedRows.forEach((row) => {
+      row.update({
+        visual_deleted: true,
+        skill_name: "",
+        skill_description: "",
+      });
+    });
+    table.deselectRow();
+    table.redraw(true);
+    persistWorkingRowsFromTable();
+    setDirty(true);
+    void applyValidatedChanges();
   });
 
   table.on("cellMouseEnter", (event, cell) => {

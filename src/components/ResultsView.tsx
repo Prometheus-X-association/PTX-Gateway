@@ -3116,9 +3116,6 @@ const ResultsView = ({
         <h3 className="font-semibold mb-4 flex items-center gap-2">
           <FileJson className="w-5 h-5 text-primary" />
           Result Data
-          {!isLoading && (
-            <span className="text-xs text-muted-foreground ml-2">(Edit in either view - changes sync in real-time)</span>
-          )}
         </h3>
 
         {isLoading ? (
