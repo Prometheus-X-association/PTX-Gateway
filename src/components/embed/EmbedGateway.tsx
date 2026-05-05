@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Sparkles, Loader2, AlertCircle } from "lucide-react";
 import StepIndicator from "@/components/StepIndicator";
@@ -104,6 +104,7 @@ const EmbedGatewayContent = () => {
   const [embedAllowed, setEmbedAllowed] = useState(false);
   const [embedError, setEmbedError] = useState<string | null>(null);
   const [validatedOrgId, setValidatedOrgId] = useState<string | undefined>(undefined);
+  const [gatewayFeatures, setGatewayFeatures] = useState<Record<string, unknown> | null>(null);
   const [orgExecutionToken, setOrgExecutionToken] = useState<string | null>(null);
   const themeCleanupRef = useRef<(() => void) | null>(null);
   
@@ -116,8 +117,12 @@ const EmbedGatewayContent = () => {
     dataResources, 
     serviceChains,
     customVisualizations,
+    processingPageSettings,
     isLoading 
-  } = useDataspaceConfig(validatedOrgId, { enabled: embedAllowed && !!validatedOrgId });
+  } = useDataspaceConfig(validatedOrgId, {
+    enabled: embedAllowed && !!validatedOrgId,
+    globalFeaturesOverride: gatewayFeatures,
+  });
 
   const revealEmbedDocument = () => {
     document.documentElement.removeAttribute("data-ptx-embed-pending");
@@ -157,17 +162,20 @@ const EmbedGatewayContent = () => {
 
     const validateEmbedAccess = async () => {
       if (!orgSlug) {
+        setGatewayFeatures(null);
         setEmbedError("Missing org parameter");
         revealEmbedDocument();
         return;
       }
       if (!embedToken) {
+        setGatewayFeatures(null);
         setEmbedError("Missing embed token");
         revealEmbedDocument();
         return;
       }
 
       try {
+        setGatewayFeatures(null);
         const referrerOrigin = (() => {
           try {
             return document.referrer ? new URL(document.referrer).origin : "";
@@ -199,6 +207,11 @@ const EmbedGatewayContent = () => {
         themeCleanupRef.current = themeCleanup;
         revealEmbedDocument();
         setValidatedOrgId(data.organization_id as string);
+        setGatewayFeatures(
+          data.gateway_features && typeof data.gateway_features === "object" && !Array.isArray(data.gateway_features)
+            ? (data.gateway_features as Record<string, unknown>)
+            : null
+        );
 
         const { data: tokenData, error: tokenError } = await supabase.functions.invoke("pdc-auth", {
           body: {
@@ -215,6 +228,7 @@ const EmbedGatewayContent = () => {
         setOrgExecutionToken(tokenData.token as string);
         setEmbedAllowed(true);
       } catch (err) {
+        setGatewayFeatures(null);
         setEmbedError(toUserFriendlyEmbedError(err));
         revealEmbedDocument();
       }
@@ -347,6 +361,7 @@ const EmbedGatewayContent = () => {
 
   const getCurrentStepName = (): string => steps[currentStep];
   const isVerticalProgress = processingPageSettings?.stepProgressLayout === "vertical_right";
+  const verticalStepBarTopText = (processingPageSettings?.verticalStepBarTopText || "").trim();
   const verticalRailGap = "1.25rem";
   const stepTransitionClass = isVerticalProgress
     ? transitionDirection === "forward"
@@ -356,15 +371,87 @@ const EmbedGatewayContent = () => {
       ? "step-transition-horizontal-forward"
       : "step-transition-horizontal-back";
 
+  const postEmbedResize = useCallback(() => {
+    if (typeof window === "undefined" || window.parent === window) return;
+    const doc = document.documentElement;
+    const body = document.body;
+    const height = Math.max(
+      doc?.scrollHeight || 0,
+      doc?.offsetHeight || 0,
+      body?.scrollHeight || 0,
+      body?.offsetHeight || 0,
+    );
+    if (!Number.isFinite(height) || height <= 0) return;
+    window.parent.postMessage(
+      {
+        type: "pdc-gateway-resize",
+        height: Math.ceil(height),
+      },
+      "*",
+    );
+  }, []);
+
   // Send postMessage events for parent window integration
   useEffect(() => {
+    if (typeof window === "undefined" || window.parent === window) return;
     const message = {
       type: 'pdc-gateway-step-change',
       step: getCurrentStepName(),
       stepIndex: currentStep,
     };
     window.parent.postMessage(message, '*');
-  }, [currentStep]);
+    postEmbedResize();
+  }, [currentStep, postEmbedResize]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || window.parent === window) return;
+
+    let rafId: number | null = null;
+    const scheduleResizePost = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        postEmbedResize();
+      });
+    };
+
+    scheduleResizePost();
+
+    const resizeObserver = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(() => scheduleResizePost())
+      : null;
+    if (resizeObserver) {
+      resizeObserver.observe(document.documentElement);
+      if (document.body) resizeObserver.observe(document.body);
+    }
+
+    const mutationObserver = typeof MutationObserver !== "undefined"
+      ? new MutationObserver(() => scheduleResizePost())
+      : null;
+    if (mutationObserver && document.body) {
+      mutationObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true,
+      });
+    }
+
+    window.addEventListener("load", scheduleResizePost);
+    window.addEventListener("resize", scheduleResizePost);
+    window.addEventListener("orientationchange", scheduleResizePost);
+
+    return () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+      window.removeEventListener("load", scheduleResizePost);
+      window.removeEventListener("resize", scheduleResizePost);
+      window.removeEventListener("orientationchange", scheduleResizePost);
+    };
+  }, [postEmbedResize]);
 
   const pdcConfigForProcessing = useMemo(() => (
     pdcConfig ? {
@@ -456,7 +543,12 @@ const EmbedGatewayContent = () => {
                 }}
               >
                 <div className="absolute right-0 top-0 w-px bg-border/60" style={{ bottom: verticalRailGap }} />
-                <StepIndicator steps={steps} currentStep={currentStep} orientation="vertical" />
+                <StepIndicator
+                  steps={steps}
+                  currentStep={currentStep}
+                  orientation="vertical"
+                  verticalTopText={verticalStepBarTopText}
+                />
               </div>
             </aside>
           ) : null}

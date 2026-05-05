@@ -267,6 +267,11 @@ const IndexContent = () => {
     } : { organizationId: null }
   ), [pdcConfig]);
   const isVerticalProgress = processingPageSettings?.stepProgressLayout === "vertical_right";
+  const verticalStepBarTopText = (
+    processingPageSettings?.verticalStepBarTopText ||
+    user?.organization?.name ||
+    ""
+  ).trim();
   const verticalRailGap = "1.25rem";
   const stepTransitionClass = isVerticalProgress
     ? transitionDirection === "forward"
@@ -323,7 +328,12 @@ const IndexContent = () => {
                   }}
                 >
                   <div className="absolute right-0 top-0 w-px bg-border/60" style={{ bottom: verticalRailGap }} />
-                  <StepIndicator steps={steps} currentStep={currentStep} orientation="vertical" />
+                  <StepIndicator
+                    steps={steps}
+                    currentStep={currentStep}
+                    orientation="vertical"
+                    verticalTopText={verticalStepBarTopText}
+                  />
                 </div>
               </aside>
             ) : null}

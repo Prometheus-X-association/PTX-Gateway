@@ -8,6 +8,8 @@ import ReactDOM from 'react-dom/client';
 export class PDCGatewayElement extends HTMLElement {
   private root: ReactDOM.Root | null = null;
   private mountPoint: HTMLDivElement | null = null;
+  private iframe: HTMLIFrameElement | null = null;
+  private boundMessageHandler: ((event: MessageEvent) => void) | null = null;
 
   static get observedAttributes() {
     return ['org-slug', 'theme', 'token', 'gateway-origin', 'height', 'software-id', 'software-url', 'service-chain-id', 'catalog-id', 'skip-selection', 'query-params'];
@@ -31,8 +33,20 @@ export class PDCGatewayElement extends HTMLElement {
         width: 100%;
         min-height: 600px;
       }
+      iframe {
+        display: block;
+        width: 100%;
+        min-height: 600px;
+        height: 600px;
+        border: 0;
+        background: transparent;
+        overflow: hidden;
+      }
     `;
     shadow.appendChild(style);
+
+    this.boundMessageHandler = this.handleMessage.bind(this);
+    window.addEventListener("message", this.boundMessageHandler);
     
     this.render();
   }
@@ -41,6 +55,10 @@ export class PDCGatewayElement extends HTMLElement {
     if (this.root) {
       this.root.unmount();
       this.root = null;
+    }
+    if (this.boundMessageHandler) {
+      window.removeEventListener("message", this.boundMessageHandler);
+      this.boundMessageHandler = null;
     }
   }
 
@@ -66,11 +84,20 @@ export class PDCGatewayElement extends HTMLElement {
     let iframe = this.mountPoint.querySelector('iframe');
     if (!iframe) {
       iframe = document.createElement('iframe');
-      iframe.style.width = '100%';
-      iframe.style.height = '100%';
-      iframe.style.border = 'none';
-      iframe.style.background = 'transparent';
+      iframe.setAttribute('loading', 'lazy');
+      iframe.setAttribute('scrolling', 'no');
       this.mountPoint.appendChild(iframe);
+    }
+    this.iframe = iframe;
+
+    const minHeight = this.getConfiguredMinHeight();
+    this.style.minHeight = `${minHeight}px`;
+    if (!this.style.height) {
+      this.style.height = `${minHeight}px`;
+    }
+    iframe.style.minHeight = `${minHeight}px`;
+    if (!iframe.style.height) {
+      iframe.style.height = `${minHeight}px`;
     }
     
     // Build the embed URL
@@ -90,6 +117,37 @@ export class PDCGatewayElement extends HTMLElement {
     }
     
     iframe.src = embedUrl.toString();
+  }
+
+  private getConfiguredMinHeight(): number {
+    const heightRaw = this.getAttribute("height");
+    if (heightRaw && /^\d+$/.test(heightRaw)) {
+      return Math.max(100, Number(heightRaw));
+    }
+    return 600;
+  }
+
+  private handleMessage(event: MessageEvent) {
+    if (!this.iframe || event.source !== this.iframe.contentWindow) return;
+    const payload = event.data;
+    if (!payload || typeof payload !== "object" || payload.type !== "pdc-gateway-resize") return;
+
+    let expectedOrigin: string | null = null;
+    try {
+      expectedOrigin = new URL(this.getAttribute("gateway-origin") || this.iframe.src).origin;
+    } catch {
+      expectedOrigin = null;
+    }
+    if (expectedOrigin && event.origin && event.origin !== expectedOrigin) return;
+
+    const nextHeight = Number((payload as { height?: unknown }).height);
+    if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
+
+    const appliedHeight = Math.max(this.getConfiguredMinHeight(), Math.ceil(nextHeight));
+    this.style.height = `${appliedHeight}px`;
+    this.style.minHeight = `${appliedHeight}px`;
+    this.iframe.style.height = `${appliedHeight}px`;
+    this.iframe.style.minHeight = `${appliedHeight}px`;
   }
 }
 

@@ -65,6 +65,9 @@ interface ExternalOauth2ClientConfig {
   additionalTokenParams: string;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 interface GlobalConfigState {
   id?: string;
   app_name: string;
@@ -86,6 +89,10 @@ interface GlobalConfigState {
     };
     externalOidc: ExternalOidcConfig;
     externalOauth2Client: ExternalOauth2ClientConfig;
+    processingPage: {
+      verticalStepBarTopText: string;
+      [key: string]: unknown;
+    };
     maxFileSizeMB: number;
     maxFilesCount: number;
   };
@@ -152,6 +159,9 @@ const DEFAULT_CONFIG: GlobalConfigState = {
     },
     externalOidc: DEFAULT_EXTERNAL_OIDC,
     externalOauth2Client: DEFAULT_EXTERNAL_OAUTH2_CLIENT,
+    processingPage: {
+      verticalStepBarTopText: "",
+    },
     maxFileSizeMB: 50,
     maxFilesCount: 10,
   },
@@ -205,6 +215,7 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
           const llmInsights = features.llmInsights || DEFAULT_CONFIG.features.llmInsights;
           const externalOidc = features.externalOidc || DEFAULT_EXTERNAL_OIDC;
           const externalOauth2Client = features.externalOauth2Client || DEFAULT_EXTERNAL_OAUTH2_CLIENT;
+          const processingPage = isRecord(features.processingPage) ? features.processingPage : {};
 
           setConfig({
             id: data.id,
@@ -225,6 +236,13 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
               externalOauth2Client: {
                 ...DEFAULT_EXTERNAL_OAUTH2_CLIENT,
                 ...externalOauth2Client,
+              },
+              processingPage: {
+                ...processingPage,
+                verticalStepBarTopText:
+                  typeof processingPage.verticalStepBarTopText === "string"
+                    ? processingPage.verticalStepBarTopText
+                    : "",
               },
             },
             logging: {
@@ -494,6 +512,28 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
                         <SelectItem value="production">Production</SelectItem>
                       </SelectContent>
                     </Select>
+                  </div>
+                  <div className="space-y-2 md:col-span-3">
+                    <Label>Vertical Step Bar Top Text</Label>
+                    <Input
+                      value={config.features.processingPage.verticalStepBarTopText}
+                      onChange={(e) =>
+                        setConfig({
+                          ...config,
+                          features: {
+                            ...config.features,
+                            processingPage: {
+                              ...config.features.processingPage,
+                              verticalStepBarTopText: e.target.value,
+                            },
+                          },
+                        })
+                      }
+                      placeholder="Organization Name"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Shown above the vertical step bar on gateway pages. Leave blank to use the organization name.
+                    </p>
                   </div>
                 </div>
               </div>

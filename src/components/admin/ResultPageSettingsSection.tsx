@@ -917,9 +917,21 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       nextData.skill_name = rowData.original_skill_name || rowData.skill_name || "";
       nextData.skill_description = rowData.original_skill_description || rowData.skill_description || "";
     }
+    const restoredSkillName = Object.prototype.hasOwnProperty.call(nextData, "skill_name")
+      ? nextData.skill_name
+      : rowData.skill_name;
+    const restoredSkillDescription = Object.prototype.hasOwnProperty.call(nextData, "skill_description")
+      ? nextData.skill_description
+      : rowData.skill_description;
+    nextData.validated_changed_skill_name =
+      normalizeDiffValue(restoredSkillName) !== normalizeDiffValue(rowData.original_skill_name);
+    nextData.validated_changed_skill_description =
+      normalizeDiffValue(restoredSkillDescription) !== normalizeDiffValue(rowData.original_skill_description);
     row.update(nextData);
+    persistWorkingRowsFromTable();
     setDirty(true);
     table.redraw(true);
+    void applyValidatedChanges();
     hidePopover();
   };
 
@@ -1061,8 +1073,15 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       const originalRecord = mutableRoot[previousKey] || mutableRoot[nextKey] || {
         skills: [{ description: { literal: "", mimetype: "plain/text" } }],
       };
+      const baselineRecord =
+        tabulatorState.baselineResult?.[previousKey] &&
+        typeof tabulatorState.baselineResult[previousKey] === "object" &&
+        !Array.isArray(tabulatorState.baselineResult[previousKey])
+          ? tabulatorState.baselineResult[previousKey]
+          : null;
+      const sourceRecord = mutableRoot[previousKey] || mutableRoot[nextKey] || baselineRecord || originalRecord;
 
-      const clonedRecord = JSON.parse(JSON.stringify(originalRecord));
+      const clonedRecord = JSON.parse(JSON.stringify(sourceRecord));
       const record =
         clonedRecord && typeof clonedRecord === "object" && !Array.isArray(clonedRecord)
           ? clonedRecord

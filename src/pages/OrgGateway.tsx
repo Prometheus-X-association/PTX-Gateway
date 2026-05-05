@@ -344,7 +344,11 @@ const getProcessingPageSettings = (features: unknown): ProcessingPageSettings | 
     typeof processingPage.pendingWaitSeconds === "number" && Number.isFinite(processingPage.pendingWaitSeconds)
       ? Math.max(5, Math.min(600, Math.round(processingPage.pendingWaitSeconds)))
       : 60;
-  return { pendingWaitSeconds, stepProgressLayout };
+  const verticalStepBarTopText =
+    typeof processingPage.verticalStepBarTopText === "string"
+      ? processingPage.verticalStepBarTopText
+      : "";
+  return { pendingWaitSeconds, stepProgressLayout, verticalStepBarTopText };
 };
 
 const buildDummySkillResult = (error: unknown, organizationName: string) => {
@@ -407,6 +411,7 @@ const OrgGatewayContent = ({
   customVisualizations,
   dataSelectionSettings,
   processingPageSettings,
+  verticalStepBarTopText,
   softwareResources,
   dataResources,
   serviceChains,
@@ -417,6 +422,7 @@ const OrgGatewayContent = ({
   customVisualizations: CustomVisualizationConfig[];
   dataSelectionSettings: DataSelectionSettings | null;
   processingPageSettings: ProcessingPageSettings | null;
+  verticalStepBarTopText: string;
   softwareResources: SoftwareResource[];
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
@@ -810,6 +816,7 @@ const OrgGatewayContent = ({
     return null;
   }, [activeAnalyticsTargetId, selectedAnalytics, serviceChains, softwareResources]);
   const isVerticalProgress = processingPageSettings?.stepProgressLayout === "vertical_right";
+  const effectiveVerticalTopText = verticalStepBarTopText.trim() || organization.name;
   const verticalRailGap = "1.25rem";
   const stepTransitionClass = isVerticalProgress
     ? transitionDirection === "forward"
@@ -880,10 +887,12 @@ const OrgGatewayContent = ({
                 }}
               >
                 <div className="absolute right-0 top-0 w-px bg-border/60" style={{ bottom: verticalRailGap }} />
-                <div className="mb-3">
-                  <p className="text-xs text-primary font-medium">{organization.name}</p>
-                </div>
-                <StepIndicator steps={steps} currentStep={currentStep} orientation="vertical" />
+                <StepIndicator
+                  steps={steps}
+                  currentStep={currentStep}
+                  orientation="vertical"
+                  verticalTopText={effectiveVerticalTopText}
+                />
               </div>
             </aside>
           ) : null}
@@ -985,6 +994,7 @@ const OrgGateway = () => {
   const [customVisualizations, setCustomVisualizations] = useState<CustomVisualizationConfig[]>([]);
   const [dataSelectionSettings, setDataSelectionSettings] = useState<DataSelectionSettings | null>(null);
   const [processingPageSettings, setProcessingPageSettings] = useState<ProcessingPageSettings | null>(null);
+  const [verticalStepBarTopText, setVerticalStepBarTopText] = useState("");
   const themeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -1022,6 +1032,7 @@ const OrgGateway = () => {
         setCustomVisualizations([]);
         setDataSelectionSettings(null);
         setProcessingPageSettings(null);
+        setVerticalStepBarTopText("");
 
         themeCleanupRef.current?.();
         themeCleanupRef.current = null;
@@ -1081,6 +1092,7 @@ const OrgGateway = () => {
         setCustomVisualizations(resultPageCustomVisualizations);
         setDataSelectionSettings(dataSelectionConfig);
         setProcessingPageSettings(processingPageConfig);
+        setVerticalStepBarTopText(processingPageConfig?.verticalStepBarTopText ?? "");
 
         // Fetch PDC config for this organization
         const { data: pdcData } = await supabase
@@ -1283,6 +1295,7 @@ const OrgGateway = () => {
         customVisualizations={customVisualizations}
         dataSelectionSettings={dataSelectionSettings}
         processingPageSettings={processingPageSettings}
+        verticalStepBarTopText={verticalStepBarTopText}
       />
     </ProcessSessionProvider>
   );

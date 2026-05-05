@@ -73,6 +73,7 @@ export interface DataSelectionSettings {
 export interface ProcessingPageSettings {
   pendingWaitSeconds?: number;
   stepProgressLayout?: "horizontal" | "vertical_right";
+  verticalStepBarTopText?: string;
 }
 
 export interface PdcConfig {

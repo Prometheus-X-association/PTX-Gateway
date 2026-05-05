@@ -66,9 +66,13 @@ const ProcessingPageSettingsSection = () => {
       if (fetchError) throw fetchError;
 
       const existingFeatures = isRecord(existing?.features) ? existing.features : {};
+      const existingProcessingPage = isRecord(existingFeatures.processingPage)
+        ? existingFeatures.processingPage
+        : {};
       const nextFeatures = {
         ...existingFeatures,
         processingPage: {
+          ...existingProcessingPage,
           pendingWaitSeconds: clampPendingWaitSeconds(pendingWaitSeconds),
         },
       };

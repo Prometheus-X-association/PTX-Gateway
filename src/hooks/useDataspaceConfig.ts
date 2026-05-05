@@ -196,15 +196,20 @@ const getProcessingPageSettings = (features: unknown): ProcessingPageSettings | 
     typeof pendingWaitSecondsRaw === "number" && Number.isFinite(pendingWaitSecondsRaw)
       ? Math.max(5, Math.min(600, Math.round(pendingWaitSecondsRaw)))
       : 60;
+  const verticalStepBarTopText =
+    typeof processingPage.verticalStepBarTopText === "string"
+      ? processingPage.verticalStepBarTopText
+      : "";
 
-  return { pendingWaitSeconds, stepProgressLayout };
+  return { pendingWaitSeconds, stepProgressLayout, verticalStepBarTopText };
 };
 
 export const useDataspaceConfig = (
   organizationId?: string,
-  options?: { enabled?: boolean }
+  options?: { enabled?: boolean; globalFeaturesOverride?: Record<string, unknown> | null }
 ) => {
   const enabled = options?.enabled ?? true;
+  const globalFeaturesOverride = options?.globalFeaturesOverride;
   const [config, setConfig] = useState<DataspaceConfig>({
     pdcConfig: null,
     softwareResources: [],
@@ -240,16 +245,18 @@ export const useDataspaceConfig = (
         console.error("Error fetching PDC config:", pdcError);
       }
 
-      const { data: globalConfigData, error: globalConfigError } = organizationId
-        ? await supabase
-          .from("global_configs")
-          .select("features")
-          .eq("organization_id", organizationId)
-          .maybeSingle()
-        : { data: null, error: null };
+      const { data: globalConfigData, error: globalConfigError } =
+        organizationId && !globalFeaturesOverride
+          ? await supabase
+            .from("global_configs")
+            .select("features")
+            .eq("organization_id", organizationId)
+            .maybeSingle()
+          : { data: null, error: null };
       if (globalConfigError) {
         console.error("Error fetching result page settings:", globalConfigError);
       }
+      const effectiveGlobalFeatures = globalFeaturesOverride ?? globalConfigData?.features;
 
       // Use the first config for PDC settings.
       const pdcData = allPdcData && allPdcData.length > 0 ? allPdcData[0] : null;
@@ -285,13 +292,13 @@ export const useDataspaceConfig = (
       const legacyExportApiConfigs = (allPdcData || []).flatMap((d: any) =>
         Array.isArray(d.export_api_configs) ? d.export_api_configs : []
       );
-      const resultPageExportApiConfigs = getResultPageExportApiConfigs(globalConfigData?.features);
+      const resultPageExportApiConfigs = getResultPageExportApiConfigs(effectiveGlobalFeatures);
       const exportApiConfigs = resultPageExportApiConfigs.length > 0
         ? resultPageExportApiConfigs
         : legacyExportApiConfigs;
-      const customVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
-      const dataSelectionSettings = getDataSelectionSettings(globalConfigData?.features);
-      const processingPageSettings = getProcessingPageSettings(globalConfigData?.features);
+      const customVisualizations = getResultPageCustomVisualizations(effectiveGlobalFeatures);
+      const dataSelectionSettings = getDataSelectionSettings(effectiveGlobalFeatures);
+      const processingPageSettings = getProcessingPageSettings(effectiveGlobalFeatures);
 
       // Parse PDC config
       const pdcConfig: PdcConfig | null = pdcData
@@ -394,7 +401,7 @@ export const useDataspaceConfig = (
         error: err instanceof Error ? err.message : "Unknown error",
       }));
     }
-  }, [enabled, organizationId]);
+  }, [enabled, organizationId, globalFeaturesOverride]);
 
   useEffect(() => {
     fetchConfig();

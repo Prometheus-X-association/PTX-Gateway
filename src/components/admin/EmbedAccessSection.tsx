@@ -422,7 +422,26 @@ const EmbedAccessSection = () => {
   const iframeSnippet = useMemo(() => {
     if (!buildEmbedUrl) return "";
     const src = buildEmbedUrl;
-    return `<iframe src="${src}" width="100%" height="800" style="border:0;background:transparent;" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+    const srcOrigin = new URL(src).origin;
+    return `<iframe src="${src}" width="100%" style="display:block;width:100%;height:600px;min-height:600px;border:0;background:transparent;overflow:hidden;" loading="lazy" scrolling="no" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+<script>
+(function () {
+  var iframe = document.currentScript && document.currentScript.previousElementSibling;
+  if (!iframe || iframe.tagName !== "IFRAME") return;
+  var expectedOrigin = "${srcOrigin}";
+  function onMessage(event) {
+    if (event.source !== iframe.contentWindow) return;
+    if (expectedOrigin && event.origin !== expectedOrigin) return;
+    if (!event.data || event.data.type !== "pdc-gateway-resize") return;
+    var nextHeight = Number(event.data.height);
+    if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
+    var appliedHeight = Math.max(600, Math.ceil(nextHeight));
+    iframe.style.height = appliedHeight + "px";
+    iframe.style.minHeight = appliedHeight + "px";
+  }
+  window.addEventListener("message", onMessage);
+})();
+</script>`;
   }, [buildEmbedUrl]);
 
   const webComponentSnippet = useMemo(() => {
@@ -431,7 +450,6 @@ const EmbedAccessSection = () => {
       `org-slug="${orgSlug}"`,
       `token="${issuedToken}"`,
       `gateway-origin="${normalizedGatewayOrigin}"`,
-      `height="800"`,
     ];
 
     if (preselectionType !== "none" && preselectionValue.trim()) {
@@ -1057,29 +1075,29 @@ ${webComponentSnippet}`;
               <div className="rounded border bg-muted/40 p-3 space-y-3 text-xs">
                 <div>
                   <p className="font-medium mb-1">Software Resource by ID</p>
-                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_id=YOUR_SOFTWARE_UUID&skip_selection=true" width="100%" height="800" style="border:0;background:transparent;"></iframe>`}</pre>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_id=YOUR_SOFTWARE_UUID&skip_selection=true" width="100%" style="display:block;width:100%;height:600px;min-height:600px;border:0;background:transparent;overflow:hidden;" loading="lazy" scrolling="no"></iframe>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Software Resource by URL</p>
-                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_url=${encodeURIComponent("https://api.example.com/v1/catalog/softwareresources/...")}&skip_selection=true" width="100%" height="800" style="border:0;background:transparent;"></iframe>`}</pre>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&software_url=${encodeURIComponent("https://api.example.com/v1/catalog/softwareresources/...")}&skip_selection=true" width="100%" style="display:block;width:100%;height:600px;min-height:600px;border:0;background:transparent;overflow:hidden;" loading="lazy" scrolling="no"></iframe>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Service Chain by ID</p>
-                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&service_chain_id=YOUR_CHAIN_UUID&skip_selection=true" width="100%" height="800" style="border:0;background:transparent;"></iframe>`}</pre>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&service_chain_id=YOUR_CHAIN_UUID&skip_selection=true" width="100%" style="display:block;width:100%;height:600px;min-height:600px;border:0;background:transparent;overflow:hidden;" loading="lazy" scrolling="no"></iframe>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Service Chain by Catalog ID</p>
-                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&catalog_id=YOUR_CATALOG_ID&skip_selection=true" width="100%" height="800" style="border:0;background:transparent;"></iframe>`}</pre>
+                  <pre className="whitespace-pre-wrap break-all">{`<iframe src="${normalizedGatewayOrigin}/embed?org=${orgSlug || "your-org-slug"}&token=YOUR_EMBED_TOKEN&catalog_id=YOUR_CATALOG_ID&skip_selection=true" width="100%" style="display:block;width:100%;height:600px;min-height:600px;border:0;background:transparent;overflow:hidden;" loading="lazy" scrolling="no"></iframe>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Web Component with Preselected Service Chain</p>
                   <pre className="whitespace-pre-wrap break-all">{`${webComponentScriptSnippet}
-<pdc-gateway org-slug="${orgSlug || "your-org-slug"}" token="YOUR_EMBED_TOKEN" gateway-origin="${normalizedGatewayOrigin}" service-chain-id="YOUR_CHAIN_UUID" skip-selection="true" height="800"></pdc-gateway>`}</pre>
+<pdc-gateway org-slug="${orgSlug || "your-org-slug"}" token="YOUR_EMBED_TOKEN" gateway-origin="${normalizedGatewayOrigin}" service-chain-id="YOUR_CHAIN_UUID" skip-selection="true"></pdc-gateway>`}</pre>
                 </div>
                 <div>
                   <p className="font-medium mb-1">Software Prefill Query Params</p>
                   <pre className="whitespace-pre-wrap break-all">{`${webComponentScriptSnippet}
-<pdc-gateway org-slug="${orgSlug || "your-org-slug"}" token="YOUR_EMBED_TOKEN" gateway-origin="${normalizedGatewayOrigin}" software-id="YOUR_SOFTWARE_UUID" skip-selection="true" query-params="country=DE&year=2025" height="800"></pdc-gateway>`}</pre>
+<pdc-gateway org-slug="${orgSlug || "your-org-slug"}" token="YOUR_EMBED_TOKEN" gateway-origin="${normalizedGatewayOrigin}" software-id="YOUR_SOFTWARE_UUID" skip-selection="true" query-params="country=DE&year=2025"></pdc-gateway>`}</pre>
                 </div>
               </div>
             </div>
@@ -1091,6 +1109,7 @@ ${webComponentSnippet}`;
               <p>- Set Gateway Base URL to a reachable public URL; localhost usually fails from external servers.</p>
               <p>- If parent page is HTTPS, use HTTPS Gateway Base URL to avoid mixed-content blocking.</p>
               <p>- For web components, load <code>pdc-gateway.js</code> with <code>crossorigin="anonymous"</code>.</p>
+              <p>- For raw iframe embeds, keep the generated resize <code>postMessage</code> script so scrolling stays on the parent page.</p>
               <p>- Preselected service chains are most deterministic when you use <code>service_chain_id</code>; <code>catalog_id</code> can match the first visible chain with that catalog id.</p>
             </div>
           </div>

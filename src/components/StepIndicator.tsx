@@ -4,14 +4,20 @@ interface StepIndicatorProps {
   steps: string[];
   currentStep: number;
   orientation?: "horizontal" | "vertical";
+  verticalTopText?: string;
 }
 
-const StepIndicator = ({ steps, currentStep, orientation = "horizontal" }: StepIndicatorProps) => {
+const StepIndicator = ({ steps, currentStep, orientation = "horizontal", verticalTopText }: StepIndicatorProps) => {
   const isVertical = orientation === "vertical";
 
   if (isVertical) {
     return (
       <div className="w-full">
+        {verticalTopText ? (
+          <div className="mb-3">
+            <p className="text-xs text-primary font-medium">{verticalTopText}</p>
+          </div>
+        ) : null}
         <div className="flex flex-col items-start w-full">
           {steps.map((step, index) => (
             <div key={step} className="w-full">

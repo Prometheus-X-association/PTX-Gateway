@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink } from "lucide-react";
+import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink, Copy } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -2205,6 +2205,7 @@ const ResultsView = ({
   const [isSendingToApi, setIsSendingToApi] = useState(false);
   const [isTagHelpOpen, setIsTagHelpOpen] = useState(false);
   const [selectedTagHelp, setSelectedTagHelp] = useState<TemplateTagHelp | null>(null);
+  const [showResultSourceUrl, setShowResultSourceUrl] = useState(false);
   const [postImportButtons, setPostImportButtons] = useState<PostImportButtonConfig[]>([]);
   const [isPostImportAttentionActive, setIsPostImportAttentionActive] = useState(false);
   const [reportPerformedAt] = useState<Date>(new Date());
@@ -2254,6 +2255,7 @@ const ResultsView = ({
     ) || null;
   }, [customVisualizations, selectedTargetId]);
   const activeCustomVisualizationLabel = activeCustomVisualization?.name?.trim() || "Custom Visualization";
+  const formattedResultSourceUrl = resultUrlInfo ? formatResultUrlWithParams(resultUrlInfo) : "";
 
   const fetchResultDataInternal = useCallback(async (): Promise<"ready" | "error"> => {
     if (forcedResultData !== undefined) {
@@ -2993,6 +2995,16 @@ const ResultsView = ({
     setIsTagHelpOpen(true);
   }, []);
 
+  const handleCopyResultSourceUrl = useCallback(async () => {
+    if (!formattedResultSourceUrl) return;
+    try {
+      await navigator.clipboard.writeText(formattedResultSourceUrl);
+      toast.success("Result source URL copied");
+    } catch {
+      toast.error("Failed to copy result source URL");
+    }
+  }, [formattedResultSourceUrl]);
+
   return (
     <div className="animate-fade-in">
       <style>{`
@@ -3002,74 +3014,51 @@ const ResultsView = ({
           100% { background-position: 0% 50%; box-shadow: 0 0 0 rgba(0,0,0,0); }
         }
       `}</style>
-      <div className="text-center mb-8">
-        <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-primary/20 flex items-center justify-center">
-          {isLoading ? (
-            <Loader2 className="w-8 h-8 text-primary animate-spin" />
-          ) : fetchError ? (
-            <AlertCircle className="w-8 h-8 text-destructive" />
-          ) : (
-            <CheckCircle2 className="w-8 h-8 text-primary" />
-          )}
+      <div className="mb-8 flex justify-center">
+        <div className="inline-flex items-stretch gap-3 text-left max-w-3xl mx-auto">
+          <div className="w-14 rounded-2xl bg-primary/20 flex items-center justify-center self-stretch shrink-0">
+            {isLoading ? (
+              <Loader2 className="w-7 h-7 text-primary animate-spin" />
+            ) : fetchError ? (
+              <AlertCircle className="w-7 h-7 text-destructive" />
+            ) : (
+              <CheckCircle2 className="w-7 h-7 text-primary" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-2xl font-bold mb-1">
+              {isLoading ? (
+                <>Fetching <span className="gradient-text">Results</span></>
+              ) : fetchError ? (
+                <>Result <span className="text-destructive">Error</span></>
+              ) : (
+                <>Analysis <span className="gradient-text">Complete</span></>
+              )}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {isLoading 
+                ? "Loading analytics results from the configured endpoint..." 
+                : fetchError 
+                  ? `Failed to fetch results: ${fetchError}`
+                  : `Your ${analyticsType} analysis has finished processing`
+              }
+            </p>
+            {fetchError && resultUrlInfo && (
+              <button 
+                onClick={handleRetryFetch}
+                className="mt-4 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Retry Fetch
+              </button>
+            )}
+          </div>
         </div>
-        <h2 className="text-3xl font-bold mb-2">
-          {isLoading ? (
-            <>Fetching <span className="gradient-text">Results</span></>
-          ) : fetchError ? (
-            <>Result <span className="text-destructive">Error</span></>
-          ) : (
-            <>Analysis <span className="gradient-text">Complete</span></>
-          )}
-        </h2>
-        <p className="text-muted-foreground">
-          {isLoading 
-            ? "Loading analytics results from the configured endpoint..." 
-            : fetchError 
-              ? `Failed to fetch results: ${fetchError}`
-              : `Your ${analyticsType} analysis has finished processing`
-          }
-        </p>
-        {fetchError && resultUrlInfo && (
-          <button 
-            onClick={handleRetryFetch}
-            className="mt-4 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-2 mx-auto"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Retry Fetch
-          </button>
-        )}
       </div>
 
       {forcedResultData !== undefined && forcedResultNotice && (
         <div className="glass-card p-4 mb-6 border-amber-400/40 bg-amber-500/10">
           <p className="text-sm text-amber-200 font-medium">{forcedResultNotice}</p>
-        </div>
-      )}
-
-      {/* Result URL Info */}
-      {resultUrlInfo && (
-        <div className="glass-card p-4 mb-6">
-          <div className="flex items-center gap-2 flex-wrap text-sm">
-            <span className="text-muted-foreground">Result Source:</span>
-            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-              resultUrlInfo.isServiceChain 
-                ? "bg-purple-500/20 text-purple-400"
-                : "bg-blue-500/20 text-blue-400"
-            }`}>
-              {resultUrlInfo.isServiceChain ? "Service Chain" : "Data Resource"}
-            </span>
-            <span className="px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground">
-              {resultUrlInfo.method}
-            </span>
-            {resultUrlInfo.isFallback && (
-              <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400">
-                Fallback
-              </span>
-            )}
-            <code className="text-xs text-primary break-all flex-1 min-w-0">
-              {formatResultUrlWithParams(resultUrlInfo)}
-            </code>
-          </div>
         </div>
       )}
 
@@ -3113,10 +3102,55 @@ const ResultsView = ({
 
       {/* Data Result - JSON/Table Views */}
       <div className="glass-card p-6 mb-8">
-        <h3 className="font-semibold mb-4 flex items-center gap-2">
-          <FileJson className="w-5 h-5 text-primary" />
-          Result Data
-        </h3>
+        <div className="mb-3 relative">
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-nowrap text-sm">
+            <h3 className="font-semibold flex items-center gap-2 shrink-0">
+              <FileJson className="w-5 h-5 text-primary" />
+              Result Data
+            </h3>
+            {resultUrlInfo && (
+              <>
+                <span className="text-muted-foreground shrink-0">Result Source:</span>
+                <span className={`px-2 py-0.5 rounded text-xs font-medium shrink-0 ${
+                  resultUrlInfo.isServiceChain 
+                    ? "bg-purple-500/20 text-purple-400"
+                    : "bg-blue-500/20 text-blue-400"
+                }`}>
+                  {resultUrlInfo.isServiceChain ? "Service Chain" : "Data Resource"}
+                </span>
+                <span className="px-2 py-0.5 rounded text-xs font-medium bg-muted text-muted-foreground shrink-0">
+                  {resultUrlInfo.method}
+                </span>
+                {resultUrlInfo.isFallback && (
+                  <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400 shrink-0">
+                    Fallback
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowResultSourceUrl((prev) => !prev)}
+                  title={formattedResultSourceUrl}
+                  className="min-w-0 flex-1 truncate text-left font-mono text-xs text-primary hover:underline"
+                >
+                  {formattedResultSourceUrl}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyResultSourceUrl}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:border-primary/40 shrink-0"
+                >
+                  <Copy className="w-3 h-3" />
+                  Copy
+                </button>
+              </>
+            )}
+          </div>
+          {resultUrlInfo && showResultSourceUrl && (
+            <div className="mt-2 rounded-md border border-border bg-background/95 p-2">
+              <code className="block text-xs text-primary break-all">{formattedResultSourceUrl}</code>
+            </div>
+          )}
+        </div>
 
         {isLoading ? (
           <LoadingJsonSkeleton />

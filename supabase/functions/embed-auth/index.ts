@@ -9,6 +9,8 @@ const corsHeaders = {
 const LOCAL_SUPABASE_URL_FALLBACK = "http://kong:8000";
 const LOCAL_SUPABASE_ANON_KEY_FALLBACK =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+const LOCAL_SUPABASE_SERVICE_ROLE_KEY_FALLBACK =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 const LOCAL_SUPABASE_JWT_FALLBACK = "super-secret-jwt-token-with-at-least-32-characters-long";
 
 type IssueBody = {
@@ -206,11 +208,38 @@ const getSupabaseUrl = (): string | null =>
 const getSupabaseAnonKey = (): string | null =>
   Deno.env.get("SUPABASE_ANON_KEY") || LOCAL_SUPABASE_ANON_KEY_FALLBACK;
 
+const getSupabaseServiceRoleKey = (): string | null =>
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || LOCAL_SUPABASE_SERVICE_ROLE_KEY_FALLBACK;
+
 const getEmbedTokenSecret = (): string | null =>
   Deno.env.get("EMBED_TOKEN_SECRET") ||
   Deno.env.get("PDC_EXECUTE_TOKEN_SECRET") ||
   Deno.env.get("SUPABASE_INTERNAL_JWT_SECRET") ||
   LOCAL_SUPABASE_JWT_FALLBACK;
+
+const buildGatewayFeaturesForEmbed = (features: unknown): Record<string, unknown> => {
+  const source = asRecord(features);
+  const gatewayFeatures: Record<string, unknown> = {};
+
+  const resultPage = asRecord(source.resultPage);
+  const dataSelection = asRecord(source.dataSelection);
+  const processingPage = asRecord(source.processingPage);
+
+  if (Object.keys(resultPage).length > 0) {
+    gatewayFeatures.resultPage = resultPage;
+  }
+  if (Object.keys(dataSelection).length > 0) {
+    gatewayFeatures.dataSelection = dataSelection;
+  }
+  if (Object.keys(processingPage).length > 0) {
+    gatewayFeatures.processingPage = processingPage;
+  }
+  if (typeof source.allowContinueOnPdcError === "boolean") {
+    gatewayFeatures.allowContinueOnPdcError = source.allowContinueOnPdcError;
+  }
+
+  return gatewayFeatures;
+};
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -220,9 +249,10 @@ serve(async (req) => {
   try {
     const supabaseUrl = getSupabaseUrl();
     const supabaseAnonKey = getSupabaseAnonKey();
+    const supabaseServiceRoleKey = getSupabaseServiceRoleKey();
     const embedSecret = getEmbedTokenSecret();
 
-    if (!supabaseUrl || !supabaseAnonKey || !embedSecret) {
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey || !embedSecret) {
       return new Response(
         JSON.stringify({ error: "Server not configured: missing required env vars" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -241,6 +271,7 @@ serve(async (req) => {
       }
 
       const orgClient = createClient(supabaseUrl, supabaseAnonKey);
+      const serviceClient = createClient(supabaseUrl, supabaseServiceRoleKey);
       const { data: org, error: orgError } = await orgClient
         .from("organizations")
         .select("id, slug, settings, is_active")
@@ -257,6 +288,12 @@ serve(async (req) => {
 
       const embedSettings = getEmbedSettings(org.settings);
       const visualizationSettings = asRecord(asRecord(org.settings).visualization);
+      const { data: globalConfigData } = await serviceClient
+        .from("global_configs")
+        .select("features")
+        .eq("organization_id", org.id)
+        .maybeSingle();
+      const gatewayFeatures = buildGatewayFeaturesForEmbed(globalConfigData?.features);
       const embedEnabled = embedSettings.embed_enabled !== false;
       if (!embedEnabled) {
         return new Response(JSON.stringify({ ok: false, error: "Embed is disabled for this organization" }), {
@@ -315,6 +352,7 @@ serve(async (req) => {
             origin: payload.origin,
             token_type: "temporary",
             visualization_settings: visualizationSettings,
+            gateway_features: gatewayFeatures,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
@@ -362,6 +400,7 @@ serve(async (req) => {
           token_type: "persistent",
           token_id: matched.id,
           visualization_settings: visualizationSettings,
+          gateway_features: gatewayFeatures,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

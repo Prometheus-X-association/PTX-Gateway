@@ -643,40 +643,40 @@ const ProcessingView = ({
 
   return (
     <div className="animate-fade-in max-w-2xl mx-auto px-4 sm:px-0">
-      <div className="text-center mb-8 sm:mb-12">
-        <div className="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-4 sm:mb-6 relative">
-          {!hasError ? (
-            <>
-              <div className="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
-              <div className="relative w-full h-full rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center glow-effect">
-                <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 text-primary-foreground animate-spin" />
-              </div>
-            </>
-          ) : (
-            <div className="relative w-full h-full rounded-full bg-gradient-to-br from-destructive to-destructive/70 flex items-center justify-center">
-              <AlertCircle className="w-8 h-8 sm:w-10 sm:h-10 text-destructive-foreground" />
-            </div>
-          )}
+      <div className="mb-8 flex justify-center">
+        <div className="inline-flex items-stretch gap-3 text-left max-w-3xl mx-auto">
+          <div
+            className={`w-14 rounded-2xl flex items-center justify-center self-stretch shrink-0 ${
+              hasError ? "bg-destructive/20" : "bg-primary/20"
+            }`}
+          >
+            {hasError ? (
+              <AlertCircle className="w-7 h-7 text-destructive" />
+            ) : (
+              <Loader2 className="w-7 h-7 text-primary animate-spin" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-2xl font-bold mb-1">
+              {hasError ? (
+                <>PDC Execution <span className="text-destructive">Failed</span></>
+              ) : (
+                <>Processing <span className="gradient-text">{analyticsType}</span></>
+              )}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {hasError
+                ? "The data exchange request failed. Please review the error below."
+                : "Executing data exchange via PDC connector"}
+            </p>
+            {observerMessage && !hasError && (
+              <p className="text-xs text-amber-400 mt-2">{observerMessage}</p>
+            )}
+            {pendingMessage && !hasError && (
+              <p className="text-xs text-amber-300 mt-2">{pendingMessage}</p>
+            )}
+          </div>
         </div>
-        <h2 className="theme-section-title mb-2">
-          {hasError ? (
-            <>PDC Execution <span className="text-destructive">Failed</span></>
-          ) : (
-            <>Processing <span className="gradient-text">{analyticsType}</span></>
-          )}
-        </h2>
-        <p className="theme-subtitle">
-          {hasError 
-            ? "The data exchange request failed. Please review the error below."
-            : "Executing data exchange via PDC connector"
-          }
-        </p>
-        {observerMessage && !hasError && (
-          <p className="text-xs text-amber-400 mt-2">{observerMessage}</p>
-        )}
-        {pendingMessage && !hasError && (
-          <p className="text-xs text-amber-300 mt-2">{pendingMessage}</p>
-        )}
       </div>
 
       <div className="glass-card p-4 sm:p-6 mb-6 sm:mb-8">
