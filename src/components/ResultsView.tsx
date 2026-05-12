@@ -1907,13 +1907,26 @@ const LoadingJsonSkeleton = () => {
 interface CustomVisualizationRuntimeProps {
   visualization: CustomVisualizationConfig;
   resultData: unknown;
+  dataVersion: number;
   onResultDataChange: (nextData: unknown) => void;
 }
 
-const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataChange }: CustomVisualizationRuntimeProps) => {
+const CustomVisualizationRuntime = ({ visualization, resultData, dataVersion, onResultDataChange }: CustomVisualizationRuntimeProps) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const lastDataVersionRef = useRef<number | null>(null);
 
   useEffect(() => {
+    const runtime = window as Window & {
+      __ptxTabulatorStateStore?: Record<string, unknown>;
+    };
+    const stateKey = String(visualization?.id || "default_tabulator");
+    if (lastDataVersionRef.current !== dataVersion) {
+      if (runtime.__ptxTabulatorStateStore && stateKey in runtime.__ptxTabulatorStateStore) {
+        delete runtime.__ptxTabulatorStateStore[stateKey];
+      }
+      lastDataVersionRef.current = dataVersion;
+    }
+
     const mount = mountRef.current;
     if (!mount) return;
 
@@ -2143,7 +2156,7 @@ const CustomVisualizationRuntime = ({ visualization, resultData, onResultDataCha
 
     void runVisualization();
     return cleanup;
-  }, [visualization, resultData, onResultDataChange]);
+  }, [visualization, resultData, dataVersion, onResultDataChange]);
 
   return (
     <div className="space-y-3">
@@ -2193,6 +2206,7 @@ const ResultsView = ({
 }: ResultsViewProps) => {
   const customVisualizationMountRef = useRef<HTMLDivElement | null>(null);
   const [resultData, setResultData] = useState<unknown>(fallbackResultData);
+  const [resultDataVersion, setResultDataVersion] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [apiUrl, setApiUrl] = useState("");
@@ -2261,6 +2275,7 @@ const ResultsView = ({
     if (forcedResultData !== undefined) {
       setFetchError(null);
       setResultData(forcedResultData);
+      setResultDataVersion((prev) => prev + 1);
       return "ready";
     }
 
@@ -2320,6 +2335,7 @@ const ResultsView = ({
       }
 
       setResultData(data);
+      setResultDataVersion((prev) => prev + 1);
       toast.success("Result data loaded successfully");
       return "ready";
     } catch (error) {
@@ -2424,6 +2440,7 @@ const ResultsView = ({
   useEffect(() => {
     if (forcedResultData !== undefined) {
       setResultData(forcedResultData);
+      setResultDataVersion((prev) => prev + 1);
       setFetchError(null);
       setIsLoading(false);
       return;
@@ -3183,6 +3200,7 @@ const ResultsView = ({
                   <CustomVisualizationRuntime
                     visualization={activeCustomVisualization}
                     resultData={resultData}
+                    dataVersion={resultDataVersion}
                     onResultDataChange={setResultData}
                   />
                 </div>
