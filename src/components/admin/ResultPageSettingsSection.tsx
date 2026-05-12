@@ -540,6 +540,10 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     Boolean(tabulatorState.skipNextJsonHydration) &&
     Array.isArray(tabulatorState.rowsSnapshot);
   const currentResultSignature = JSON.stringify(resultRoot);
+  const resultChangedFromFetch =
+    tabulatorState.lastResultSignature !== null &&
+    tabulatorState.lastResultSignature !== currentResultSignature &&
+    !tabulatorState.skipNextJsonHydration;
   const hasWorkingRows = Array.isArray(tabulatorState.workingRows) && tabulatorState.workingRows.length > 0;
   const freshRowsFromJson = buildRowsFromResult(resultRoot);
   const mergeExternalJsonIntoWorkingRows = (freshRows, workingRows) => {
@@ -566,6 +570,8 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       row_uid: row.row_uid || ((row.original_key || "row") + "__" + index),
       ...row,
     }))
+    : resultChangedFromFetch
+      ? mergeExternalJsonIntoWorkingRows(freshRowsFromJson, tabulatorState.workingRows)
     : (tabulatorState.lastChangeSource === "external" && hasWorkingRows)
       ? mergeExternalJsonIntoWorkingRows(freshRowsFromJson, tabulatorState.workingRows)
       : hasWorkingRows
@@ -578,7 +584,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   if (tabulatorState.skipNextJsonHydration) {
     tabulatorState.skipNextJsonHydration = false;
   } else {
-    if (tabulatorState.lastResultSignature !== null && tabulatorState.lastResultSignature !== currentResultSignature) {
+    if (resultChangedFromFetch) {
       tabulatorState.lastChangeSource = "external";
     } else if (tabulatorState.lastChangeSource === "initial") {
       tabulatorState.lastChangeSource = "initial";

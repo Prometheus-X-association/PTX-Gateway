@@ -428,9 +428,9 @@ const OrgGatewayContent = ({
   serviceChains: ServiceChain[];
 }) => {
   const [searchParams] = useSearchParams();
-  const { user, isAdmin, isAuthenticated
+  const { user, isAuthenticated
  } = useAuth();
-  const isDebugMode = isAdmin && user?.isDebugMode;
+  const isDebugMode = !!user?.isDebugMode;
   const showConfigPage = isDebugMode;
   const showHumanValidation = isDebugMode;
 

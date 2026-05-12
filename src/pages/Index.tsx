@@ -31,10 +31,10 @@ interface SelectedDataType {
 }
 
 const IndexContent = () => {
-  const { user, isAdmin, isAuthenticated, isLoading: authLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   
   // Debug mode from user session (per-user, not global)
-  const isDebugMode = isAdmin && user?.isDebugMode;
+  const isDebugMode = !!user?.isDebugMode;
   const showConfigPage = isDebugMode;
   const showHumanValidation = isDebugMode;
   

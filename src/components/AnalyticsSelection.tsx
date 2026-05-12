@@ -41,6 +41,8 @@ const AnalyticsSelection = ({
 }: AnalyticsSelectionProps) => {
   const { sessionId } = useProcessSession();
   const [paramsDialogOpen, setParamsDialogOpen] = useState(false);
+  const [paramEditorMode, setParamEditorMode] = useState<"software" | "serviceChain" | null>(null);
+  const [serviceChainParamEdits, setServiceChainParamEdits] = useState<Record<string, Record<string, string>>>({});
   const [descriptionDialog, setDescriptionDialog] = useState<{ name: string; description: string } | null>(null);
   const [truncatedItems, setTruncatedItems] = useState<Set<string>>(new Set());
   const descriptionRefs = useRef<Map<string, HTMLParagraphElement>>(new Map());
@@ -143,7 +145,17 @@ const AnalyticsSelection = ({
     return info.queryParams;
   }, [selected]);
 
-  // Handle option selection - auto open params dialog if has params (debug mode only)
+  const selectedSoftwareDefaultParams = useMemo(() => {
+    if (!selected || selected.type !== "software") return {};
+    const defaults = getParamValuesMap(selected.data.parameters);
+    const resolved: Record<string, string> = {};
+    Object.entries(defaults).forEach(([key, value]) => {
+      resolved[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+    });
+    return resolved;
+  }, [selected, sessionId]);
+
+  // Handle option selection
   const handleOptionSelect = (option: AnalyticsOption) => {
     onSelect(option);
     const info = getDisplayInfo(option);
@@ -163,10 +175,38 @@ const AnalyticsSelection = ({
       }
       
       onQueryParamChange(resolvedParams);
-      // Only show params dialog in debug mode
-      if (isDebugMode) {
-        setParamsDialogOpen(true);
-      }
+    }
+  };
+
+  const handleConfigureParams = (event: React.MouseEvent, option: AnalyticsOption) => {
+    event.stopPropagation();
+    if (option.type !== "software") return;
+    handleOptionSelect(option);
+    if (isDebugMode) {
+      setParamEditorMode("software");
+      setParamsDialogOpen(true);
+    }
+  };
+
+  const handleConfigureServiceChainParams = (event: React.MouseEvent, option: AnalyticsOption) => {
+    event.stopPropagation();
+    if (option.type !== "serviceChain") return;
+    onSelect(option);
+
+    const initialEdits: Record<string, Record<string, string>> = {};
+    (option.data.embedded_resources || []).forEach((resource) => {
+      const paramValues = getParamValuesMap(resource.parameters);
+      const resolvedValues: Record<string, string> = {};
+      Object.entries(paramValues).forEach(([key, value]) => {
+        resolvedValues[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+      });
+      initialEdits[resource.resource_url] = resolvedValues;
+    });
+
+    setServiceChainParamEdits(initialEdits);
+    if (isDebugMode) {
+      setParamEditorMode("serviceChain");
+      setParamsDialogOpen(true);
     }
   };
 
@@ -183,7 +223,27 @@ const AnalyticsSelection = ({
   };
 
   const handleSaveParams = () => {
+    if (paramEditorMode === "serviceChain" && selected?.type === "serviceChain") {
+      const updatedOption: AnalyticsOption = {
+        type: "serviceChain",
+        data: {
+          ...selected.data,
+          embedded_resources: (selected.data.embedded_resources || []).map((resource) => {
+            const edits = serviceChainParamEdits[resource.resource_url] || {};
+            return {
+              ...resource,
+              parameters: (resource.parameters || []).map((param) => ({
+                ...param,
+                paramValue: edits[param.paramName] ?? param.paramValue,
+              })),
+            };
+          }),
+        },
+      };
+      onSelect(updatedOption);
+    }
     setParamsDialogOpen(false);
+    setParamEditorMode(null);
   };
 
   const openDescriptionDialog = useCallback((e: React.MouseEvent, name: string, description: string) => {
@@ -273,11 +333,45 @@ const AnalyticsSelection = ({
             </div>
           )}
           
-          {isDebugMode && info.queryParams.length > 0 && (
+          {isDebugMode && option.type === "software" && (
             <div className="mt-3 pt-3 border-t border-border">
-              <span className="text-xs text-muted-foreground">
-                Parameters: {info.queryParams.join(", ")}
-              </span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {info.queryParams.length > 0
+                    ? `Parameters: ${info.queryParams.join(", ")}`
+                    : "Parameters: none configured"}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={optionSelected ? "default" : "outline"}
+                  className="h-7 px-2 text-xs"
+                  onClick={(event) => handleConfigureParams(event, option)}
+                  disabled={info.queryParams.length === 0}
+                >
+                  Change Parameters
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {isDebugMode && option.type === "serviceChain" && (
+            <div className="mt-3 pt-3 border-t border-border">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">
+                  Service chain parameters
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={optionSelected ? "default" : "outline"}
+                  className="h-7 px-2 text-xs"
+                  onClick={(event) => openServiceChainDetails(event, option.data)}
+                  onClick={(event) => handleConfigureServiceChainParams(event, option)}
+                >
+                  Change Parameters
+                </Button>
+              </div>
             </div>
           )}
           
@@ -313,7 +407,7 @@ const AnalyticsSelection = ({
         </button>
       </div>
 
-      {/* Parameters Dialog - Auto opens when selecting option with params */}
+      {/* Parameters Dialog - Opened via debug "Change Parameters" button */}
       {paramsDialogOpen && selected && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           {/* Backdrop */}
@@ -323,7 +417,7 @@ const AnalyticsSelection = ({
           />
           
           {/* Modal Content */}
-          <div className="relative z-10 w-full max-w-md mx-4 bg-background border rounded-lg shadow-lg p-6">
+          <div className="relative z-10 w-full max-w-2xl mx-4 bg-background border rounded-lg shadow-lg max-h-[85vh] flex flex-col overflow-hidden">
             {/* Close Button */}
             <button
               onClick={() => setParamsDialogOpen(false)}
@@ -333,7 +427,7 @@ const AnalyticsSelection = ({
             </button>
             
             {/* Header */}
-            <div className="mb-4">
+            <div className="p-6 pb-0">
               <h3 className="text-lg font-semibold">Configure Parameters</h3>
               <p className="text-sm text-muted-foreground">
                 {getDisplayInfo(selected).name}
@@ -343,22 +437,69 @@ const AnalyticsSelection = ({
             </div>
             
             {/* Form */}
-            <div className="grid gap-4 py-4">
-              {selectedQueryParams.map((param) => (
+            <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
+              <div className="grid gap-4">
+              {paramEditorMode === "software" && selected.type === "software" && selectedQueryParams.map((param) => (
                 <div key={param} className="space-y-2">
                   <Label htmlFor={param}>{param}</Label>
                   <Input
                     id={param}
                     placeholder={`Enter ${param}`}
-                    value={queryParams[param] || ""}
+                    value={queryParams[param] ?? selectedSoftwareDefaultParams[param] ?? ""}
                     onChange={(e) => handleParamChange(param, e.target.value)}
                   />
                 </div>
               ))}
+
+              {paramEditorMode === "serviceChain" && selected.type === "serviceChain" && (
+                <>
+                  {getServiceChainResources(selected.data).map((resource) => {
+                    const paramNames = getQueryParamNames(resource.parameters);
+                    return (
+                      <div key={`${resource.service_index}-${resource.resource_url}`} className="rounded-md border p-3 space-y-3">
+                        <div>
+                          <p className="text-sm font-medium">
+                            {resource.resource_name || `Service ${resource.service_index + 1}`}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {resource.provider || "Unknown Provider"}
+                          </p>
+                        </div>
+
+                        {paramNames.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">No parameters configured.</p>
+                        ) : (
+                          paramNames.map((param) => (
+                            <div key={`${resource.resource_url}-${param}`} className="space-y-1">
+                              <Label htmlFor={`${resource.resource_url}-${param}`}>{param}</Label>
+                              <Input
+                                id={`${resource.resource_url}-${param}`}
+                                placeholder={`Enter ${param}`}
+                                value={serviceChainParamEdits[resource.resource_url]?.[param] ?? getParamValuesMap(resource.parameters)[param] ?? ""}
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  setServiceChainParamEdits((prev) => ({
+                                    ...prev,
+                                    [resource.resource_url]: {
+                                      ...(prev[resource.resource_url] || {}),
+                                      [param]: value,
+                                    },
+                                  }));
+                                }}
+                              />
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+              </div>
             </div>
             
             {/* Footer */}
-            <div className="flex justify-end gap-2 mt-4">
+            <div className="sticky bottom-0 p-4 border-t bg-background flex justify-end gap-2">
               <Button variant="outline" onClick={() => setParamsDialogOpen(false)}>
                 Cancel
               </Button>
