@@ -384,7 +384,7 @@ const AnalyticsSelection = ({
     <div className="animate-fade-in">
       <div className="text-center mb-8">
         <h2 className="theme-section-title mb-2">
-          Select <span className="gradient-text">Analytics Type</span>
+          Select Analytics Type:
         </h2>
         <p className="text-muted-foreground">
           Choose the type of analysis you want to perform on your data
