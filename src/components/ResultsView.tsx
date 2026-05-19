@@ -175,6 +175,31 @@ const fallbackResultData = {
   timestamp: new Date().toISOString()
 };
 
+const RESULT_FETCH_SNAPSHOT_STORAGE_PREFIX = "ptx_gateway_result_snapshot_v1";
+
+const hashString = (input: string): string => {
+  let hash = 5381;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 33) ^ input.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const buildResultSnapshotStorageKey = (
+  sourceUrl: string,
+  method: string,
+  organizationId?: string | null,
+  targetId?: string | null,
+): string => {
+  const identity = JSON.stringify({
+    sourceUrl,
+    method,
+    organizationId: organizationId || "",
+    targetId: targetId || "",
+  });
+  return `${RESULT_FETCH_SNAPSHOT_STORAGE_PREFIX}:${hashString(identity)}`;
+};
+
 const RESULT_PLACEHOLDER = "##result";
 const RESULT_ARRAY_PREFIXES = ["##resultArray", "##resultsArray"] as const;
 const RESULT_ARRAY_EACH_PREFIXES = ["##resultArrayEach", "##resultsArrayEach"] as const;
@@ -1909,9 +1934,11 @@ interface CustomVisualizationRuntimeProps {
   resultData: unknown;
   dataVersion: number;
   onResultDataChange: (nextData: unknown) => void;
+  resultSnapshotStorageKey?: string | null;
+  resultSourceUrl?: string;
 }
 
-const CustomVisualizationRuntime = ({ visualization, resultData, dataVersion, onResultDataChange }: CustomVisualizationRuntimeProps) => {
+const CustomVisualizationRuntime = ({ visualization, resultData, dataVersion, onResultDataChange, resultSnapshotStorageKey, resultSourceUrl }: CustomVisualizationRuntimeProps) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const lastDataVersionRef = useRef<number | null>(null);
 
@@ -2134,7 +2161,12 @@ const CustomVisualizationRuntime = ({ visualization, resultData, dataVersion, on
           "updateResultData",
           `"use strict";\n${visualization.render_code || ""}`
         );
-        await render(container, resultData, jsonSchema, visualization, shadowRoot, onResultDataChange);
+        const runtimeConfig = {
+          ...visualization,
+          __ptxResultSnapshotStorageKey: resultSnapshotStorageKey || "",
+          __ptxResultSourceUrl: resultSourceUrl || "",
+        };
+        await render(container, resultData, jsonSchema, runtimeConfig, shadowRoot, onResultDataChange);
         enforceTabulatorButtonsVisible();
 
         // Defensive: some older saved render scripts toggle inline display:none after init.
@@ -2156,7 +2188,7 @@ const CustomVisualizationRuntime = ({ visualization, resultData, dataVersion, on
 
     void runVisualization();
     return cleanup;
-  }, [visualization, resultData, dataVersion, onResultDataChange]);
+  }, [visualization, resultData, dataVersion, onResultDataChange, resultSnapshotStorageKey, resultSourceUrl]);
 
   return (
     <div className="space-y-3">
@@ -2271,17 +2303,44 @@ const ResultsView = ({
   const activeCustomVisualizationLabel = activeCustomVisualization?.name?.trim() || "Custom Visualization";
   const formattedResultSourceUrl = resultUrlInfo ? formatResultUrlWithParams(resultUrlInfo) : "";
 
+  const resultSnapshotStorageKey = useMemo(() => {
+    if (!formattedResultSourceUrl || !resultUrlInfo?.method) return null;
+    return buildResultSnapshotStorageKey(formattedResultSourceUrl, resultUrlInfo.method, organizationId, selectedTargetId);
+  }, [formattedResultSourceUrl, resultUrlInfo?.method, organizationId, selectedTargetId]);
+
+  const persistFetchedResultSnapshot = useCallback((fetchedData: unknown) => {
+    if (typeof window === "undefined" || !resultSnapshotStorageKey) return;
+    try {
+      const snapshot = {
+        fetchedAt: new Date().toISOString(),
+        sourceUrl: formattedResultSourceUrl,
+        method: resultUrlInfo?.method || "GET",
+        targetId: selectedTargetId || null,
+        data: fetchedData,
+      };
+      localStorage.setItem(resultSnapshotStorageKey, JSON.stringify(snapshot));
+    } catch (storageError) {
+      console.warn("Could not persist fetched result snapshot:", storageError);
+    }
+  }, [resultSnapshotStorageKey, formattedResultSourceUrl, resultUrlInfo?.method, selectedTargetId]);
+
+  const applyResultDataUpdate = useCallback((nextData: unknown, options?: { incrementVersion?: boolean }) => {
+    setResultData(nextData);
+    if (options?.incrementVersion) {
+      setResultDataVersion((prev) => prev + 1);
+    }
+  }, []);
+
   const fetchResultDataInternal = useCallback(async (): Promise<"ready" | "error"> => {
     if (forcedResultData !== undefined) {
       setFetchError(null);
-      setResultData(forcedResultData);
-      setResultDataVersion((prev) => prev + 1);
+      applyResultDataUpdate(forcedResultData, { incrementVersion: true });
       return "ready";
     }
 
     if (!resultUrlInfo || !resultUrlInfo.url) {
       console.log("No result URL info available, using fallback data");
-      setResultData(fallbackResultData);
+      applyResultDataUpdate(fallbackResultData);
       return "error";
     }
 
@@ -2334,15 +2393,15 @@ const ResultsView = ({
         console.log("Result data fetched successfully:", data);
       }
 
-      setResultData(data);
-      setResultDataVersion((prev) => prev + 1);
+      applyResultDataUpdate(data, { incrementVersion: true });
+      persistFetchedResultSnapshot(data);
       toast.success("Result data loaded successfully");
       return "ready";
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       console.error("Failed to fetch result data:", errorMessage);
       setFetchError(errorMessage);
-      setResultData({
+      applyResultDataUpdate({
         error: "Failed to fetch result",
         message: errorMessage,
         url: resultUrlInfo.url,
@@ -2354,7 +2413,7 @@ const ResultsView = ({
     } finally {
       setIsLoading(false);
     }
-  }, [forcedResultData, resultUrlInfo]);
+  }, [forcedResultData, resultUrlInfo, applyResultDataUpdate, persistFetchedResultSnapshot]);
 
   const generateLlmInsight = useCallback(async () => {
     if (!llmInsightsEnabled) return;
@@ -2439,18 +2498,17 @@ const ResultsView = ({
   // Fetch result data automatically for normal flow.
   useEffect(() => {
     if (forcedResultData !== undefined) {
-      setResultData(forcedResultData);
-      setResultDataVersion((prev) => prev + 1);
+      applyResultDataUpdate(forcedResultData, { incrementVersion: true });
       setFetchError(null);
       setIsLoading(false);
       return;
     }
     if (!resultUrlInfo || !resultUrlInfo.url) {
-      setResultData(fallbackResultData);
+      applyResultDataUpdate(fallbackResultData);
       return;
     }
     void fetchResultDataInternal();
-  }, [forcedResultData, resultUrlInfo, fetchResultDataInternal]);
+  }, [forcedResultData, resultUrlInfo, fetchResultDataInternal, applyResultDataUpdate]);
 
   // Retry fetch function
   const handleRetryFetch = useCallback(() => {
@@ -2513,13 +2571,13 @@ const ResultsView = ({
 
   const handleNestedEdit = useCallback((path: string, value: string) => {
     const newData = setNestedValue(resultData, path, value);
-    setResultData(newData);
-  }, [resultData, setNestedValue]);
+    applyResultDataUpdate(newData);
+  }, [resultData, setNestedValue, applyResultDataUpdate]);
 
   const handleKeyEdit = useCallback((path: string, oldKey: string, newKey: string) => {
     const newData = renameKeyAtSameLevel(resultData, path, oldKey, newKey);
-    setResultData(newData);
-  }, [resultData]);
+    applyResultDataUpdate(newData);
+  }, [resultData, applyResultDataUpdate]);
 
   const handleAdd = useCallback((path: string) => {
     let target: unknown = resultData;
@@ -2530,7 +2588,7 @@ const ResultsView = ({
     
     if (Array.isArray(target)) {
       const newData = addKeyAtPath(resultData, path, '', '');
-      setResultData(newData);
+      applyResultDataUpdate(newData);
     } else {
       const existingKeys = Object.keys(target as object);
       let newKey = 'newKey';
@@ -2540,14 +2598,14 @@ const ResultsView = ({
         counter++;
       }
       const newData = addKeyAtPath(resultData, path, newKey, 'value');
-      setResultData(newData);
+      applyResultDataUpdate(newData);
     }
-  }, [resultData]);
+  }, [resultData, applyResultDataUpdate]);
 
   const handleDelete = useCallback((path: string) => {
     const newData = deleteKeyAtPath(resultData, path);
-    setResultData(newData);
-  }, [resultData]);
+    applyResultDataUpdate(newData);
+  }, [resultData, applyResultDataUpdate]);
 
   const handleExport = (format: string) => {
     if (format === "pdf") {
@@ -3201,14 +3259,16 @@ const ResultsView = ({
                     visualization={activeCustomVisualization}
                     resultData={resultData}
                     dataVersion={resultDataVersion}
-                    onResultDataChange={setResultData}
+                    onResultDataChange={applyResultDataUpdate}
+                    resultSnapshotStorageKey={resultSnapshotStorageKey}
+                    resultSourceUrl={formattedResultSourceUrl}
                   />
                 </div>
               </TabsContent>
             )}
             
             <TabsContent value="json">
-              <CollapsibleJson data={resultData} onChange={setResultData} />
+              <CollapsibleJson data={resultData} onChange={applyResultDataUpdate} />
             </TabsContent>
             
             <TabsContent value="table">
@@ -3216,7 +3276,7 @@ const ResultsView = ({
             </TabsContent>
             
             <TabsContent value="array">
-              <ArrayTableView data={resultData} onChange={setResultData} />
+              <ArrayTableView data={resultData} onChange={applyResultDataUpdate} />
             </TabsContent>
           </Tabs>
         )}

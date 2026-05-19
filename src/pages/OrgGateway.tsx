@@ -859,13 +859,11 @@ const OrgGatewayContent = ({
         {!isVerticalProgress && (
           <div className="text-center mb-6 min-h-[1.25rem]">
             <p
-              className={`text-sm text-muted-foreground transition-opacity duration-150 ${
-                selectedAnalytics ? "opacity-100" : "opacity-0"
-              }`}
+              className="text-sm text-muted-foreground"
               aria-live="polite"
             >
               Selected analytics:{" "}
-              <span className="font-medium text-foreground">{selectedAnalytics ? analyticsDisplayName : ""}</span>
+              <span className={selectedAnalytics ? "font-medium text-foreground" : ""}>{selectedAnalytics ? analyticsDisplayName : "None selected yet. Choose an option below."}</span>
             </p>
           </div>
         )}

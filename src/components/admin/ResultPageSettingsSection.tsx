@@ -467,11 +467,46 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     lastChangeSource: "initial",
     lastResultSignature: null,
     baselineResult: null,
+    baselineResultSignature: null,
     baselineRows: null,
     validatedDiffByKey: {},
+    paginationPage: 1,
+    paginationSize: 12,
   };
-  if (!tabulatorState.baselineResult) {
-    tabulatorState.baselineResult = JSON.parse(JSON.stringify(resultRoot));
+  const snapshotStorageKey = String(config?.__ptxResultSnapshotStorageKey || "");
+  const readSnapshotResultRoot = () => {
+    if (!snapshotStorageKey) return null;
+    try {
+      const raw = localStorage.getItem(snapshotStorageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const candidate = parsed?.data ?? parsed;
+      const snapshotRoot =
+        candidate?.data?.content?.data?.result ||
+        candidate?.content?.data?.result ||
+        candidate?.data?.result ||
+        candidate?.result ||
+        null;
+      return snapshotRoot && typeof snapshotRoot === "object" && !Array.isArray(snapshotRoot)
+        ? snapshotRoot
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const snapshotBaselineRoot = readSnapshotResultRoot();
+  const snapshotBaselineSignature = snapshotBaselineRoot ? JSON.stringify(snapshotBaselineRoot) : null;
+
+  if (
+    !tabulatorState.baselineResult ||
+    (snapshotBaselineSignature && tabulatorState.baselineResultSignature !== snapshotBaselineSignature)
+  ) {
+    const baselineSource = snapshotBaselineRoot || resultRoot;
+    tabulatorState.baselineResult = JSON.parse(JSON.stringify(baselineSource));
+    tabulatorState.baselineRows = null;
+    tabulatorState.validatedDiffByKey = {};
+    tabulatorState.baselineResultSignature = JSON.stringify(tabulatorState.baselineResult);
   }
 
   const toDisplayName = (key) => String(key || "").replaceAll("_", " ");
@@ -1146,7 +1181,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     height: "560px",
     movableColumns: true,
     pagination: true,
-    paginationSize: 12,
+    paginationSize: tabulatorState.paginationSize === true ? true : (Number(tabulatorState.paginationSize) || 12),
     paginationSizeSelector: [12, 25, 50, true],
     placeholder: "No skills found in the result JSON.",
     selectableRows: "highlight",
@@ -1182,6 +1217,45 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     ],
   });
 
+  const normalizePageSize = (value) => {
+    if (value === true) return true;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+  };
+
+  const restorePageState = async (pageValue, sizeValue) => {
+    const desiredSize = normalizePageSize(sizeValue);
+    if (table.getPageSize?.() !== desiredSize) {
+      table.setPageSize(desiredSize);
+    }
+
+    const maxPageRaw = Number(table.getPageMax?.() || 1);
+    const maxPage = Number.isFinite(maxPageRaw) && maxPageRaw > 0 ? maxPageRaw : 1;
+    const requestedPageRaw = Number(pageValue || 1);
+    const requestedPage = Number.isFinite(requestedPageRaw) && requestedPageRaw > 0 ? requestedPageRaw : 1;
+    const safePage = Math.min(requestedPage, maxPage);
+
+    if (table.getPage?.() !== safePage) {
+      await table.setPage(safePage);
+    }
+
+    tabulatorState.paginationPage = safePage;
+    tabulatorState.paginationSize = desiredSize;
+  };
+
+  table.on("pageLoaded", (pageNo) => {
+    const parsedPage = Number(pageNo);
+    if (Number.isFinite(parsedPage) && parsedPage > 0) {
+      tabulatorState.paginationPage = parsedPage;
+    }
+  });
+
+  table.on("pageSizeChanged", (pageSize) => {
+    tabulatorState.paginationSize = normalizePageSize(pageSize);
+  });
+
+  void restorePageState(tabulatorState.paginationPage, tabulatorState.paginationSize);
+
   const applyValidatedChanges = async () => {
     try {
       const nextRows = table.getData().map((row) => ({ ...row }));
@@ -1201,12 +1275,17 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
         };
       });
       tabulatorState.validatedDiffByKey = validatedDiffByKey;
+      const pageBeforeUpdate = table.getPage?.() || tabulatorState.paginationPage || 1;
+      const pageSizeBeforeUpdate = table.getPageSize?.() ?? tabulatorState.paginationSize;
+      tabulatorState.paginationPage = Number(pageBeforeUpdate) > 0 ? Number(pageBeforeUpdate) : 1;
+      tabulatorState.paginationSize = normalizePageSize(pageSizeBeforeUpdate);
       applyRowsToJson(nextRows);
       isProgrammaticUpdate = true;
       showValidatedDiff = true;
       tabulatorState.validated = true;
       tabulatorState.rowsSnapshot = nextRows.map((row) => ({ ...row }));
       await table.replaceData(nextRows);
+      await restorePageState(pageBeforeUpdate, pageSizeBeforeUpdate);
       showValidatedDiff = true;
       tabulatorState.validated = true;
       tabulatorState.rowsSnapshot = nextRows.map((row) => ({ ...row }));
