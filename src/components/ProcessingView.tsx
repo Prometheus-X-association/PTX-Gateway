@@ -87,6 +87,12 @@ const hasPendingTimeoutSignature = (obj: unknown): boolean => {
   return false;
 };
 
+// Detect generic PENDING states even when timeout message shape differs.
+const hasPendingStatus = (obj: unknown): boolean => {
+  const status = findStatusInResponse(obj);
+  return typeof status === "string" && status.toUpperCase() === "PENDING";
+};
+
 interface PdcConfig {
   organizationId?: string | null;
   orgExecutionToken?: string | null;
@@ -458,12 +464,13 @@ const ProcessingView = ({
       // Recursively check if success: true exists anywhere in the response
       const isSuccess = findSuccessInResponse(data);
       const isPendingTimeout = hasPendingTimeoutSignature(data);
+      const isPending = hasPendingStatus(data);
 
       // Continue to results if:
       // 1) processing already completed (success: true), or
       // 2) exchange is accepted but still pending with timeout marker
-      if (isSuccess || isPendingTimeout) {
-        if (!isPendingTimeout) {
+      if (isSuccess || isPending) {
+        if (!isPending) {
           // Complete animation quickly for direct success.
           setProgress(100);
           setCurrentStep(processingSteps.length - 1);
@@ -484,7 +491,7 @@ const ProcessingView = ({
         // Pending status flow:
         // - keep progress below 100
         // - notify user
-        // - wait up to 60s while polling result URL every 10s
+        // - wait up to configured window while polling result URL every 10s
         const resultReady = await runPendingAvailabilityWindow(INITIAL_PENDING_POLL_INTERVAL_MS);
 
         if (resultReady) {
@@ -504,9 +511,10 @@ const ProcessingView = ({
 
         setHasError(true);
         setCanRetryPendingAvailability(true);
+        const waitSeconds = Math.round(pendingTransitionDelayMs / 1000);
         setErrorResponse({
           content: {
-            status: "Result is still not available after 60 seconds of polling. Click Retry to run another 60-second availability check every 5 seconds.",
+            status: `Result is still not available after ${waitSeconds} seconds of polling. Click Retry to run another ${waitSeconds}-second availability check every 5 seconds.`,
           },
         });
         setCurrentStep(processingSteps.length - 1);
@@ -515,11 +523,11 @@ const ProcessingView = ({
             status: "failed",
             updatedAt: Date.now(),
             ownerTabId: thisTabId,
-            errorMessage: "Pending result not available after 60 seconds",
+            errorMessage: `Pending result not available after ${waitSeconds} seconds`,
           });
         }
         setIsExecuting(false);
-        onError({ message: "Pending result not available after 60 seconds" });
+        onError({ message: `Pending result not available after ${waitSeconds} seconds` });
       } else {
         // Error case - show the response
         setHasError(true);
@@ -559,7 +567,7 @@ const ProcessingView = ({
       executionInFlightRef.current = false;
       setIsExecuting(false);
     }
-  }, [pdcPayload, pdcConfig, onComplete, onError, runPendingAvailabilityWindow]);
+  }, [pdcPayload, pdcConfig, onComplete, onError, pendingTransitionDelayMs, runPendingAvailabilityWindow]);
 
   // Execute PDC on mount
   useEffect(() => {
@@ -617,10 +625,11 @@ const ProcessingView = ({
 
     setHasError(true);
     setCanRetryPendingAvailability(true);
+    const waitSeconds = Math.round(pendingTransitionDelayMs / 1000);
     setErrorResponse({
       content: {
         status:
-          "Result is still not available after another 60 seconds of polling every 5 seconds. You can retry availability check again.",
+          `Result is still not available after another ${waitSeconds} seconds of polling every 5 seconds. You can retry availability check again.`,
       },
     });
     setCurrentStep(processingSteps.length - 1);
@@ -629,11 +638,11 @@ const ProcessingView = ({
         status: "failed",
         updatedAt: Date.now(),
         ownerTabId: thisTabId,
-        errorMessage: "Pending result not available after retry availability check",
+        errorMessage: `Pending result not available after retry availability check (${waitSeconds} seconds)`,
       });
     }
     setIsExecuting(false);
-    onError({ message: "Pending result not available after retry availability check" });
+    onError({ message: `Pending result not available after retry availability check (${waitSeconds} seconds)` });
   };
 
   const handleContinueWithDummyResult = () => {

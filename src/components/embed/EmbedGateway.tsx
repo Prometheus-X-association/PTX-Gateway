@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Sparkles, Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 import StepIndicator from "@/components/StepIndicator";
 import AnalyticsSelection from "@/components/AnalyticsSelection";
 import DataSelection from "@/components/DataSelection";
@@ -16,6 +16,7 @@ import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
 import { applyOrganizationVisualizationSettings, VisualizationSettings } from "@/utils/visualizationSettings";
+import GatewayHeader from "@/components/GatewayHeader";
 
 interface SelectedDataType {
   files: File[];
@@ -503,14 +504,7 @@ const EmbedGatewayContent = () => {
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-5 max-w-[90vw]">
-        {/* Compact Header for Embed */}
-        <header className="text-center mb-4 h-[clamp(84px,15vh,132px)] overflow-hidden flex flex-col justify-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 mb-2 mx-auto">
-            <Sparkles className="w-3 h-3 text-primary" />
-            <span className="text-[clamp(10px,1.1vh,12px)] text-primary font-medium">PDC Gateway</span>
-          </div>
-          <h1 className="text-[clamp(1.2rem,2.5vh,1.8rem)] font-bold leading-tight">Data Analytics</h1>
-        </header>
+        <GatewayHeader />
 
         {!isVerticalProgress && (
           <div className="text-center mb-4 min-h-[1.25rem]">
@@ -582,6 +576,7 @@ const EmbedGatewayContent = () => {
               onComplete={handleProcessingComplete}
               onError={handleProcessingError}
               onBack={handleProcessingBack}
+              pendingWaitSeconds={processingPageSettings?.pendingWaitSeconds}
             />
           )}
           {getCurrentStepName() === "Results" && selectedAnalytics && (

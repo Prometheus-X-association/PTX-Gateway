@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useDataspaceConfig } from "@/hooks/useDataspaceConfig";
 import { AnalyticsOption, DataResource } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
+import GatewayHeader from "@/components/GatewayHeader";
 
 interface SelectedDataType {
   files: File[];
@@ -289,27 +290,7 @@ const IndexContent = () => {
         </div>
 
         <div className="relative z-10 container mx-auto px-4 py-5 max-w-[90vw]">
-          {/* Header with User Menu - Only show for debug mode users */}
-          <header className="text-center mb-4 relative h-[clamp(96px,15vh,140px)] overflow-hidden flex flex-col justify-center">
-            {isDebugMode && (
-              <div className="absolute top-0 right-0">
-                <UserMenu />
-              </div>
-            )}
-            
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 mb-2 mx-auto">
-              <Sparkles className="w-4 h-4 text-primary" />
-              <span className="text-[clamp(11px,1.2vh,13px)] text-primary font-medium">Data Analytics Platform</span>
-            </div>
-            <h1 className="text-[clamp(1.35rem,2.9vh,2.2rem)] font-bold mb-1 leading-tight">
-              Transform Your Data Into{" "}
-              <span className="gradient-text">Insights</span>
-            </h1>
-            <p className="text-[clamp(11px,1.35vh,15px)] text-muted-foreground max-w-2xl mx-auto leading-snug">
-              Upload your data, select your analysis type, and let our platform
-              generate actionable insights in minutes
-            </p>
-          </header>
+          <GatewayHeader rightSlot={isDebugMode ? <UserMenu /> : undefined} />
 
           {isVerticalProgress ? (
             <div className="lg:hidden">
