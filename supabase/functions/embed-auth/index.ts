@@ -221,10 +221,14 @@ const buildGatewayFeaturesForEmbed = (features: unknown): Record<string, unknown
   const source = asRecord(features);
   const gatewayFeatures: Record<string, unknown> = {};
 
+  const analyticsPage = asRecord(source.analyticsPage);
   const resultPage = asRecord(source.resultPage);
   const dataSelection = asRecord(source.dataSelection);
   const processingPage = asRecord(source.processingPage);
 
+  if (Object.keys(analyticsPage).length > 0) {
+    gatewayFeatures.analyticsPage = analyticsPage;
+  }
   if (Object.keys(resultPage).length > 0) {
     gatewayFeatures.resultPage = resultPage;
   }
