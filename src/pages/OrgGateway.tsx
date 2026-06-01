@@ -16,7 +16,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import UserMenu from "@/components/UserMenu";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AnalyticsOption, CustomVisualizationConfig, CustomVisualizationLibraryBundle, DataResource, DataSelectionSettings, ExportApiConfig, PdcConfig, ProcessingPageSettings, SoftwareResource, ServiceChain } from "@/types/dataspace";
+import { AnalyticsOption, CredentialPluginConfig, CustomVisualizationConfig, CustomVisualizationLibraryBundle, DataResource, DataSelectionSettings, ExportApiConfig, PdcConfig, ProcessingPageSettings, SoftwareResource, ServiceChain } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { Json } from "@/integrations/supabase/types";
@@ -293,6 +293,14 @@ const isEmbeddedFrame = (): boolean => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const getCredentialPlugins = (features: unknown): CredentialPluginConfig[] => {
+  if (!isRecord(features)) return [];
+  const analyticsPage = isRecord(features.analyticsPage) ? features.analyticsPage : {};
+  return Array.isArray(analyticsPage.credentialPlugins)
+    ? (analyticsPage.credentialPlugins as unknown as CredentialPluginConfig[])
+    : [];
+};
+
 const getResultPageExportApiConfigs = (features: unknown): ExportApiConfig[] => {
   if (!isRecord(features)) return [];
   const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
@@ -404,7 +412,7 @@ const buildDummySkillResult = (error: unknown, organizationName: string) => {
   };
 };
 
-const OrgGatewayContent = ({ 
+const OrgGatewayContent = ({
   organization,
   pdcConfig,
   orgExecutionToken,
@@ -415,6 +423,7 @@ const OrgGatewayContent = ({
   softwareResources,
   dataResources,
   serviceChains,
+  credentialPlugins,
 }: {
   organization: Organization;
   pdcConfig: PdcConfig | null;
@@ -426,6 +435,7 @@ const OrgGatewayContent = ({
   softwareResources: SoftwareResource[];
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
+  credentialPlugins: CredentialPluginConfig[];
 }) => {
   const [searchParams] = useSearchParams();
   const { user, isAuthenticated
@@ -911,6 +921,7 @@ const OrgGatewayContent = ({
               softwareResources={softwareResources}
               serviceChains={serviceChains}
               isDebugMode={isDebugMode}
+              credentialPlugins={credentialPlugins}
             />
           )}
           {currentStepName === "Choose Data" && (
@@ -990,6 +1001,7 @@ const OrgGateway = () => {
   const [dataResources, setDataResources] = useState<DataResource[]>([]);
   const [serviceChains, setServiceChains] = useState<ServiceChain[]>([]);
   const [customVisualizations, setCustomVisualizations] = useState<CustomVisualizationConfig[]>([]);
+  const [credentialPlugins, setCredentialPlugins] = useState<CredentialPluginConfig[]>([]);
   const [dataSelectionSettings, setDataSelectionSettings] = useState<DataSelectionSettings | null>(null);
   const [processingPageSettings, setProcessingPageSettings] = useState<ProcessingPageSettings | null>(null);
   const [verticalStepBarTopText, setVerticalStepBarTopText] = useState("");
@@ -1087,7 +1099,9 @@ const OrgGateway = () => {
         const resultPageCustomVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
         const dataSelectionConfig = getDataSelectionSettings(globalConfigData?.features);
         const processingPageConfig = getProcessingPageSettings(globalConfigData?.features);
+        const credPlugins = getCredentialPlugins(globalConfigData?.features);
         setCustomVisualizations(resultPageCustomVisualizations);
+        setCredentialPlugins(credPlugins);
         setDataSelectionSettings(dataSelectionConfig);
         setProcessingPageSettings(processingPageConfig);
         setVerticalStepBarTopText(processingPageConfig?.verticalStepBarTopText ?? "");
@@ -1294,6 +1308,7 @@ const OrgGateway = () => {
         dataSelectionSettings={dataSelectionSettings}
         processingPageSettings={processingPageSettings}
         verticalStepBarTopText={verticalStepBarTopText}
+        credentialPlugins={credentialPlugins}
       />
     </ProcessSessionProvider>
   );

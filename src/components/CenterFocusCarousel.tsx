@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, Globe, User, Settings, Check, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -393,7 +394,7 @@ const CenterFocusCarousel = ({
       )}
 
       {/* Description Modal */}
-      {descriptionDialog.open && (
+      {descriptionDialog.open && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
             className="absolute inset-0 bg-black/80 backdrop-blur-sm"
@@ -414,10 +415,10 @@ const CenterFocusCarousel = ({
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* Parameters Modal */}
-      {paramsDialog.open && paramsDialog.item && (
+      {paramsDialog.open && paramsDialog.item && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={closeParamsDialog} />
           <div className="relative z-10 w-full max-w-md mx-4 bg-background border border-border rounded-xl p-6 shadow-2xl animate-scale-in">
@@ -459,7 +460,7 @@ const CenterFocusCarousel = ({
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 };

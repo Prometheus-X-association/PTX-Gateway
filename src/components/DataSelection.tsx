@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { Upload, Database, Link, User, Check, X, Settings, FileJson, Plus, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1148,7 +1149,7 @@ const DataSelection = ({
       </div>
 
       {/* Upload Resource Params Dialog */}
-      {showUploadParamsDialog && pendingUploadResource && (
+      {showUploadParamsDialog && pendingUploadResource && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div 
             className="absolute inset-0 bg-black/80"
@@ -1202,12 +1203,12 @@ const DataSelection = ({
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* Description Dialog */}
-      {descriptionDialog.open && (
+      {descriptionDialog.open && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div 
+          <div
             className="absolute inset-0 bg-black/80"
             onClick={() => setDescriptionDialog({ open: false, title: "", description: "" })}
           />
@@ -1235,7 +1236,7 @@ const DataSelection = ({
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 };

@@ -59,6 +59,26 @@ export interface DataPagePluginConfig {
   is_active: boolean;
 }
 
+export type AnalyticsPagePluginType = "carisma";
+
+export interface CredentialEntry {
+  id: string;
+  label: string;
+  json_content: string;
+  png_base64: string;
+  target_resource_ids: string[];
+}
+
+export interface CredentialPluginConfig {
+  id: string;
+  plugin_type?: AnalyticsPagePluginType;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  html_content: string;
+  credentials: CredentialEntry[];
+}
+
 export interface DataSelectionSettings {
   customApiDebugOnly?: boolean;
   customApiTargetSoftwareIds?: string[];

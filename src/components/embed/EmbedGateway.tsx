@@ -11,7 +11,7 @@ import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { resolveResultUrl, ResultUrlInfo } from "@/utils/resultUrlResolver";
 import { generatePdcPayload, PdcPayload } from "@/utils/pdcPayloadGenerator";
 import { useDataspaceConfig } from "@/hooks/useDataspaceConfig";
-import { AnalyticsOption, DataResource, ServiceChain, SoftwareResource, getParamValuesMap } from "@/types/dataspace";
+import { AnalyticsOption, CredentialPluginConfig, DataResource, ServiceChain, SoftwareResource, getParamValuesMap } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
 import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
@@ -95,6 +95,17 @@ const buildPreselectedQueryParams = (
   });
 
   return next;
+};
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+const getCredentialPlugins = (features: Record<string, unknown> | null): CredentialPluginConfig[] => {
+  if (!isRecord(features)) return [];
+  const analyticsPage = isRecord(features.analyticsPage) ? features.analyticsPage : {};
+  return Array.isArray(analyticsPage.credentialPlugins)
+    ? (analyticsPage.credentialPlugins as unknown as CredentialPluginConfig[])
+    : [];
 };
 
 const EmbedGatewayContent = () => {
@@ -244,6 +255,8 @@ const EmbedGatewayContent = () => {
     document.documentElement.classList.remove('light', 'dark');
     document.documentElement.classList.add(theme);
   }, [theme]);
+
+  const credentialPlugins = useMemo(() => getCredentialPlugins(gatewayFeatures), [gatewayFeatures]);
 
   const steps = useMemo(() => ["Select Type", "Choose Data", "Processing", "Results"], []);
 
@@ -557,6 +570,7 @@ const EmbedGatewayContent = () => {
               onQueryParamChange={setAnalyticsQueryParams}
               softwareResources={softwareResources}
               serviceChains={serviceChains}
+              credentialPlugins={credentialPlugins}
             />
           )}
           {getCurrentStepName() === "Choose Data" && (

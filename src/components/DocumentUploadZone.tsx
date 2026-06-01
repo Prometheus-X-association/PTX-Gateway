@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { Cloud, FileText, X, Settings, Upload, Loader2, CheckCircle, AlertCircle, Eye, Download } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -599,7 +600,7 @@ const DocumentUploadZone = ({
       )}
 
       {/* Configuration Modal */}
-      {isDebugMode && showConfigModal && (
+      {isDebugMode && showConfigModal && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div 
             className="absolute inset-0 bg-background/80 backdrop-blur-sm" 
@@ -702,9 +703,9 @@ const DocumentUploadZone = ({
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
-      {preview && (
+      {preview && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/80" onClick={closeFilePreview} />
           <div className="relative z-10 w-full max-w-5xl mx-4 bg-background border rounded-lg shadow-lg max-h-[88vh] flex flex-col overflow-hidden">
@@ -770,7 +771,7 @@ const DocumentUploadZone = ({
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 };
