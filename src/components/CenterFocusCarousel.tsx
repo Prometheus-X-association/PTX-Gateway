@@ -397,7 +397,7 @@ const CenterFocusCarousel = ({
       {descriptionDialog.open && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setDescriptionDialog({ open: false, title: "", description: "" })}
           />
           <div className="relative z-10 w-full max-w-lg mx-4 bg-background border border-border rounded-xl p-6 shadow-2xl animate-scale-in">
@@ -420,7 +420,7 @@ const CenterFocusCarousel = ({
       {/* Parameters Modal */}
       {paramsDialog.open && paramsDialog.item && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={closeParamsDialog} />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeParamsDialog} />
           <div className="relative z-10 w-full max-w-md mx-4 bg-background border border-border rounded-xl p-6 shadow-2xl animate-scale-in">
             <div className="flex items-center justify-between mb-4">
               <div>

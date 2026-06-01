@@ -1152,7 +1152,7 @@ const DataSelection = ({
       {showUploadParamsDialog && pendingUploadResource && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div 
-            className="absolute inset-0 bg-black/80"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={handleUploadParamsCancel}
           />
           
@@ -1209,7 +1209,7 @@ const DataSelection = ({
       {descriptionDialog.open && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-black/80"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setDescriptionDialog({ open: false, title: "", description: "" })}
           />
           

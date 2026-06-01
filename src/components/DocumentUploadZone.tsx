@@ -603,7 +603,7 @@ const DocumentUploadZone = ({
       {isDebugMode && showConfigModal && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div 
-            className="absolute inset-0 bg-background/80 backdrop-blur-sm" 
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setShowConfigModal(false)}
           />
           <div className="relative z-10 w-full max-w-lg mx-4 bg-card border border-border rounded-lg p-6 shadow-lg animate-scale-in max-h-[80vh] overflow-y-auto">
@@ -707,7 +707,7 @@ const DocumentUploadZone = ({
 
       {preview && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/80" onClick={closeFilePreview} />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeFilePreview} />
           <div className="relative z-10 w-full max-w-5xl mx-4 bg-background border rounded-lg shadow-lg max-h-[88vh] flex flex-col overflow-hidden">
             <div className="flex items-center justify-between gap-4 p-4 border-b">
               <div className="min-w-0">

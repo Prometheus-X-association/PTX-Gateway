@@ -501,7 +501,7 @@ const AnalyticsSelection = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           {/* Backdrop */}
           <div 
-            className="absolute inset-0 bg-black/80"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setParamsDialogOpen(false)}
           />
           
@@ -605,7 +605,7 @@ const AnalyticsSelection = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           {/* Backdrop */}
           <div 
-            className="absolute inset-0 bg-black/80"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setServiceChainDetails(null)}
           />
           
@@ -690,7 +690,7 @@ const AnalyticsSelection = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           {/* Backdrop */}
           <div 
-            className="absolute inset-0 bg-black/80"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setDescriptionDialog(null)}
           />
           
@@ -723,7 +723,7 @@ const AnalyticsSelection = ({
       , document.body)}
       {/* Credential modal — full-screen on mobile, constrained box on desktop */}
       {credentialModal && createPortal(
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-0 md:p-6">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 md:p-6">
           <div className="flex flex-col bg-background w-full h-full md:rounded-lg md:border md:shadow-2xl md:w-[80vw] md:max-w-6xl md:h-[90vh]">
             <div className="flex items-center justify-between px-4 py-2 border-b bg-background shrink-0 md:rounded-t-lg">
               <div className="flex items-center gap-2 min-w-0">
