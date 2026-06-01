@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { Link2, X, Cpu } from "lucide-react";
+import { Link2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,7 @@ import {
   getQueryParamNames,
   getParamValuesMap,
 } from "@/types/dataspace";
-import { sanitizeParams, isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
 
 // Re-export type for backward compatibility
 export type { AnalyticsOption } from "@/types/dataspace";
@@ -281,18 +281,24 @@ const AnalyticsSelection = ({
           className={`analytics-card ${optionSelected ? "selected" : ""} relative cursor-pointer`}
         >
           {option.type === "serviceChain" ? (
-            <button
-              type="button"
-              onClick={(event) => openServiceChainDetails(event, option.data)}
-              className={`theme-badge mb-4 transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-primary hover:text-primary-foreground hover:shadow-md hover:shadow-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
-                optionSelected
-                  ? "theme-provider-badge selected"
-                  : "theme-provider-badge"
-              }`}
-              aria-label={`Show ${info.provider} in ${info.name}`}
-            >
-              {info.provider}
-            </button>
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <span className="theme-badge border border-border/60 bg-transparent text-muted-foreground/70 cursor-default select-none">
+                <Link2 className="w-3 h-3" />
+                Service Chain
+              </span>
+              <button
+                type="button"
+                onClick={(event) => openServiceChainDetails(event, option.data)}
+                className={`theme-badge transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-primary hover:text-primary-foreground hover:shadow-md hover:shadow-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                  optionSelected
+                    ? "theme-provider-badge selected"
+                    : "theme-provider-badge"
+                }`}
+                aria-label={`Show ${info.provider} in ${info.name}`}
+              >
+                {info.provider}
+              </button>
+            </div>
           ) : (
             <div className={`theme-badge mb-4 transition-colors ${
               optionSelected
@@ -302,34 +308,23 @@ const AnalyticsSelection = ({
               {info.provider}
             </div>
           )}
-          
+
           <h3 className="font-semibold text-lg mb-2 line-clamp-2">{info.name}</h3>
-          <p 
+          <p
             ref={(el) => setDescriptionRef(optionId, el)}
             className="text-sm text-muted-foreground line-clamp-3"
           >
             {info.description}
           </p>
 
-          {(isTruncated || info.isServiceChain) && (
-            <div className="mt-2 flex items-center justify-between gap-2">
-              {isTruncated ? (
-                <button
-                  onClick={(e) => openDescriptionDialog(e, info.name, info.description)}
-                  className="text-xs text-primary hover:underline"
-                >
-                  Read full
-                </button>
-              ) : (
-                <span />
-              )}
-
-              {info.isServiceChain && (
-                <Badge className="bg-primary/20 text-primary border-primary/30 gap-1">
-                  <Link2 className="w-3 h-3" />
-                  Service Chain
-                </Badge>
-              )}
+          {isTruncated && (
+            <div className="mt-2">
+              <button
+                onClick={(e) => openDescriptionDialog(e, info.name, info.description)}
+                className="text-xs text-primary hover:underline"
+              >
+                Read full
+              </button>
             </div>
           )}
           
@@ -366,7 +361,6 @@ const AnalyticsSelection = ({
                   size="sm"
                   variant={optionSelected ? "default" : "outline"}
                   className="h-7 px-2 text-xs"
-                  onClick={(event) => openServiceChainDetails(event, option.data)}
                   onClick={(event) => handleConfigureServiceChainParams(event, option)}
                 >
                   Change Parameters
