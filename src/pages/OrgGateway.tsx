@@ -111,7 +111,7 @@ const buildPreselectedQueryParams = (
 };
 
 // Helper functions for parsing (same as useDataspaceConfig)
-const parseParameters = (params: Json | null): { paramName: string; paramValue: string; paramAction?: string }[] => {
+const parseParameters = (params: Json | null): { paramName: string; paramValue: string; paramAction?: string; options?: string[]; allowMultiple?: boolean }[] => {
   if (!params || !Array.isArray(params)) return [];
   return params.map((p) => {
     if (typeof p === 'object' && p !== null && !Array.isArray(p)) {
@@ -120,6 +120,8 @@ const parseParameters = (params: Json | null): { paramName: string; paramValue: 
         paramName: String(obj.paramName || ''),
         paramValue: String(obj.paramValue || ''),
         paramAction: obj.paramAction ? String(obj.paramAction) : undefined,
+        options: Array.isArray(obj.options) ? obj.options.map(String) : undefined,
+        allowMultiple: typeof obj.allowMultiple === 'boolean' ? obj.allowMultiple : undefined,
       };
     }
     return { paramName: '', paramValue: '' };

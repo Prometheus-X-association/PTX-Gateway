@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Link2, ShieldCheck, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -99,6 +100,53 @@ const AnalyticsSelection = ({
     srcdoc: string;
   } | null>(null);
   const credentialBlobUrls = useRef<string[]>([]);
+
+  // Each row in the modal represents one param with selectable options.
+  // selectionKey = paramName for software; "${resource_url}|||${paramName}" for service chain.
+  const [paramOptionsModal, setParamOptionsModal] = useState<{
+    option: AnalyticsOption;
+    rows: {
+      selectionKey: string;
+      paramName: string;
+      groupLabel?: string;    // resource name shown as section header for service chains
+      resourceUrl?: string;   // needed to write back into embedded_resources
+      options: string[];
+      allowMultiple?: boolean;
+    }[];
+    selections: Record<string, string[]>;
+  } | null>(null);
+
+  const confirmParamOptions = useCallback(() => {
+    if (!paramOptionsModal) return;
+
+    if (paramOptionsModal.option.type === "software") {
+      const resolved: Record<string, string> = {};
+      paramOptionsModal.rows.forEach((row) => {
+        resolved[row.paramName] = (paramOptionsModal.selections[row.selectionKey] || []).join(",");
+      });
+      onQueryParamChange({ ...queryParams, ...resolved });
+
+    } else if (paramOptionsModal.option.type === "serviceChain") {
+      const updated: AnalyticsOption = {
+        type: "serviceChain",
+        data: {
+          ...paramOptionsModal.option.data,
+          embedded_resources: (paramOptionsModal.option.data.embedded_resources || []).map((resource) => ({
+            ...resource,
+            parameters: resource.parameters.map((p) => {
+              if (!p.options || p.options.length === 0) return p;
+              const key = `${resource.resource_url}|||${p.paramName}`;
+              return { ...p, paramValue: (paramOptionsModal.selections[key] || []).join(",") };
+            }),
+          })),
+        },
+      };
+      onSelect(updated);
+    }
+
+    setParamOptionsModal(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paramOptionsModal, queryParams]);
 
   const openCredentialModal = useCallback((plugin: CredentialPluginConfig, entry: CredentialEntry) => {
     credentialBlobUrls.current.forEach((u) => URL.revokeObjectURL(u));
@@ -231,23 +279,56 @@ const AnalyticsSelection = ({
   // Handle option selection
   const handleOptionSelect = (option: AnalyticsOption) => {
     onSelect(option);
-    const info = getDisplayInfo(option);
-    
-    // Pre-fill query params from resource parameters
-    if (info.queryParams.length > 0 && option.type === "software") {
+
+    if (option.type === "software") {
       const prefillParams = getParamValuesMap(option.data.parameters);
-      
-      // Resolve #genSessionId placeholders
       const resolvedParams: Record<string, string> = {};
       for (const [key, value] of Object.entries(prefillParams)) {
-        if (isSessionIdPlaceholder(value)) {
-          resolvedParams[key] = sessionId;
-        } else {
-          resolvedParams[key] = value;
+        resolvedParams[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+      }
+      // Pre-fill first option for option-params that have no value yet
+      option.data.parameters.forEach((p) => {
+        if (p.options && p.options.length > 0 && !resolvedParams[p.paramName]) {
+          resolvedParams[p.paramName] = p.options[0];
+        }
+      });
+      if (Object.keys(resolvedParams).length > 0) onQueryParamChange(resolvedParams);
+
+      // In debug mode the option selector is embedded in the "Change Parameters" dialog — no separate modal needed
+      if (!isDebugMode) {
+        const rows = option.data.parameters
+          .filter((p) => p.options && p.options.length > 0)
+          .map((p) => ({
+            selectionKey: p.paramName,
+            paramName: p.paramName,
+            options: p.options!,
+            allowMultiple: p.allowMultiple,
+          }));
+        if (rows.length > 0) {
+          setParamOptionsModal({ option, rows, selections: Object.fromEntries(rows.map((r) => [r.selectionKey, r.options.length > 0 ? [r.options[0]] : []])) });
         }
       }
-      
-      onQueryParamChange(resolvedParams);
+
+    } else if (option.type === "serviceChain") {
+      if (!isDebugMode) {
+        const rows: { selectionKey: string; paramName: string; groupLabel?: string; resourceUrl?: string; options: string[]; allowMultiple?: boolean }[] = [];
+        (option.data.embedded_resources || []).forEach((resource) => {
+          resource.parameters.forEach((p) => {
+            if (!p.options || p.options.length === 0) return;
+            rows.push({
+              selectionKey: `${resource.resource_url}|||${p.paramName}`,
+              paramName: p.paramName,
+              groupLabel: resource.resource_name || resource.provider || `Service ${resource.service_index + 1}`,
+              resourceUrl: resource.resource_url,
+              options: p.options,
+              allowMultiple: p.allowMultiple,
+            });
+          });
+        });
+        if (rows.length > 0) {
+          setParamOptionsModal({ option, rows, selections: Object.fromEntries(rows.map((r) => [r.selectionKey, r.options.length > 0 ? [r.options[0]] : []])) });
+        }
+      }
     }
   };
 
@@ -272,6 +353,12 @@ const AnalyticsSelection = ({
       const resolvedValues: Record<string, string> = {};
       Object.entries(paramValues).forEach(([key, value]) => {
         resolvedValues[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+      });
+      // Pre-fill first option for option-params that have no value yet
+      resource.parameters.forEach((p) => {
+        if (p.options && p.options.length > 0 && !resolvedValues[p.paramName]) {
+          resolvedValues[p.paramName] = p.options[0];
+        }
       });
       initialEdits[resource.resource_url] = resolvedValues;
     });
@@ -528,17 +615,47 @@ const AnalyticsSelection = ({
             {/* Form */}
             <div className="flex-1 overflow-y-auto min-h-0 px-6 py-4">
               <div className="grid gap-4">
-              {paramEditorMode === "software" && selected.type === "software" && selectedQueryParams.map((param) => (
-                <div key={param} className="space-y-2">
-                  <Label htmlFor={param}>{param}</Label>
-                  <Input
-                    id={param}
-                    placeholder={`Enter ${param}`}
-                    value={queryParams[param] ?? selectedSoftwareDefaultParams[param] ?? ""}
-                    onChange={(e) => handleParamChange(param, e.target.value)}
-                  />
-                </div>
-              ))}
+              {paramEditorMode === "software" && selected.type === "software" && selectedQueryParams.map((param) => {
+                const paramDef = selected.data.parameters.find((p) => p.paramName === param);
+                const currentVal = queryParams[param] ?? selectedSoftwareDefaultParams[param] ?? "";
+                if (paramDef?.options && paramDef.options.length > 0) {
+                  const selectedVals = paramDef.allowMultiple
+                    ? currentVal.split(",").filter(Boolean)
+                    : currentVal ? [currentVal] : [paramDef.options[0]];
+                  return (
+                    <div key={param} className="space-y-2">
+                      <Label>{param}{paramDef.allowMultiple && <span className="ml-2 text-xs font-normal text-muted-foreground">(multiple allowed)</span>}</Label>
+                      <div className="space-y-1.5 pl-1">
+                        {paramDef.options.map((opt) => {
+                          const isChecked = selectedVals.includes(opt);
+                          const toggle = () => {
+                            if (paramDef.allowMultiple) {
+                              const next = isChecked ? selectedVals.filter((v) => v !== opt) : [...selectedVals, opt];
+                              handleParamChange(param, next.join(","));
+                            } else {
+                              handleParamChange(param, opt);
+                            }
+                          };
+                          return (
+                            <label key={opt} className="flex items-center gap-2.5 cursor-pointer">
+                              {paramDef.allowMultiple
+                                ? <Checkbox checked={isChecked} onCheckedChange={toggle} />
+                                : <input type="radio" name={`dbg-sw-${param}`} checked={isChecked} onChange={toggle} className="accent-primary w-4 h-4" />}
+                              <span className="text-sm">{opt}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={param} className="space-y-2">
+                    <Label htmlFor={param}>{param}</Label>
+                    <Input id={param} placeholder={`Enter ${param}`} value={currentVal} onChange={(e) => handleParamChange(param, e.target.value)} />
+                  </div>
+                );
+              })}
 
               {paramEditorMode === "serviceChain" && selected.type === "serviceChain" && (
                 <>
@@ -558,26 +675,53 @@ const AnalyticsSelection = ({
                         {paramNames.length === 0 ? (
                           <p className="text-xs text-muted-foreground">No parameters configured.</p>
                         ) : (
-                          paramNames.map((param) => (
-                            <div key={`${resource.resource_url}-${param}`} className="space-y-1">
-                              <Label htmlFor={`${resource.resource_url}-${param}`}>{param}</Label>
-                              <Input
-                                id={`${resource.resource_url}-${param}`}
-                                placeholder={`Enter ${param}`}
-                                value={serviceChainParamEdits[resource.resource_url]?.[param] ?? getParamValuesMap(resource.parameters)[param] ?? ""}
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  setServiceChainParamEdits((prev) => ({
-                                    ...prev,
-                                    [resource.resource_url]: {
-                                      ...(prev[resource.resource_url] || {}),
-                                      [param]: value,
-                                    },
-                                  }));
-                                }}
-                              />
-                            </div>
-                          ))
+                          paramNames.map((param) => {
+                            const paramDef = resource.parameters.find((p) => p.paramName === param);
+                            const currentVal = serviceChainParamEdits[resource.resource_url]?.[param] ?? getParamValuesMap(resource.parameters)[param] ?? "";
+                            const updateVal = (value: string) =>
+                              setServiceChainParamEdits((prev) => ({
+                                ...prev,
+                                [resource.resource_url]: { ...(prev[resource.resource_url] || {}), [param]: value },
+                              }));
+
+                            if (paramDef?.options && paramDef.options.length > 0) {
+                              const selectedVals = paramDef.allowMultiple
+                                ? currentVal.split(",").filter(Boolean)
+                                : currentVal ? [currentVal] : [paramDef.options[0]];
+                              return (
+                                <div key={`${resource.resource_url}-${param}`} className="space-y-1.5">
+                                  <Label>{param}{paramDef.allowMultiple && <span className="ml-2 text-xs font-normal text-muted-foreground">(multiple allowed)</span>}</Label>
+                                  <div className="space-y-1 pl-1">
+                                    {paramDef.options.map((opt) => {
+                                      const isChecked = selectedVals.includes(opt);
+                                      const toggle = () => {
+                                        if (paramDef.allowMultiple) {
+                                          const next = isChecked ? selectedVals.filter((v) => v !== opt) : [...selectedVals, opt];
+                                          updateVal(next.join(","));
+                                        } else {
+                                          updateVal(opt);
+                                        }
+                                      };
+                                      return (
+                                        <label key={opt} className="flex items-center gap-2.5 cursor-pointer">
+                                          {paramDef.allowMultiple
+                                            ? <Checkbox checked={isChecked} onCheckedChange={toggle} />
+                                            : <input type="radio" name={`dbg-sc-${resource.resource_url}-${param}`} checked={isChecked} onChange={toggle} className="accent-primary w-4 h-4" />}
+                                          <span className="text-sm">{opt}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return (
+                              <div key={`${resource.resource_url}-${param}`} className="space-y-1">
+                                <Label htmlFor={`${resource.resource_url}-${param}`}>{param}</Label>
+                                <Input id={`${resource.resource_url}-${param}`} placeholder={`Enter ${param}`} value={currentVal} onChange={(e) => updateVal(e.target.value)} />
+                              </div>
+                            );
+                          })
                         )}
                       </div>
                     );
@@ -721,6 +865,79 @@ const AnalyticsSelection = ({
           </div>
         </div>
       , document.body)}
+      {/* Parameter options selection modal — shown for all users when a resource has option lists */}
+      {paramOptionsModal && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setParamOptionsModal(null)} />
+          <div className="relative z-10 w-full max-w-md mx-4 bg-background border rounded-lg shadow-lg max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="p-5 pb-4 border-b">
+              <h3 className="text-base font-semibold">Select Parameters</h3>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                {getDisplayInfo(paramOptionsModal.option).name}
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto min-h-0 px-5 py-4 space-y-5">
+              {paramOptionsModal.rows.map((row) => {
+                const selected = paramOptionsModal.selections[row.selectionKey] || [];
+                return (
+                  <div key={row.selectionKey} className="space-y-2">
+                    {row.groupLabel && (
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground -mb-1">
+                        {row.groupLabel}
+                      </p>
+                    )}
+                    <Label className="text-sm font-medium">
+                      {row.paramName}
+                      {row.allowMultiple && (
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">(multiple allowed)</span>
+                      )}
+                    </Label>
+                    <div className="space-y-1.5 pl-1">
+                      {row.options.map((opt) => {
+                        const isChecked = selected.includes(opt);
+                        const toggle = () => {
+                          const next = row.allowMultiple
+                            ? isChecked ? selected.filter((v) => v !== opt) : [...selected, opt]
+                            : [opt];
+                          setParamOptionsModal((prev) =>
+                            prev ? { ...prev, selections: { ...prev.selections, [row.selectionKey]: next } } : null
+                          );
+                        };
+                        return (
+                          <label key={opt} className="flex items-center gap-2.5 cursor-pointer group">
+                            {row.allowMultiple ? (
+                              <Checkbox checked={isChecked} onCheckedChange={toggle} />
+                            ) : (
+                              <input
+                                type="radio"
+                                name={`param-${row.selectionKey}`}
+                                checked={isChecked}
+                                onChange={toggle}
+                                className="accent-primary w-4 h-4"
+                              />
+                            )}
+                            <span className="text-sm group-hover:text-foreground transition-colors">{opt}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="sticky bottom-0 p-4 border-t bg-background flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setParamOptionsModal(null)}>Cancel</Button>
+              <Button
+                onClick={confirmParamOptions}
+                disabled={Object.entries(paramOptionsModal.selections).some(([, v]) => v.length === 0)}
+              >
+                Confirm
+              </Button>
+            </div>
+          </div>
+        </div>
+      , document.body)}
+
       {/* Credential modal — full-screen on mobile, constrained box on desktop */}
       {credentialModal && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 md:p-6">

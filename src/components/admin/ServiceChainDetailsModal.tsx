@@ -33,7 +33,7 @@ interface EmbeddedResource {
   resource_description: string | null;
   provider: string | null;
   service_offering: string | null;
-  parameters: Array<{ paramName: string; paramValue: string; paramAction?: string }>;
+  parameters: Array<{ paramName: string; paramValue: string; paramAction?: string; options?: string[]; allowMultiple?: boolean }>;
   api_response_representation: Record<string, unknown>;
   visualization_type: VisualizationType | null;
   upload_url: string | null;
@@ -210,6 +210,37 @@ const ServiceChainDetailsModal = ({ chain, open, onOpenChange, onSave, isSaving 
     const resource = editedChain.embedded_resources[resourceIndex];
     const newParams = [...resource.parameters];
     newParams[paramIndex] = { ...newParams[paramIndex], paramValue: value };
+    updateEmbeddedResource(resourceIndex, { parameters: newParams });
+  };
+
+  const handleParamOptionAdd = (resourceIndex: number, paramIndex: number) => {
+    const resource = editedChain.embedded_resources[resourceIndex];
+    const newParams = [...resource.parameters];
+    newParams[paramIndex] = { ...newParams[paramIndex], options: [...(newParams[paramIndex].options || []), ""] };
+    updateEmbeddedResource(resourceIndex, { parameters: newParams });
+  };
+
+  const handleParamOptionChange = (resourceIndex: number, paramIndex: number, optIndex: number, value: string) => {
+    const resource = editedChain.embedded_resources[resourceIndex];
+    const newParams = [...resource.parameters];
+    const opts = [...(newParams[paramIndex].options || [])];
+    opts[optIndex] = value;
+    newParams[paramIndex] = { ...newParams[paramIndex], options: opts };
+    updateEmbeddedResource(resourceIndex, { parameters: newParams });
+  };
+
+  const handleParamOptionRemove = (resourceIndex: number, paramIndex: number, optIndex: number) => {
+    const resource = editedChain.embedded_resources[resourceIndex];
+    const newParams = [...resource.parameters];
+    const opts = (newParams[paramIndex].options || []).filter((_, i) => i !== optIndex);
+    newParams[paramIndex] = { ...newParams[paramIndex], options: opts.length > 0 ? opts : undefined };
+    updateEmbeddedResource(resourceIndex, { parameters: newParams });
+  };
+
+  const handleParamAllowMultipleToggle = (resourceIndex: number, paramIndex: number, value: boolean) => {
+    const resource = editedChain.embedded_resources[resourceIndex];
+    const newParams = [...resource.parameters];
+    newParams[paramIndex] = { ...newParams[paramIndex], allowMultiple: value || undefined };
     updateEmbeddedResource(resourceIndex, { parameters: newParams });
   };
 
@@ -764,13 +795,54 @@ const ServiceChainDetailsModal = ({ chain, open, onOpenChange, onSave, isSaving 
                                             </div>
                                           </div>
                                           <div className="space-y-1">
-                                            <Label className="text-xs">Default Value</Label>
-                                            <Input
-                                              value={param.paramValue}
-                                              onChange={(e) => handleParamValueChange(index, paramIndex, e.target.value)}
-                                              placeholder="Enter value..."
-                                              className="h-9"
-                                            />
+                                            <div className="flex items-center justify-between">
+                                              <Label className="text-xs">
+                                                {(param.options?.length ?? 0) > 0 ? "Option Values" : "Default Value"}
+                                              </Label>
+                                              {(param.options?.length ?? 0) === 0 && (
+                                                <Button type="button" variant="ghost" size="sm" className="h-5 text-xs px-1.5 text-muted-foreground"
+                                                  onClick={() => handleParamOptionAdd(index, paramIndex)}>
+                                                  <Plus className="h-3 w-3 mr-1" />Add options
+                                                </Button>
+                                              )}
+                                            </div>
+                                            {(param.options?.length ?? 0) === 0 ? (
+                                              <Input
+                                                value={param.paramValue}
+                                                onChange={(e) => handleParamValueChange(index, paramIndex, e.target.value)}
+                                                placeholder="Enter value..."
+                                                className="h-9"
+                                              />
+                                            ) : (
+                                              <div className="space-y-1.5">
+                                                {param.options!.map((opt, optIndex) => (
+                                                  <div key={optIndex} className="flex items-center gap-2">
+                                                    <Input value={opt} placeholder={`Option ${optIndex + 1}`}
+                                                      onChange={(e) => handleParamOptionChange(index, paramIndex, optIndex, e.target.value)}
+                                                      className="h-8 text-sm" />
+                                                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+                                                      onClick={() => handleParamOptionRemove(index, paramIndex, optIndex)}>
+                                                      <X className="h-3.5 w-3.5 text-destructive" />
+                                                    </Button>
+                                                  </div>
+                                                ))}
+                                                <Button type="button" variant="outline" size="sm" className="w-full h-7 text-xs border-dashed mt-1"
+                                                  onClick={() => handleParamOptionAdd(index, paramIndex)}>
+                                                  <Plus className="h-3 w-3 mr-1" />Add option
+                                                </Button>
+                                                <p className="text-[11px] text-muted-foreground">
+                                                  The first option is pre-selected by default in the gateway.
+                                                </p>
+                                                <div className="flex items-center gap-2 pt-1">
+                                                  <Switch checked={param.allowMultiple ?? false}
+                                                    onCheckedChange={(v) => handleParamAllowMultipleToggle(index, paramIndex, v)}
+                                                    id={`sc-allow-multiple-${index}-${paramIndex}`} />
+                                                  <Label htmlFor={`sc-allow-multiple-${index}-${paramIndex}`} className="text-xs cursor-pointer text-muted-foreground">
+                                                    Allow multiple selection
+                                                  </Label>
+                                                </div>
+                                              </div>
+                                            )}
                                           </div>
                                         </div>
                                         

@@ -30,6 +30,8 @@ const parseParameters = (params: Json | null): ResourceParameter[] => {
         paramName: String(obj.paramName || ''),
         paramValue: String(obj.paramValue || ''),
         paramAction: obj.paramAction ? String(obj.paramAction) : undefined,
+        options: Array.isArray(obj.options) ? obj.options.map(String) : undefined,
+        allowMultiple: typeof obj.allowMultiple === 'boolean' ? obj.allowMultiple : undefined,
       };
     }
     return { paramName: '', paramValue: '' };

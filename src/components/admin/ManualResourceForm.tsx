@@ -22,7 +22,7 @@ export interface ManualResourceData {
   resource_description: string;
   provider: string;
   service_offering: string;
-  parameters: Array<{ paramName: string; paramValue: string }>;
+  parameters: Array<{ paramName: string; paramValue: string; options?: string[]; allowMultiple?: boolean }>;
   visualization_type: VisualizationType;
   upload_file: boolean;
   is_visible: boolean;
@@ -70,8 +70,49 @@ const ManualResourceForm = ({ onSubmit, isLoading }: ManualResourceFormProps) =>
   const handleParameterChange = (index: number, field: 'paramName' | 'paramValue', value: string) => {
     setFormData(prev => ({
       ...prev,
-      parameters: prev.parameters.map((p, i) => 
+      parameters: prev.parameters.map((p, i) =>
         i === index ? { ...p, [field]: value } : p
+      )
+    }));
+  };
+
+  const handleParamOptionAdd = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      parameters: prev.parameters.map((p, i) =>
+        i === index ? { ...p, options: [...(p.options || []), ""] } : p
+      )
+    }));
+  };
+
+  const handleParamOptionChange = (index: number, optIndex: number, value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      parameters: prev.parameters.map((p, i) => {
+        if (i !== index) return p;
+        const opts = [...(p.options || [])];
+        opts[optIndex] = value;
+        return { ...p, options: opts };
+      })
+    }));
+  };
+
+  const handleParamOptionRemove = (index: number, optIndex: number) => {
+    setFormData(prev => ({
+      ...prev,
+      parameters: prev.parameters.map((p, i) => {
+        if (i !== index) return p;
+        const opts = (p.options || []).filter((_, j) => j !== optIndex);
+        return { ...p, options: opts.length > 0 ? opts : undefined };
+      })
+    }));
+  };
+
+  const handleParamAllowMultipleToggle = (index: number, value: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      parameters: prev.parameters.map((p, i) =>
+        i === index ? { ...p, allowMultiple: value || undefined } : p
       )
     }));
   };
@@ -249,25 +290,65 @@ const ManualResourceForm = ({ onSubmit, isLoading }: ManualResourceFormProps) =>
               </Button>
             </div>
             {formData.parameters.map((param, index) => (
-              <div key={index} className="flex items-center gap-2">
-                <Input
-                  placeholder="Parameter name"
-                  value={param.paramName}
-                  onChange={(e) => handleParameterChange(index, 'paramName', e.target.value)}
-                />
-                <Input
-                  placeholder="Default value"
-                  value={param.paramValue}
-                  onChange={(e) => handleParameterChange(index, 'paramValue', e.target.value)}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleRemoveParameter(index)}
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+              <div key={index} className="space-y-1.5 rounded-md border p-2 bg-muted/20">
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Parameter name"
+                    value={param.paramName}
+                    onChange={(e) => handleParameterChange(index, 'paramName', e.target.value)}
+                    className="h-8 text-sm"
+                  />
+                  {(param.options?.length ?? 0) === 0 ? (
+                    <Input
+                      placeholder="Default value"
+                      value={param.paramValue}
+                      onChange={(e) => handleParameterChange(index, 'paramValue', e.target.value)}
+                      className="h-8 text-sm"
+                    />
+                  ) : (
+                    <span className="flex-1 text-xs text-muted-foreground px-2">
+                      {param.options!.length} option{param.options!.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                  <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs text-muted-foreground shrink-0"
+                    onClick={() => handleParamOptionAdd(index)} title="Add option values">
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+                    onClick={() => handleRemoveParameter(index)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
+                {(param.options?.length ?? 0) > 0 && (
+                  <div className="space-y-1 pl-1">
+                    {param.options!.map((opt, optIndex) => (
+                      <div key={optIndex} className="flex items-center gap-2">
+                        <Input value={opt} placeholder={`Option ${optIndex + 1}`}
+                          onChange={(e) => handleParamOptionChange(index, optIndex, e.target.value)}
+                          className="h-7 text-xs" />
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+                          onClick={() => handleParamOptionRemove(index, optIndex)}>
+                          <Trash2 className="h-3 w-3 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                    <p className="text-[11px] text-muted-foreground">First option is pre-selected by default in the gateway.</p>
+                    <div className="flex items-center justify-between pt-0.5">
+                      <Button type="button" variant="outline" size="sm" className="h-6 text-xs border-dashed"
+                        onClick={() => handleParamOptionAdd(index)}>
+                        <Plus className="h-3 w-3 mr-1" />Add option
+                      </Button>
+                      <div className="flex items-center gap-1.5">
+                        <Switch checked={param.allowMultiple ?? false}
+                          onCheckedChange={(v) => handleParamAllowMultipleToggle(index, v)}
+                          id={`mf-multi-${index}`} />
+                        <label htmlFor={`mf-multi-${index}`} className="text-xs text-muted-foreground cursor-pointer">
+                          Multi-select
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
             {formData.parameters.length === 0 && (

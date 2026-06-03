@@ -113,6 +113,9 @@ export interface ResourceParameter {
   paramName: string;
   paramValue: string;
   paramAction?: string;
+  // When set, the gateway shows a selection modal instead of using paramValue directly.
+  options?: string[];
+  allowMultiple?: boolean;
 }
 
 // API Response Representation (stored as JSONB)

@@ -24,7 +24,7 @@ interface ResourceParam {
   resource_description: string | null;
   provider: string | null;
   llm_context?: string | null;
-  parameters: Array<{ paramName: string; paramValue: string; paramAction?: string }> | null;
+  parameters: Array<{ paramName: string; paramValue: string; paramAction?: string; options?: string[]; allowMultiple?: boolean }> | null;
   is_visible: boolean;
   visualization_type: VisualizationType;
   upload_file: boolean;
@@ -150,6 +150,33 @@ const ResourceDetailsModal = ({ resource, softwareOptions, open, onOpenChange, o
   const handleParamValueChange = (index: number, value: string) => {
     const newParams = [...(editedResource.parameters || [])];
     newParams[index] = { ...newParams[index], paramValue: value };
+    setEditedResource({ ...editedResource, parameters: newParams });
+  };
+
+  const handleParamAddOption = (paramIndex: number) => {
+    const newParams = [...(editedResource.parameters || [])];
+    newParams[paramIndex] = { ...newParams[paramIndex], options: [...(newParams[paramIndex].options || []), ""] };
+    setEditedResource({ ...editedResource, parameters: newParams });
+  };
+
+  const handleParamOptionChange = (paramIndex: number, optIndex: number, value: string) => {
+    const newParams = [...(editedResource.parameters || [])];
+    const opts = [...(newParams[paramIndex].options || [])];
+    opts[optIndex] = value;
+    newParams[paramIndex] = { ...newParams[paramIndex], options: opts };
+    setEditedResource({ ...editedResource, parameters: newParams });
+  };
+
+  const handleParamOptionRemove = (paramIndex: number, optIndex: number) => {
+    const newParams = [...(editedResource.parameters || [])];
+    const opts = (newParams[paramIndex].options || []).filter((_, i) => i !== optIndex);
+    newParams[paramIndex] = { ...newParams[paramIndex], options: opts.length > 0 ? opts : undefined };
+    setEditedResource({ ...editedResource, parameters: newParams });
+  };
+
+  const handleParamAllowMultipleToggle = (paramIndex: number, value: boolean) => {
+    const newParams = [...(editedResource.parameters || [])];
+    newParams[paramIndex] = { ...newParams[paramIndex], allowMultiple: value || undefined };
     setEditedResource({ ...editedResource, parameters: newParams });
   };
 
@@ -523,12 +550,58 @@ const ResourceDetailsModal = ({ resource, softwareOptions, open, onOpenChange, o
                             </div>
                           </div>
                           <div className="space-y-2">
-                            <Label className="text-xs">Default Value</Label>
-                            <Input
-                              value={param.paramValue || ''}
-                              onChange={(e) => handleParamValueChange(index, e.target.value)}
-                              placeholder="Enter default value..."
-                            />
+                            <div className="flex items-center justify-between">
+                              <Label className="text-xs">
+                                {(param.options?.length ?? 0) > 0 ? "Option Values" : "Default Value"}
+                              </Label>
+                              {(param.options?.length ?? 0) === 0 && (
+                                <Button type="button" variant="ghost" size="sm" className="h-5 text-xs px-1.5 text-muted-foreground"
+                                  onClick={() => handleParamAddOption(index)}>
+                                  <Plus className="h-3 w-3 mr-1" />Add options
+                                </Button>
+                              )}
+                            </div>
+                            {(param.options?.length ?? 0) === 0 ? (
+                              <Input
+                                value={param.paramValue || ''}
+                                onChange={(e) => handleParamValueChange(index, e.target.value)}
+                                placeholder="Enter default value..."
+                              />
+                            ) : (
+                              <div className="space-y-1.5">
+                                {param.options!.map((opt, optIndex) => (
+                                  <div key={optIndex} className="flex items-center gap-2">
+                                    <Input
+                                      value={opt}
+                                      onChange={(e) => handleParamOptionChange(index, optIndex, e.target.value)}
+                                      placeholder={`Option ${optIndex + 1}`}
+                                      className="h-8 text-sm"
+                                    />
+                                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0"
+                                      onClick={() => handleParamOptionRemove(index, optIndex)}>
+                                      <X className="h-3.5 w-3.5 text-destructive" />
+                                    </Button>
+                                  </div>
+                                ))}
+                                <Button type="button" variant="outline" size="sm" className="w-full h-7 text-xs border-dashed mt-1"
+                                  onClick={() => handleParamAddOption(index)}>
+                                  <Plus className="h-3 w-3 mr-1" />Add option
+                                </Button>
+                                <p className="text-[11px] text-muted-foreground">
+                                  The first option is pre-selected by default in the gateway.
+                                </p>
+                                <div className="flex items-center gap-2 pt-1">
+                                  <Switch
+                                    checked={param.allowMultiple ?? false}
+                                    onCheckedChange={(v) => handleParamAllowMultipleToggle(index, v)}
+                                    id={`allow-multiple-${index}`}
+                                  />
+                                  <Label htmlFor={`allow-multiple-${index}`} className="text-xs cursor-pointer text-muted-foreground">
+                                    Allow multiple selection
+                                  </Label>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
 

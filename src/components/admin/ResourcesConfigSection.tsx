@@ -47,7 +47,7 @@ interface ResourceParam {
 
 const normalizeResourceParameters = (
   value: unknown
-): Array<{ paramName: string; paramValue: string; paramAction?: string }> => {
+): Array<{ paramName: string; paramValue: string; paramAction?: string; options?: string[]; allowMultiple?: boolean }> => {
   if (!Array.isArray(value)) return [];
   return value
     .map((item) => {
@@ -59,9 +59,11 @@ const normalizeResourceParameters = (
         paramName,
         paramValue: typeof obj.paramValue === 'string' ? obj.paramValue : String(obj.paramValue ?? ''),
         paramAction: typeof obj.paramAction === 'string' ? obj.paramAction : undefined,
+        options: Array.isArray(obj.options) ? obj.options.map(String) : undefined,
+        allowMultiple: typeof obj.allowMultiple === 'boolean' ? obj.allowMultiple : undefined,
       };
     })
-    .filter((p): p is { paramName: string; paramValue: string; paramAction?: string } => !!p);
+    .filter((p): p is NonNullable<typeof p> => !!p);
 };
 
 interface ExtractedResource {
@@ -87,7 +89,7 @@ interface EmbeddedResource {
   resource_description: string | null;
   provider: string | null;
   service_offering: string | null;
-  parameters: Array<{ paramName: string; paramValue: string; paramAction?: string }>;
+  parameters: Array<{ paramName: string; paramValue: string; paramAction?: string; options?: string[]; allowMultiple?: boolean }>;
   api_response_representation: Record<string, unknown>;
   visualization_type: VisualizationType | null;
   upload_url: string | null;
@@ -113,9 +115,11 @@ const normalizeEmbeddedResources = (value: unknown): EmbeddedResource[] => {
                 paramName: String(paramObj.paramName ?? ''),
                 paramValue: String(paramObj.paramValue ?? ''),
                 paramAction: paramObj.paramAction ? String(paramObj.paramAction) : undefined,
+                options: Array.isArray(paramObj.options) ? paramObj.options.map(String) : undefined,
+                allowMultiple: typeof paramObj.allowMultiple === 'boolean' ? paramObj.allowMultiple : undefined,
               };
             })
-            .filter((p): p is { paramName: string; paramValue: string; paramAction?: string } => !!p && !!p.paramName)
+            .filter((p): p is NonNullable<typeof p> => !!p && !!p.paramName)
         : [];
 
       return {
@@ -154,7 +158,7 @@ const normalizeEmbeddedResources = (value: unknown): EmbeddedResource[] => {
           : [],
       };
     })
-    .filter((r): r is EmbeddedResource => !!r);
+    .filter((r): r is NonNullable<typeof r> => !!r);
 };
 
 interface ExtractedServiceChain {
@@ -567,6 +571,8 @@ const ResourcesConfigSection = () => {
                   paramName: ep.paramName,
                   paramValue: matched.paramValue || ep.paramValue,
                   paramAction: matched.paramAction,
+                  options: matched.options,
+                  allowMultiple: matched.allowMultiple,
                 };
               });
 
