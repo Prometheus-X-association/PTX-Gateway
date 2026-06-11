@@ -201,11 +201,14 @@ const buildResultSnapshotStorageKey = (
 };
 
 const RESULT_PLACEHOLDER = "##result";
+const SELECTED_ROWS_PLACEHOLDER = "##selectedRows";
+const SELECTED_ROWS_EACH_PREFIX = "##selectedRowsEach";
+const SELECTED_ROWS_PATH_KEY = "__ptxSelectedRows__";
 const RESULT_ARRAY_PREFIXES = ["##resultArray", "##resultsArray"] as const;
 const RESULT_ARRAY_EACH_PREFIXES = ["##resultArrayEach", "##resultsArrayEach"] as const;
 const RESULT_OBJECT_EACH_PREFIXES = ["##resultObjectEach", "##resultsObjectEach"] as const;
 const TOKEN_TRANSFORM_PATTERN = String.raw`(?:\|replace\((?:"[^"]*"|'[^']*'|[^,)]*),(?:"[^"]*"|'[^']*'|[^)]*)\))?`;
-const RESULT_TOKEN_PATTERN = String.raw`(?:##resultArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultsArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultObjectEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultsObjectEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##result(?![A-Za-z])|##results?Array(?:\.[A-Za-z_$][\w$]*|\[\d+\])*)`;
+const RESULT_TOKEN_PATTERN = String.raw`(?:##resultArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultsArrayEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultObjectEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##resultsObjectEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##selectedRowsEach(?:\.[A-Za-z_$][\w$]*|\[\d+\])*|##selectedRows(?![A-Za-z])|##result(?![A-Za-z])|##results?Array(?:\.[A-Za-z_$][\w$]*|\[\d+\])*)`;
 const RESULT_DYNAMIC_TOKEN_REGEX = new RegExp(`${RESULT_TOKEN_PATTERN}${TOKEN_TRANSFORM_PATTERN}`, "g");
 const QUOTED_RESULT_DYNAMIC_TOKEN_REGEX = new RegExp(`"(${RESULT_TOKEN_PATTERN}${TOKEN_TRANSFORM_PATTERN})"`, "g");
 const TOKEN_SENTINEL_PREFIX = "__PTX_TOKEN__";
@@ -227,6 +230,7 @@ interface EachTokenInfo {
   itemPath: PathToken[];
   objectValuePath?: PathToken[];
   objectField?: "key" | "value";
+  source?: "selectedRows";
 }
 interface EachResolveContext {
   arrayPathKey: string;
@@ -400,6 +404,29 @@ const parseObjectEachTokenInfo = (token: string): EachTokenInfo => {
   };
 };
 
+const readSelectedRowsArray = (): unknown[] => {
+  const runtime = window as Window & {
+    __ptxTabulatorSelectedRows?: unknown;
+    __ptxTabulatorAllRows?: unknown;
+  };
+  const selected = runtime.__ptxTabulatorSelectedRows;
+  if (Array.isArray(selected) && selected.length > 0) return selected;
+  // Fallback: no rows checked — use all table rows so the export never sends zero requests.
+  const allRows = runtime.__ptxTabulatorAllRows;
+  if (Array.isArray(allRows) && allRows.length > 0) return allRows;
+  throw new Error(
+    "##selectedRows: no table selection found. The visualization must publish checked rows to window.__ptxTabulatorSelectedRows (and optionally all rows to window.__ptxTabulatorAllRows)."
+  );
+};
+
+const parseSelectedRowsEachTokenInfo = (token: string): EachTokenInfo => ({
+  mode: "array",
+  arrayPath: [],
+  arrayPathKey: SELECTED_ROWS_PATH_KEY,
+  itemPath: parseResultArrayPath(token.slice(SELECTED_ROWS_EACH_PREFIX.length)),
+  source: "selectedRows",
+});
+
 const collectEachTokenInfos = (
   node: unknown,
   tokenMap: Map<string, TokenSpec>,
@@ -410,6 +437,9 @@ const collectEachTokenInfos = (
     const spec = tokenMap.get(tokenId);
     if (!spec) return [];
     const { baseToken } = splitTokenTransform(spec.token);
+    if (baseToken === SELECTED_ROWS_EACH_PREFIX || baseToken.startsWith(SELECTED_ROWS_EACH_PREFIX)) {
+      return [parseSelectedRowsEachTokenInfo(baseToken)];
+    }
     if (RESULT_ARRAY_EACH_PREFIXES.some((prefix) => baseToken === prefix || baseToken.startsWith(prefix))) {
       return [parseEachTokenInfo(baseToken, result)];
     }
@@ -441,6 +471,26 @@ const resolveResultToken = (
   const finish = (value: unknown) => applyTokenTransform(value, transform);
 
   if (token === RESULT_PLACEHOLDER) return finish(result);
+
+  if (token === SELECTED_ROWS_PLACEHOLDER) {
+    return finish(readSelectedRowsArray());
+  }
+
+  if (token === SELECTED_ROWS_EACH_PREFIX || token.startsWith(SELECTED_ROWS_EACH_PREFIX)) {
+    const info = parseSelectedRowsEachTokenInfo(token);
+
+    if (eachContext && eachContext.arrayPathKey === info.arrayPathKey) {
+      const value = getValueByPath(eachContext.item, info.itemPath);
+      if (value === undefined) throw new Error(`Could not resolve token "${token}" for one selected row`);
+      return finish(value);
+    }
+
+    return finish(readSelectedRowsArray().map((item) => {
+      const value = getValueByPath(item, info.itemPath);
+      if (value === undefined) throw new Error(`Could not resolve token "${token}" for one selected row`);
+      return value;
+    }));
+  }
 
   for (const prefix of RESULT_ARRAY_EACH_PREFIXES) {
     if (token === prefix || token.startsWith(prefix)) {
@@ -559,7 +609,9 @@ const buildApiExportBody = (template: string, result: unknown): string => {
           }
 
           const firstInfo = eachInfos[0];
-          const sourceCollection = getValueByPath(result, firstInfo.arrayPath);
+          const sourceCollection = firstInfo.source === "selectedRows"
+            ? readSelectedRowsArray()
+            : getValueByPath(result, firstInfo.arrayPath);
           if (firstInfo.mode === "array" && !Array.isArray(sourceCollection)) {
             throw new Error("##resultArrayEach source path does not resolve to an array");
           }
@@ -705,6 +757,21 @@ const TEMPLATE_TAG_HELP: TemplateTagHelp[] = [
     description: "Prefix template to send one POST per item of the resolved array body. Use ##forEach(0:2) for the first 3 items.",
     example:
       '##forEach(0:2)\n[\n  {\n    "skill_name": ##resultObjectEach.data.content.data.result.$key|replace("_"," "),\n    "description": ##resultObjectEach.data.content.data.result.$value.skills[0].description.literal\n  }\n]',
+  },
+  {
+    tag: "##selectedRows",
+    title: "Checked Table Rows Only",
+    description:
+      "Inject only the rows checked in the table visualization. Falls back to all table rows when nothing is checked. Requires the visualization to publish selections to window.__ptxTabulatorSelectedRows.",
+    example: '##forEach\n##selectedRows',
+  },
+  {
+    tag: "##selectedRowsEach",
+    title: "Map Each Checked Table Row",
+    description:
+      "Generate an array item template from each checked table row. Use a field path like ##selectedRowsEach.skill_name. Falls back to all table rows when nothing is checked.",
+    example:
+      '##forEach\n[\n  {\n    "name": ##selectedRowsEach.skill_name,\n    "description": ##selectedRowsEach.skill_description\n  }\n]',
   },
 ];
 
@@ -1945,12 +2012,17 @@ const CustomVisualizationRuntime = ({ visualization, resultData, dataVersion, on
   useEffect(() => {
     const runtime = window as Window & {
       __ptxTabulatorStateStore?: Record<string, unknown>;
+      __ptxTabulatorSelectedRows?: unknown;
+      __ptxTabulatorAllRows?: unknown;
     };
     const stateKey = String(visualization?.id || "default_tabulator");
     if (lastDataVersionRef.current !== dataVersion) {
       if (runtime.__ptxTabulatorStateStore && stateKey in runtime.__ptxTabulatorStateStore) {
         delete runtime.__ptxTabulatorStateStore[stateKey];
       }
+      // Stale row selections must not leak into ##selectedRows exports after the data changes.
+      delete runtime.__ptxTabulatorSelectedRows;
+      delete runtime.__ptxTabulatorAllRows;
       lastDataVersionRef.current = dataVersion;
     }
 

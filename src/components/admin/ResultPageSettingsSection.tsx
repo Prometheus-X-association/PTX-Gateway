@@ -64,6 +64,29 @@ const TEMPLATE_TAG_HELP: TemplateTagHelp[] = [
     example:
       '##forEach(0:2)\n[\n  {\n    "skill_name": ##resultObjectEach.data.content.data.result.$key|replace("_"," "),\n    "description": ##resultObjectEach.data.content.data.result.$value.skills[0].description.literal\n  }\n]',
   },
+  {
+    tag: "##selectedRows",
+    title: "Checked Table Rows Only",
+    description:
+      "Inject only the rows the user has checked in the result table (Tabulator visualization). Falls back to all table rows when nothing is checked. Requires the table render code to publish selections (built into the Tabulator example).",
+    example: '##forEach\n##selectedRows',
+  },
+  {
+    tag: "##selectedRowsEach",
+    title: "Map Each Checked Table Row",
+    description:
+      "Generate one array item per checked table row, with field access like ##selectedRowsEach.skill_name. Combine with ##forEach to send one request per checked row. Falls back to all table rows when nothing is checked.",
+    example:
+      '##forEach\n[\n  {\n    "name": ##selectedRowsEach.skill_name,\n    "description": ##selectedRowsEach.skill_description\n  }\n]',
+  },
+  {
+    tag: '|replace',
+    title: "Transform Resolved Values",
+    description:
+      'Append |replace("search","replacement") to any token to rewrite the resolved string before it is inserted. Every occurrence of the search text is replaced. Typical use: turn snake_case JSON keys into readable names with $key|replace("_"," "). When the token resolves to an array of strings, the replacement is applied to each item; non-string values pass through unchanged.',
+    example:
+      '[\n  {\n    "skill_name": ##resultObjectEach.data.content.data.result.$key|replace("_"," "),\n    "course": ##resultArray.data.course_code|replace("-","/")\n  }\n]',
+  },
 ];
 
 const DDV_RENDER_CODE_EXAMPLE = `return (async () => {
@@ -1256,6 +1279,22 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
   void restorePageState(tabulatorState.paginationPage, tabulatorState.paginationSize);
 
+  // ##selectedRows export bridge: publishes checked rows (and all rows as fallback)
+  // so the Export API body template can target only the user's selection.
+  const toExportRow = (row) => ({
+    skill_name: row.skill_name || "",
+    skill_description: row.skill_description || "",
+  });
+  const publishSelectionBridge = () => {
+    const liveRows = table.getData().filter((row) => !row.visual_deleted);
+    runtime.__ptxTabulatorAllRows = liveRows.map(toExportRow);
+    const selectedRows = table.getSelectedData().filter((row) => !row.visual_deleted);
+    runtime.__ptxTabulatorSelectedRows = selectedRows.map(toExportRow);
+  };
+  table.on("rowSelectionChanged", publishSelectionBridge);
+  table.on("dataProcessed", publishSelectionBridge);
+  table.on("tableBuilt", publishSelectionBridge);
+
   const applyValidatedChanges = async () => {
     try {
       const nextRows = table.getData().map((row) => ({ ...row }));
@@ -2421,7 +2460,7 @@ const ResultPageSettingsSection = () => {
                         </div>
                         <div className="space-y-1">
                           <Label className="text-xs">
-                            Body Template <span className="text-primary">(supports ##result, ##resultArray, ##resultArrayEach, ##resultObjectEach, ##forEach)</span>
+                            Body Template <span className="text-primary">(supports ##result, ##resultArray, ##resultArrayEach, ##resultObjectEach, ##forEach, ##selectedRows, ##selectedRowsEach)</span>
                           </Label>
                           <Textarea
                             value={editingExportApi.body_template || ""}
@@ -2441,6 +2480,19 @@ const ResultPageSettingsSection = () => {
                                 {item.tag}
                               </button>
                             ))}
+                          </div>
+                          <div className="mt-2 rounded-md border border-primary/25 bg-primary/5 p-3 space-y-1">
+                            <p className="text-xs font-medium">Export only checked table rows</p>
+                            <p className="text-xs text-muted-foreground">
+                              When the result page shows an editable table (Tabulator visualization), use{" "}
+                              <code className="font-mono text-[11px] bg-secondary/60 rounded px-1">##selectedRowsEach</code> with{" "}
+                              <code className="font-mono text-[11px] bg-secondary/60 rounded px-1">##forEach</code> to send one request
+                              per row the user has checked — instead of looping over the entire result JSON. If no row is checked, all
+                              table rows are exported. Row fields:{" "}
+                              <code className="font-mono text-[11px] bg-secondary/60 rounded px-1">skill_name</code>,{" "}
+                              <code className="font-mono text-[11px] bg-secondary/60 rounded px-1">skill_description</code>.
+                              Requires the table visualization to use the current Tabulator example render code.
+                            </p>
                           </div>
                         </div>
                         <div className="space-y-2">
