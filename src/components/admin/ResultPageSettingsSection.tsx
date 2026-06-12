@@ -68,14 +68,14 @@ const TEMPLATE_TAG_HELP: TemplateTagHelp[] = [
     tag: "##selectedRows",
     title: "Checked Table Rows Only",
     description:
-      "Inject only the rows the user has checked in the result table (Tabulator visualization). Falls back to all table rows when nothing is checked. Requires the table render code to publish selections (built into the Tabulator example).",
+      "Inject only the rows the user has checked in the result table (Tabulator visualization). The export fails with a notice when nothing is checked, so users must select at least one row. Requires the table render code to publish selections (built into the Tabulator example).",
     example: '##forEach\n##selectedRows',
   },
   {
     tag: "##selectedRowsEach",
     title: "Map Each Checked Table Row",
     description:
-      "Generate one array item per checked table row, with field access like ##selectedRowsEach.skill_name. Combine with ##forEach to send one request per checked row. Falls back to all table rows when nothing is checked.",
+      "Generate one array item per checked table row, with field access like ##selectedRowsEach.skill_name. Combine with ##forEach to send one request per checked row. The export fails with a notice when nothing is checked, so users must select at least one row.",
     example:
       '##forEach\n[\n  {\n    "name": ##selectedRowsEach.skill_name,\n    "description": ##selectedRowsEach.skill_description\n  }\n]',
   },

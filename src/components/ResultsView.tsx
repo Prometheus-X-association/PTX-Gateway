@@ -411,11 +411,12 @@ const readSelectedRowsArray = (): unknown[] => {
   };
   const selected = runtime.__ptxTabulatorSelectedRows;
   if (Array.isArray(selected) && selected.length > 0) return selected;
-  // Fallback: no rows checked — use all table rows so the export never sends zero requests.
-  const allRows = runtime.__ptxTabulatorAllRows;
-  if (Array.isArray(allRows) && allRows.length > 0) return allRows;
+  // The table bridge is present but nothing is checked — the export must not proceed.
+  if (Array.isArray(runtime.__ptxTabulatorAllRows)) {
+    throw new Error("Please select at least one row in the table to export.");
+  }
   throw new Error(
-    "##selectedRows: no table selection found. The visualization must publish checked rows to window.__ptxTabulatorSelectedRows (and optionally all rows to window.__ptxTabulatorAllRows)."
+    "##selectedRows: no table selection found. The visualization must publish checked rows to window.__ptxTabulatorSelectedRows (and all rows to window.__ptxTabulatorAllRows)."
   );
 };
 
@@ -762,14 +763,14 @@ const TEMPLATE_TAG_HELP: TemplateTagHelp[] = [
     tag: "##selectedRows",
     title: "Checked Table Rows Only",
     description:
-      "Inject only the rows checked in the table visualization. Falls back to all table rows when nothing is checked. Requires the visualization to publish selections to window.__ptxTabulatorSelectedRows.",
+      "Inject only the rows checked in the table visualization. The export fails with a notice when nothing is checked. Requires the visualization to publish selections to window.__ptxTabulatorSelectedRows.",
     example: '##forEach\n##selectedRows',
   },
   {
     tag: "##selectedRowsEach",
     title: "Map Each Checked Table Row",
     description:
-      "Generate an array item template from each checked table row. Use a field path like ##selectedRowsEach.skill_name. Falls back to all table rows when nothing is checked.",
+      "Generate an array item template from each checked table row. Use a field path like ##selectedRowsEach.skill_name. The export fails with a notice when nothing is checked.",
     example:
       '##forEach\n[\n  {\n    "name": ##selectedRowsEach.skill_name,\n    "description": ##selectedRowsEach.skill_description\n  }\n]',
   },
