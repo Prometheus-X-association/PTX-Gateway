@@ -420,6 +420,18 @@ const readSelectedRowsArray = (): unknown[] => {
   );
 };
 
+const isSelectionBridgeActive = (): boolean => {
+  const runtime = window as Window & { __ptxTabulatorAllRows?: unknown };
+  return Array.isArray(runtime.__ptxTabulatorAllRows);
+};
+
+const getSelectionAwareExportData = (fallbackData: unknown): unknown => {
+  if (isSelectionBridgeActive()) {
+    return readSelectedRowsArray();
+  }
+  return fallbackData;
+};
+
 const parseSelectedRowsEachTokenInfo = (token: string): EachTokenInfo => ({
   mode: "array",
   arrayPath: [],
@@ -2273,7 +2285,7 @@ const CustomVisualizationRuntime = ({ visualization, resultData, dataVersion, on
   );
 };
 
-const extractCustomVisualizationSnapshotHtml = (container: HTMLElement | null): string => {
+const extractCustomVisualizationSnapshotHtml = (container: HTMLElement | null, onlySelectedRows = false): string => {
   if (!container) return "";
   const host = container.querySelector("ptx-custom-visualization");
   if (!host) return "";
@@ -2282,7 +2294,15 @@ const extractCustomVisualizationSnapshotHtml = (container: HTMLElement | null): 
 
   const tabulatorRoot = shadowRoot.querySelector(".tabulator");
   if (tabulatorRoot) {
-    return `<div class="tabulator-print-wrap">${tabulatorRoot.outerHTML}</div>`;
+    const clone = tabulatorRoot.cloneNode(true) as HTMLElement;
+    if (onlySelectedRows) {
+      clone.querySelectorAll(".tabulator-row").forEach((row) => {
+        if (!row.classList.contains("tabulator-selected")) {
+          row.remove();
+        }
+      });
+    }
+    return `<div class="tabulator-print-wrap">${clone.outerHTML}</div>`;
   }
 
   const customContainer = shadowRoot.querySelector(".ptx-custom-visualization-container");
@@ -2681,6 +2701,15 @@ const ResultsView = ({
   }, [resultData, applyResultDataUpdate]);
 
   const handleExport = (format: string) => {
+    let exportData: unknown;
+    try {
+      exportData = getSelectionAwareExportData(resultData);
+    } catch (e) {
+      toast.error("Export failed: " + (e as Error).message);
+      return;
+    }
+    const usingSelection = isSelectionBridgeActive();
+
     if (format === "pdf") {
       const analyticsKind = selectedAnalytics?.type === "serviceChain" ? "Service Chain" : "Software Resource";
       const analyticsProvider =
@@ -2738,7 +2767,7 @@ const ResultsView = ({
             }
           : null;
 
-      const customVisualizationHtml = extractCustomVisualizationSnapshotHtml(customVisualizationMountRef.current);
+      const customVisualizationHtml = extractCustomVisualizationSnapshotHtml(customVisualizationMountRef.current, usingSelection);
 
       const reportHtml = `
         <!doctype html>
@@ -2845,8 +2874,8 @@ const ResultsView = ({
                 : "<p>Custom visualization is not available in current view.</p>"
             }
 
-            <h2>Result JSON</h2>
-            <pre class="mono">${escapeHtml(JSON.stringify(resultData, null, 2))}</pre>
+            <h2>Result JSON${usingSelection ? " (Selected Rows Only)" : ""}</h2>
+            <pre class="mono">${escapeHtml(JSON.stringify(exportData, null, 2))}</pre>
           </body>
         </html>
       `;
@@ -2878,31 +2907,55 @@ const ResultsView = ({
 
     switch (format) {
       case "json":
-        content = JSON.stringify(resultData, null, 2);
+        content = JSON.stringify(exportData, null, 2);
         mimeType = "application/json";
         extension = "json";
         break;
       case "csv":
-        const flatten = (obj: unknown, prefix = ''): Record<string, unknown> => {
-          const result: Record<string, unknown> = {};
-          if (typeof obj !== 'object' || obj === null) return { [prefix || 'value']: obj };
-          for (const [key, value] of Object.entries(obj)) {
-            const newKey = prefix ? `${prefix}.${key}` : key;
-            if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-              Object.assign(result, flatten(value, newKey));
-            } else {
-              result[newKey] = Array.isArray(value) ? JSON.stringify(value) : value;
+        if (
+          usingSelection &&
+          Array.isArray(exportData) &&
+          exportData.every((item) => typeof item === "object" && item !== null && !Array.isArray(item))
+        ) {
+          const rows = exportData as Record<string, unknown>[];
+          const headerSet = new Set<string>();
+          rows.forEach((row) => Object.keys(row).forEach((key) => headerSet.add(key)));
+          const headers = Array.from(headerSet);
+          const csvCell = (value: unknown): string => {
+            const str =
+              value === null || value === undefined
+                ? ""
+                : typeof value === "object"
+                  ? JSON.stringify(value)
+                  : String(value);
+            return `"${str.replace(/"/g, '""')}"`;
+          };
+          content = [
+            headers.map(csvCell).join(","),
+            ...rows.map((row) => headers.map((key) => csvCell(row[key])).join(",")),
+          ].join("\n");
+        } else {
+          const flatten = (obj: unknown, prefix = ''): Record<string, unknown> => {
+            const result: Record<string, unknown> = {};
+            if (typeof obj !== 'object' || obj === null) return { [prefix || 'value']: obj };
+            for (const [key, value] of Object.entries(obj)) {
+              const newKey = prefix ? `${prefix}.${key}` : key;
+              if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                Object.assign(result, flatten(value, newKey));
+              } else {
+                result[newKey] = Array.isArray(value) ? JSON.stringify(value) : value;
+              }
             }
-          }
-          return result;
-        };
-        const flattened = flatten(resultData);
-        content = `${Object.keys(flattened).join(",")}\n${Object.values(flattened).map(v => JSON.stringify(v)).join(",")}`;
+            return result;
+          };
+          const flattened = flatten(exportData);
+          content = `${Object.keys(flattened).join(",")}\n${Object.values(flattened).map(v => JSON.stringify(v)).join(",")}`;
+        }
         mimeType = "text/csv";
         extension = "csv";
         break;
       default:
-        content = JSON.stringify({ format, analyticsType, results: resultData }, null, 2);
+        content = JSON.stringify({ format, analyticsType, results: exportData }, null, 2);
         mimeType = "text/plain";
         extension = "txt";
     }
@@ -3357,6 +3410,11 @@ const ResultsView = ({
 
       {/* Export Options */}
       <div className="mb-8">
+        {activeCustomVisualization && (
+          <p className="text-xs text-muted-foreground mb-2">
+            If the interactive table above supports row selection, PDF/JSON/CSV export below will include only the checked rows.
+          </p>
+        )}
         <div className={`grid grid-cols-1 ${compatibleExportApiConfigs.length > 0 ? "sm:grid-cols-4" : "sm:grid-cols-3"} gap-4`}>
           <button onClick={() => handleExport("pdf")} className="export-btn">
             <FileText className="w-8 h-8 text-primary" />
