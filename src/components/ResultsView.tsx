@@ -2329,7 +2329,8 @@ const ResultsView = ({
   customVisualizations = [],
   showDebugApiExportConfig = false,
 }: ResultsViewProps) => {
-  const customVisualizationMountRef = useRef<HTMLDivElement | null>(null);
+  const customVisualizationMountRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [activeTab, setActiveTab] = useState<string>("json");
   const [resultData, setResultData] = useState<unknown>(fallbackResultData);
   const [resultDataVersion, setResultDataVersion] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
@@ -2385,15 +2386,24 @@ const ResultsView = ({
     );
     return labels.length === 1 ? labels[0] : "Import to LMS";
   }, [compatibleExportApiConfigs]);
-  const activeCustomVisualization = useMemo(() => {
-    if (!selectedTargetId) return null;
-    return customVisualizations.find((visualization) =>
+  const activeCustomVisualizations = useMemo(() => {
+    if (!selectedTargetId) return [];
+    return customVisualizations.filter((visualization) =>
       visualization.is_active &&
       Boolean(visualization.render_code?.trim()) &&
       (visualization.target_resources || []).includes(selectedTargetId)
-    ) || null;
+    );
   }, [customVisualizations, selectedTargetId]);
-  const activeCustomVisualizationLabel = activeCustomVisualization?.name?.trim() || "Custom Visualization";
+
+  useEffect(() => {
+    setActiveTab((current) => {
+      if (current.startsWith("custom-")) {
+        const stillExists = activeCustomVisualizations.some((v) => `custom-${v.id}` === current);
+        if (stillExists) return current;
+      }
+      return activeCustomVisualizations[0] ? `custom-${activeCustomVisualizations[0].id}` : "json";
+    });
+  }, [activeCustomVisualizations]);
   const formattedResultSourceUrl = resultUrlInfo ? formatResultUrlWithParams(resultUrlInfo) : "";
 
   const resultSnapshotStorageKey = useMemo(() => {
@@ -2767,7 +2777,9 @@ const ResultsView = ({
             }
           : null;
 
-      const customVisualizationHtml = extractCustomVisualizationSnapshotHtml(customVisualizationMountRef.current, usingSelection);
+      const activeVizId = activeTab.startsWith("custom-") ? activeTab.slice("custom-".length) : null;
+      const activeMountEl = activeVizId ? (customVisualizationMountRefs.current[activeVizId] ?? null) : null;
+      const customVisualizationHtml = extractCustomVisualizationSnapshotHtml(activeMountEl, usingSelection);
 
       const reportHtml = `
         <!doctype html>
@@ -3356,14 +3368,17 @@ const ResultsView = ({
         {isLoading ? (
           <LoadingJsonSkeleton />
         ) : (
-          <Tabs defaultValue={activeCustomVisualization ? "custom" : "json"} className="w-full">
-            <TabsList className={`grid w-full ${activeCustomVisualization ? "grid-cols-4" : "grid-cols-3"} mb-4`}>
-              {activeCustomVisualization && (
-                <TabsTrigger value="custom" className="flex items-center gap-2">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList
+              className="grid w-full mb-4"
+              style={{ gridTemplateColumns: `repeat(${3 + activeCustomVisualizations.length}, minmax(0, 1fr))` }}
+            >
+              {activeCustomVisualizations.map((viz) => (
+                <TabsTrigger key={viz.id} value={`custom-${viz.id}`} className="flex items-center gap-2">
                   <Palette className="w-4 h-4" />
-                  <span className="truncate">{activeCustomVisualizationLabel}</span>
+                  <span className="truncate">{viz.name?.trim() || "Custom Visualization"}</span>
                 </TabsTrigger>
-              )}
+              ))}
               <TabsTrigger value="json" className="flex items-center gap-2">
                 <Code className="w-4 h-4" />
                 JSON View
@@ -3378,11 +3393,11 @@ const ResultsView = ({
               </TabsTrigger>
             </TabsList>
 
-            {activeCustomVisualization && (
-              <TabsContent value="custom">
-                <div ref={customVisualizationMountRef}>
+            {activeCustomVisualizations.map((viz) => (
+              <TabsContent key={viz.id} value={`custom-${viz.id}`}>
+                <div ref={(el) => { customVisualizationMountRefs.current[viz.id] = el; }}>
                   <CustomVisualizationRuntime
-                    visualization={activeCustomVisualization}
+                    visualization={viz}
                     resultData={resultData}
                     dataVersion={resultDataVersion}
                     onResultDataChange={applyResultDataUpdate}
@@ -3391,16 +3406,16 @@ const ResultsView = ({
                   />
                 </div>
               </TabsContent>
-            )}
-            
+            ))}
+
             <TabsContent value="json">
               <CollapsibleJson data={resultData} onChange={applyResultDataUpdate} />
             </TabsContent>
-            
+
             <TabsContent value="table">
               <NestedTable data={resultData} onEdit={handleNestedEdit} onKeyEdit={handleKeyEdit} onAdd={handleAdd} onDelete={handleDelete} />
             </TabsContent>
-            
+
             <TabsContent value="array">
               <ArrayTableView data={resultData} onChange={applyResultDataUpdate} />
             </TabsContent>
@@ -3410,7 +3425,7 @@ const ResultsView = ({
 
       {/* Export Options */}
       <div className="mb-8">
-        {activeCustomVisualization && (
+        {activeCustomVisualizations.length > 0 && (
           <p className="text-xs text-muted-foreground mb-2">
             If the interactive table above supports row selection, PDF/JSON/CSV export below will include only the checked rows.
           </p>
