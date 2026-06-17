@@ -470,14 +470,92 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   await loadScriptOnce("https://unpkg.com/tabulator-tables@6.4.0/dist/js/tabulator.min.js", () => Boolean(window.Tabulator));
   await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js", () => Boolean(window.XLSX));
 
-  const resultRoot =
-    resultData?.data?.content?.data?.result ||
-    resultData?.content?.data?.result ||
-    resultData?.data?.result ||
-    resultData?.result;
+  // ┌──────────────────────────────────────────────────────────────────────┐
+  // │  DATA CONFIGURATION — the only section you need to edit             │
+  // │  to adapt this table to your own JSON structure.                    │
+  // │                                                                      │
+  // │  All other code reads from these five definitions automatically.    │
+  // └──────────────────────────────────────────────────────────────────────┘
 
+  // STEP 1 ─ JSON PATH
+  // Navigate from the raw API response (resultData) to the collection you
+  // want to display.  The collection must be a plain object whose keys
+  // become row identifiers (e.g. { communication: {...}, teamwork: {...} }).
+  //
+  // Common shapes:
+  //   { data: { content: { data: { result: { … } } } } }  →  data?.data?.content?.data?.result
+  //   { items: { … } }                                     →  data?.items
+  //   { result: { … } }                                    →  data?.result
+  const getResultRoot = (data) =>
+    data?.data?.content?.data?.result ||
+    data?.content?.data?.result ||
+    data?.data?.result ||
+    data?.result;
+
+  // STEP 2 ─ COLUMN DEFINITIONS
+  // One entry per editable column.  "field" is the internal row-object key;
+  // it must match what extractRow() returns below.
+  // Supported editors: "input" (single line), "textarea" (multi-line).
+  const COLUMN_DEFS = [
+    { title: "Skills Name",        field: "skill_name",        editor: "input",    sorter: "string", width: 240 },
+    { title: "Skills Description", field: "skill_description", editor: "textarea", sorter: "string", minWidth: 420 },
+  ];
+  // Derived helper — do not edit.
+  const TRACKED_FIELDS = COLUMN_DEFS.map((c) => c.field);
+  const origKey    = (f) => "original_"        + f;  // stores the baseline value
+  const changedKey = (f) => "validated_changed_" + f; // stores the change flag
+
+  // STEP 3 ─ EXTRACT ROW
+  // Convert one entry from your JSON collection into a table row.
+  // "key"   = the object key from getResultRoot (e.g. "communication")
+  // "value" = the full value for that key
+  // Return a plain object whose keys match your COLUMN_DEFS fields above.
+  //
+  // Current shape expected:
+  //   resultRoot[key] = { skills: [{ description: { literal: "…" } }] }
+  //
+  // Change the two return values to match your own JSON fields.
+  const extractRow = (key, value) => {
+    const record    = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const firstSkill = Array.isArray(record.skills) && typeof record.skills[0] === "object"
+      ? record.skills[0] : {};
+    return {
+      skill_name:        toDisplayName(key),
+      skill_description: firstSkill?.description?.literal ?? "",
+    };
+  };
+
+  // STEP 4 ─ WRITE BACK
+  // Store an edited table row back into its JSON record (mutate in place).
+  // "record"  = the original JSON object for this row (from getResultRoot()[key])
+  // "rowData" = the current table row; use rowData[TRACKED_FIELDS[n]] to read columns
+  //
+  // Change the body to write your edited values into your own JSON shape.
+  const writeRowBack = (record, rowData) => {
+    if (!Array.isArray(record.skills))
+      record.skills = [{ description: { literal: "", mimetype: "plain/text" } }];
+    if (!record.skills[0] || typeof record.skills[0] !== "object")
+      record.skills[0] = { description: { literal: "", mimetype: "plain/text" } };
+    if (!record.skills[0].description || typeof record.skills[0].description !== "object")
+      record.skills[0].description = { mimetype: "plain/text" };
+    record.skills[0].description.literal   = rowData[TRACKED_FIELDS[1]] || "";
+    record.skills[0].description.mimetype  = record.skills[0].description.mimetype || "plain/text";
+  };
+
+  // STEP 5 ─ PRIMARY KEY
+  // When the user edits the first column (TRACKED_FIELDS[0]), the JSON object
+  // key for that entry changes too.  Return the new JSON key string.
+  // Default: convert spaces to underscores and lower-case.
+  // Set to null if your collection is an array (index-based, key never changes).
+  const toPrimaryKey = (primaryValue) => toJsonKey(primaryValue);
+
+  // ─── end of DATA CONFIGURATION ─────────────────────────────────────────
+
+  const resultRoot = getResultRoot(resultData);
   if (!resultRoot || typeof resultRoot !== "object" || Array.isArray(resultRoot)) {
-    throw new Error("Expected result object at resultData.data.content.data.result.");
+    throw new Error(
+      "Could not find a valid data object. Check getResultRoot() in the DATA CONFIGURATION section."
+    );
   }
 
   const runtime = window;
@@ -541,16 +619,10 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       .replace(/\\s+/g, "_")
       .replace(/_+/g, "_");
   if (!Array.isArray(tabulatorState.baselineRows)) {
-    tabulatorState.baselineRows = Object.entries(tabulatorState.baselineResult || {}).map(([skillKey, value]) => {
-      const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-      const skills = Array.isArray(record.skills) ? record.skills : [];
-      const firstSkill = skills[0] && typeof skills[0] === "object" ? skills[0] : {};
-      return {
-        key: skillKey,
-        name: toDisplayName(skillKey),
-        description: firstSkill?.description?.literal || "",
-      };
-    });
+    tabulatorState.baselineRows = Object.entries(tabulatorState.baselineResult || {}).map(([key, value]) => ({
+      key,
+      ...extractRow(key, value),
+    }));
   }
   runtime.__ptxTabulatorStateStore[stateKey] = tabulatorState;
 
@@ -563,34 +635,32 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     return null;
   };
 
-  const buildRowsFromResult = (sourceResult) => Object.entries(sourceResult).map(([skillKey, value], index) => {
-    const record = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-    const skills = Array.isArray(record.skills) ? record.skills : [];
-    const firstSkill = skills[0] && typeof skills[0] === "object" ? skills[0] : {};
-    const description = firstSkill?.description?.literal || "";
-    const baselineValue = tabulatorState.baselineResult?.[skillKey];
-    const baselineRecord = baselineValue && typeof baselineValue === "object" && !Array.isArray(baselineValue) ? baselineValue : {};
-    const baselineSkills = Array.isArray(baselineRecord.skills) ? baselineRecord.skills : [];
-    const baselineFirstSkill = baselineSkills[0] && typeof baselineSkills[0] === "object" ? baselineSkills[0] : {};
+  const buildRowsFromResult = (sourceResult) => Object.entries(sourceResult).map(([key, value], index) => {
+    const extracted     = extractRow(key, value);
     const baselineByIndex = Array.isArray(tabulatorState.baselineRows) ? tabulatorState.baselineRows[index] : null;
-    const hasBaseline = Boolean(tabulatorState.baselineResult?.[skillKey] || baselineByIndex);
-    const baselineName = tabulatorState.baselineResult?.[skillKey]
-      ? toDisplayName(skillKey)
-      : String(baselineByIndex?.name || "");
-    const baselineDescription = tabulatorState.baselineResult?.[skillKey]
-      ? (baselineFirstSkill?.description?.literal || "")
-      : String(baselineByIndex?.description || "");
+    const hasBaseline   = Boolean(tabulatorState.baselineResult?.[key] || baselineByIndex);
+    const baselineExtracted = tabulatorState.baselineResult?.[key]
+      ? extractRow(key, tabulatorState.baselineResult[key])
+      : null;
+
+    const origValues = TRACKED_FIELDS.reduce((acc, f) => {
+      acc[origKey(f)] = hasBaseline
+        ? String(baselineExtracted?.[f] ?? baselineByIndex?.[f] ?? "")
+        : "";
+      return acc;
+    }, {});
+    const changedValues = TRACKED_FIELDS.reduce((acc, f) => {
+      acc[changedKey(f)] = Boolean(tabulatorState.validatedDiffByKey?.[key]?.[f]);
+      return acc;
+    }, {});
 
     return {
-      row_uid: skillKey + "__" + index,
-      original_key: skillKey,
-      original_skill_name: hasBaseline ? baselineName : "",
-      original_skill_description: baselineDescription,
-      skill_name: toDisplayName(skillKey),
-      skill_description: description,
+      row_uid: key + "__" + index,
+      original_key: key,
+      ...origValues,
+      ...extracted,
       visual_deleted: false,
-      validated_changed_skill_name: Boolean(tabulatorState.validatedDiffByKey?.[skillKey]?.skill_name),
-      validated_changed_skill_description: Boolean(tabulatorState.validatedDiffByKey?.[skillKey]?.skill_description),
+      ...changedValues,
     };
   });
   const cloneRows = (sourceRows) => (sourceRows || []).map((row) => ({ ...row }));
@@ -612,14 +682,16 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     return freshRows.map((freshRow) => {
       const previous = workingByKey.get(freshRow.original_key);
       if (!previous) return freshRow;
+      const mergedFields = TRACKED_FIELDS.reduce((acc, f) => {
+        acc[f] = previous.visual_deleted ? "" : freshRow[f];
+        acc[changedKey(f)] = Boolean(previous[changedKey(f)]);
+        return acc;
+      }, {});
       return {
         ...freshRow,
         row_uid: previous.row_uid || freshRow.row_uid,
         visual_deleted: Boolean(previous.visual_deleted),
-        skill_name: previous.visual_deleted ? "" : freshRow.skill_name,
-        skill_description: previous.visual_deleted ? "" : freshRow.skill_description,
-        validated_changed_skill_name: Boolean(previous.validated_changed_skill_name),
-        validated_changed_skill_description: Boolean(previous.validated_changed_skill_description),
+        ...mergedFields,
       };
     });
   };
@@ -943,21 +1015,13 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     if (!table) return;
     tabulatorState.workingRows = table.getData().map((row) => ({ ...row }));
   };
-  const isTrackedField = (field) => field === "skill_name" || field === "skill_description";
+  const isTrackedField = (field) => TRACKED_FIELDS.includes(field);
   const isCellChanged = (rowData, field) => {
-    if (!isTrackedField(field)) return false;
-    if (!rowData) return false;
+    if (!isTrackedField(field) || !rowData) return false;
     if (rowData.visual_deleted) return true;
-    if (isExternalImmediateMode) {
-      const originalField = field === "skill_name"
-        ? "original_skill_name"
-        : "original_skill_description";
-      return normalizeDiffValue(rowData[field]) !== normalizeDiffValue(rowData[originalField]);
-    }
-    const validatedField = field === "skill_name"
-      ? "validated_changed_skill_name"
-      : "validated_changed_skill_description";
-    return Boolean(rowData[validatedField]);
+    if (isExternalImmediateMode)
+      return normalizeDiffValue(rowData[field]) !== normalizeDiffValue(rowData[origKey(field)]);
+    return Boolean(rowData[changedKey(field)]);
   };
 
   const hidePopover = () => {
@@ -993,23 +1057,17 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     const rowData = row.getData();
     const field = cell.getField();
     if (!isTrackedField(field)) return;
-    const originalField = field === "skill_name" ? "original_skill_name" : "original_skill_description";
-    const nextData = { [field]: rowData[originalField] || "" };
+    const nextData = { [field]: rowData[origKey(field)] || "" };
     if (rowData.visual_deleted) {
       nextData.visual_deleted = false;
-      nextData.skill_name = rowData.original_skill_name || rowData.skill_name || "";
-      nextData.skill_description = rowData.original_skill_description || rowData.skill_description || "";
+      TRACKED_FIELDS.forEach((f) => {
+        nextData[f] = rowData[origKey(f)] || rowData[f] || "";
+      });
     }
-    const restoredSkillName = Object.prototype.hasOwnProperty.call(nextData, "skill_name")
-      ? nextData.skill_name
-      : rowData.skill_name;
-    const restoredSkillDescription = Object.prototype.hasOwnProperty.call(nextData, "skill_description")
-      ? nextData.skill_description
-      : rowData.skill_description;
-    nextData.validated_changed_skill_name =
-      normalizeDiffValue(restoredSkillName) !== normalizeDiffValue(rowData.original_skill_name);
-    nextData.validated_changed_skill_description =
-      normalizeDiffValue(restoredSkillDescription) !== normalizeDiffValue(rowData.original_skill_description);
+    TRACKED_FIELDS.forEach((f) => {
+      const restored = Object.prototype.hasOwnProperty.call(nextData, f) ? nextData[f] : rowData[f];
+      nextData[changedKey(f)] = normalizeDiffValue(restored) !== normalizeDiffValue(rowData[origKey(f)]);
+    });
     row.update(nextData);
     persistWorkingRowsFromTable();
     setDirty(true);
@@ -1144,44 +1202,23 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
         return;
       }
       const previousKey = rowData.original_key;
-      const nextKey = toJsonKey(rowData.skill_name);
+      const nextKey = toPrimaryKey(rowData[TRACKED_FIELDS[0]]);
       if (!nextKey) {
-        throw new Error("Skill name cannot be empty.");
+        throw new Error(\`"\${COLUMN_DEFS[0].title}" cannot be empty.\`);
       }
       if (usedKeys.has(nextKey)) {
-        throw new Error(\`Duplicate skill name: "\${rowData.skill_name}".\`);
+        throw new Error(\`Duplicate "\${COLUMN_DEFS[0].title}": "\${rowData[TRACKED_FIELDS[0]]}".\`);
       }
       usedKeys.add(nextKey);
 
-      const originalRecord = mutableRoot[previousKey] || mutableRoot[nextKey] || {
-        skills: [{ description: { literal: "", mimetype: "plain/text" } }],
-      };
-      const baselineRecord =
-        tabulatorState.baselineResult?.[previousKey] &&
-        typeof tabulatorState.baselineResult[previousKey] === "object" &&
-        !Array.isArray(tabulatorState.baselineResult[previousKey])
-          ? tabulatorState.baselineResult[previousKey]
-          : null;
-      const sourceRecord = mutableRoot[previousKey] || mutableRoot[nextKey] || baselineRecord || originalRecord;
+      const sourceRecord = mutableRoot[previousKey] || mutableRoot[nextKey] ||
+        tabulatorState.baselineResult?.[previousKey] || {};
+      const record = JSON.parse(JSON.stringify(
+        sourceRecord && typeof sourceRecord === "object" && !Array.isArray(sourceRecord)
+          ? sourceRecord : {}
+      ));
 
-      const clonedRecord = JSON.parse(JSON.stringify(sourceRecord));
-      const record =
-        clonedRecord && typeof clonedRecord === "object" && !Array.isArray(clonedRecord)
-          ? clonedRecord
-          : { skills: [{ description: { literal: "", mimetype: "plain/text" } }] };
-
-      if (!Array.isArray(record.skills)) {
-        record.skills = [{ description: { literal: "", mimetype: "plain/text" } }];
-      }
-      if (!record.skills[0] || typeof record.skills[0] !== "object") {
-        record.skills[0] = { description: { literal: "", mimetype: "plain/text" } };
-      }
-      if (!record.skills[0].description || typeof record.skills[0].description !== "object") {
-        record.skills[0].description = { mimetype: "plain/text" };
-      }
-
-      record.skills[0].description.literal = rowData.skill_description || "";
-      record.skills[0].description.mimetype = record.skills[0].description.mimetype || "plain/text";
+      writeRowBack(record, rowData);
 
       orderedEntries.push([nextKey, record]);
       // Keep original_key/original_* as the initial incoming baseline reference
@@ -1239,24 +1276,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       resizable: false,
       frozen: true,
     },
-    columns: [
-      {
-        title: "Skills Name",
-        field: "skill_name",
-        editor: "input",
-        sorter: "string",
-        width: 240,
-        formatter: cellFormatter,
-      },
-      {
-        title: "Skills Description",
-        field: "skill_description",
-        editor: "textarea",
-        sorter: "string",
-        formatter: cellFormatter,
-        minWidth: 420,
-      },
-    ],
+    columns: COLUMN_DEFS.map((col) => ({ ...col, formatter: cellFormatter })),
   });
 
   const normalizePageSize = (value) => {
@@ -1300,10 +1320,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
   // ##selectedRows export bridge: publishes checked rows (and all rows as fallback)
   // so the Export API body template can target only the user's selection.
-  const toExportRow = (row) => ({
-    skill_name: row.skill_name || "",
-    skill_description: row.skill_description || "",
-  });
+  const toExportRow = (row) => Object.fromEntries(COLUMN_DEFS.map((col) => [col.field, row[col.field] || ""]));
   const publishSelectionBridge = () => {
     const liveRows = table.getData().filter((row) => !row.visual_deleted);
     runtime.__ptxTabulatorAllRows = liveRows.map(toExportRow);
@@ -1318,19 +1335,18 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     try {
       const nextRows = table.getData().map((row) => ({ ...row }));
       nextRows.forEach((rowData) => {
-        const changedName = normalizeDiffValue(rowData.skill_name) !== normalizeDiffValue(rowData.original_skill_name);
-        const changedDescription =
-          normalizeDiffValue(rowData.skill_description) !== normalizeDiffValue(rowData.original_skill_description);
-        rowData.validated_changed_skill_name = rowData.visual_deleted ? true : changedName;
-        rowData.validated_changed_skill_description = rowData.visual_deleted ? true : changedDescription;
+        TRACKED_FIELDS.forEach((f) => {
+          const changed = normalizeDiffValue(rowData[f]) !== normalizeDiffValue(rowData[origKey(f)]);
+          rowData[changedKey(f)] = rowData.visual_deleted ? true : changed;
+        });
       });
       const validatedDiffByKey = {};
       nextRows.forEach((rowData) => {
-        const key = rowData.original_key || rowData.skill_name || rowData.row_uid;
-        validatedDiffByKey[key] = {
-          skill_name: Boolean(rowData.validated_changed_skill_name),
-          skill_description: Boolean(rowData.validated_changed_skill_description),
-        };
+        const key = rowData.original_key || rowData[TRACKED_FIELDS[0]] || rowData.row_uid;
+        validatedDiffByKey[key] = TRACKED_FIELDS.reduce((acc, f) => {
+          acc[f] = Boolean(rowData[changedKey(f)]);
+          return acc;
+        }, {});
       });
       tabulatorState.validatedDiffByKey = validatedDiffByKey;
       const pageBeforeUpdate = table.getPage?.() || tabulatorState.paginationPage || 1;
