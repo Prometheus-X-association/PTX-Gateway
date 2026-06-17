@@ -468,6 +468,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
 
   await loadShadowCssOnce("https://unpkg.com/tabulator-tables@6.4.0/dist/css/tabulator.min.css");
   await loadScriptOnce("https://unpkg.com/tabulator-tables@6.4.0/dist/js/tabulator.min.js", () => Boolean(window.Tabulator));
+  await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js", () => Boolean(window.XLSX));
 
   const resultRoot =
     resultData?.data?.content?.data?.result ||
@@ -494,7 +495,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     baselineRows: null,
     validatedDiffByKey: {},
     paginationPage: 1,
-    paginationSize: 12,
+    paginationSize: 50,
   };
   const snapshotStorageKey = String(config?.__ptxResultSnapshotStorageKey || "");
   const readSnapshotResultRoot = () => {
@@ -737,6 +738,19 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     .tabulator-delete-button:hover {
       background: #b91c1c;
     }
+    .tabulator-excel-button {
+      display: inline-flex;
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 14px;
+      background: #15803d;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tabulator-excel-button:hover {
+      background: #166534;
+    }
     .tabulator-toolbar .hint {
       font-size: 12px;
       color: #64748b;
@@ -889,6 +903,11 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   deleteButton.className = "tabulator-delete-button";
   deleteButton.textContent = "Delete selected rows";
 
+  const excelButton = document.createElement("button");
+  excelButton.type = "button";
+  excelButton.className = "tabulator-excel-button";
+  excelButton.textContent = "Export selected to Excel";
+
   const legend = document.createElement("div");
   legend.className = "legend info-card";
   legend.innerHTML = '<span class="legend-swatch" aria-hidden="true"></span><span>Highlighted cell: this value has already been modified and differs from the original extracted cell</span>';
@@ -897,7 +916,7 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   infoGrid.className = "info-grid";
   infoGrid.append(legend);
 
-  toolbarActions.append(deleteButton);
+  toolbarActions.append(excelButton, deleteButton);
   toolbar.append(searchInput, toolbarActions);
 
   const tableHost = document.createElement("div");
@@ -1204,8 +1223,8 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     height: "560px",
     movableColumns: true,
     pagination: true,
-    paginationSize: tabulatorState.paginationSize === true ? true : (Number(tabulatorState.paginationSize) || 12),
-    paginationSizeSelector: [12, 25, 50, true],
+    paginationSize: tabulatorState.paginationSize === true ? true : (Number(tabulatorState.paginationSize) || 50),
+    paginationSizeSelector: [25, 50, 100, true],
     placeholder: "No skills found in the result JSON.",
     selectableRows: "highlight",
     rowFormatter: (row) => {
@@ -1375,6 +1394,16 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     persistWorkingRowsFromTable();
     setDirty(true);
     void applyValidatedChanges();
+  });
+
+  excelButton.addEventListener("click", () => {
+    const selectedData = table.getSelectedData().filter((row) => !row.visual_deleted);
+    if (runtime.__ptxTabulatorAllRows && selectedData.length === 0) {
+      alert("Please select at least one row to export to Excel.");
+      return;
+    }
+    const rowRange = selectedData.length > 0 ? "selected" : "active";
+    table.download("xlsx", "skills-export.xlsx", { sheetName: "Skills" }, rowRange);
   });
 
   table.on("cellMouseEnter", (event, cell) => {
