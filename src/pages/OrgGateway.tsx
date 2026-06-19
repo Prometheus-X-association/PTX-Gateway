@@ -351,8 +351,10 @@ const getProcessingPageSettings = (features: unknown): ProcessingPageSettings | 
   const layoutRaw = processingPage.stepProgressLayout;
   const stepProgressLayout = layoutRaw === "vertical_right" ? "vertical_right" : "horizontal";
   const pendingWaitSeconds =
-    typeof processingPage.pendingWaitSeconds === "number" && Number.isFinite(processingPage.pendingWaitSeconds)
-      ? Math.max(5, Math.min(600, Math.round(processingPage.pendingWaitSeconds)))
+    typeof processingPage.pendingWaitSeconds === "number" &&
+    Number.isFinite(processingPage.pendingWaitSeconds) &&
+    processingPage.pendingWaitSeconds > 0
+      ? Math.round(processingPage.pendingWaitSeconds)
       : 60;
   const verticalStepBarTopText =
     typeof processingPage.verticalStepBarTopText === "string"

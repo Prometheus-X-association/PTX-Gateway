@@ -9,14 +9,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
 const DEFAULT_PENDING_WAIT_SECONDS = 60;
-const MIN_PENDING_WAIT_SECONDS = 5;
-const MAX_PENDING_WAIT_SECONDS = 600;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const clampPendingWaitSeconds = (value: number): number =>
-  Math.max(MIN_PENDING_WAIT_SECONDS, Math.min(MAX_PENDING_WAIT_SECONDS, Math.round(value)));
+const sanitizePendingWaitSeconds = (value: number): number =>
+  Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_PENDING_WAIT_SECONDS;
 
 const ProcessingPageSettingsSection = () => {
   const { user } = useAuth();
@@ -41,7 +39,7 @@ const ProcessingPageSettingsSection = () => {
         const features = isRecord(data?.features) ? data.features : {};
         const processingPage = isRecord(features.processingPage) ? features.processingPage : {};
         const parsed = typeof processingPage.pendingWaitSeconds === "number"
-          ? clampPendingWaitSeconds(processingPage.pendingWaitSeconds)
+          ? sanitizePendingWaitSeconds(processingPage.pendingWaitSeconds)
           : DEFAULT_PENDING_WAIT_SECONDS;
         setPendingWaitSeconds(parsed);
       } catch {
@@ -73,7 +71,7 @@ const ProcessingPageSettingsSection = () => {
         ...existingFeatures,
         processingPage: {
           ...existingProcessingPage,
-          pendingWaitSeconds: clampPendingWaitSeconds(pendingWaitSeconds),
+          pendingWaitSeconds: sanitizePendingWaitSeconds(pendingWaitSeconds),
         },
       };
 
@@ -112,21 +110,13 @@ const ProcessingPageSettingsSection = () => {
           <Input
             id="pending-wait-seconds"
             type="number"
-            min={MIN_PENDING_WAIT_SECONDS}
-            max={MAX_PENDING_WAIT_SECONDS}
+            min={1}
             value={pendingWaitSeconds}
             onChange={(event) => {
               const raw = Number(event.target.value);
-              if (!Number.isFinite(raw)) {
-                setPendingWaitSeconds(DEFAULT_PENDING_WAIT_SECONDS);
-                return;
-              }
-              setPendingWaitSeconds(clampPendingWaitSeconds(raw));
+              setPendingWaitSeconds(sanitizePendingWaitSeconds(raw));
             }}
           />
-          <p className="text-xs text-muted-foreground">
-            Range: {MIN_PENDING_WAIT_SECONDS}-{MAX_PENDING_WAIT_SECONDS} seconds.
-          </p>
         </div>
 
         <Button onClick={saveSettings} disabled={isSaving}>

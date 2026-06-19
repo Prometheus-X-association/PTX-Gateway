@@ -15,6 +15,7 @@ const LOCAL_SUPABASE_JWT_FALLBACK = "super-secret-jwt-token-with-at-least-32-cha
 
 interface PdcExecuteRequest {
   org_execution_token?: string;
+  timeout_seconds?: number;
   payload: {
     contract: string;
     purposeId: string;
@@ -474,7 +475,14 @@ serve(async (req) => {
     }
 
     const requestData: PdcExecuteRequest = await req.json();
-    const { payload, org_execution_token } = requestData;
+    const { payload, org_execution_token, timeout_seconds } = requestData;
+
+    // Mirrors the admin-configured "pendingWaitSeconds" so the connector request
+    // isn't aborted before the gateway's own pending window.
+    const connectorTimeoutMs =
+      typeof timeout_seconds === "number" && Number.isFinite(timeout_seconds) && timeout_seconds > 0
+        ? Math.round(timeout_seconds) * 1000
+        : 60000;
 
     if (!payload) {
       return new Response(
@@ -621,7 +629,7 @@ serve(async (req) => {
 
     // Make the POST request to PDC with timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 1 minute timeout
+    const timeoutId = setTimeout(() => controller.abort(), connectorTimeoutMs);
 
     try {
       const response = await fetch(activeConfig.pdc_url, {

@@ -242,10 +242,7 @@ const ProcessingView = ({
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [canRetryPendingAvailability, setCanRetryPendingAvailability] = useState(false);
   const executionInFlightRef = useRef(false);
-  const pendingTransitionDelayMs = Math.max(
-    5_000,
-    Math.min(600_000, Math.round(pendingWaitSeconds) * 1000 || DEFAULT_PENDING_TRANSITION_DELAY_MS),
-  );
+  const pendingTransitionDelayMs = Math.round(pendingWaitSeconds) * 1000 || DEFAULT_PENDING_TRANSITION_DELAY_MS;
 
   const probeResultAvailability = useCallback(async (): Promise<boolean> => {
     if (!resultUrlInfo?.url) return false;
@@ -433,6 +430,7 @@ const ProcessingView = ({
         body: {
           org_execution_token: pdcConfig.orgExecutionToken || undefined,
           payload: pdcPayload,
+          timeout_seconds: Math.round(pendingTransitionDelayMs / 1000),
         },
       });
 
