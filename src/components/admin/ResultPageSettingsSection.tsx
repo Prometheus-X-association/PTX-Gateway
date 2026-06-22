@@ -759,6 +759,12 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       gap: 10px;
       align-items: center;
     }
+    .tabulator-row-count {
+      font-size: 12px;
+      font-weight: 700;
+      color: #475569;
+      white-space: nowrap;
+    }
     .tabulator-save-status {
       display: inline-flex;
       align-items: center;
@@ -967,6 +973,18 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   searchInput.type = "search";
   searchInput.placeholder = "Search skills or descriptions...";
 
+  const rowCountLabel = document.createElement("span");
+  rowCountLabel.className = "tabulator-row-count";
+
+  const selectedCountLabel = document.createElement("span");
+  selectedCountLabel.className = "tabulator-row-count";
+
+  const deletedCountLabel = document.createElement("span");
+  deletedCountLabel.className = "tabulator-row-count";
+
+  const modifiedCountLabel = document.createElement("span");
+  modifiedCountLabel.className = "tabulator-row-count";
+
   const toolbarActions = document.createElement("div");
   toolbarActions.className = "tabulator-toolbar-actions";
 
@@ -989,7 +1007,8 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   infoGrid.append(legend);
 
   toolbarActions.append(excelButton, deleteButton);
-  toolbar.append(searchInput, toolbarActions);
+  toolbar.append(searchInput, rowCountLabel, toolbarActions);
+  toolbarActions.before(selectedCountLabel, deletedCountLabel, modifiedCountLabel);
 
   const tableHost = document.createElement("div");
   tableHost.className = "tabulator-table-host";
@@ -1326,6 +1345,15 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
     runtime.__ptxTabulatorAllRows = liveRows.map(toExportRow);
     const selectedRows = table.getSelectedData().filter((row) => !row.visual_deleted);
     runtime.__ptxTabulatorSelectedRows = selectedRows.map(toExportRow);
+    rowCountLabel.textContent = \`\${liveRows.length} skill\${liveRows.length === 1 ? "" : "s"} extracted\`;
+    const deletedRows = table.getData().filter((row) => row.visual_deleted);
+    const modifiedCellCount = liveRows.reduce(
+      (count, row) => count + TRACKED_FIELDS.filter((field) => isCellChanged(row, field)).length,
+      0
+    );
+    selectedCountLabel.textContent = \`\${selectedRows.length} selected\`;
+    deletedCountLabel.textContent = \`\${deletedRows.length} deleted\`;
+    modifiedCountLabel.textContent = \`\${modifiedCellCount} modified\`;
   };
   table.on("rowSelectionChanged", publishSelectionBridge);
   table.on("dataProcessed", publishSelectionBridge);
