@@ -969,6 +969,7 @@ const OrgGatewayContent = ({
               onRestart={handleRestart}
               resultUrlInfo={activeResultUrlInfo}
               exportApiConfigs={pdcConfig?.export_api_configs}
+              oidcClients={pdcConfig?.oidc_clients}
               forcedResultData={activeForcedResultData ?? undefined}
               forcedResultNotice={activeForcedResultNotice}
               organizationId={organization.id}

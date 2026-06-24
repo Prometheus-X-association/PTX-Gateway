@@ -11,11 +11,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChevronDown, Download, Files, GraduationCap, LinkIcon, Loader2, Plus, Send, Trash2, Eye, EyeOff, Upload, Palette, Pencil, Table as TableIcon } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { ChevronDown, Download, Files, GraduationCap, LinkIcon, Loader2, Plus, Send, Trash2, Eye, EyeOff, Upload, Palette, Pencil, Table as TableIcon, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { CustomVisualizationConfig, CustomVisualizationLibraryBundle, CustomVisualizationLibraryFile, ExportApiConfig } from "@/types/dataspace";
+import { CustomVisualizationConfig, CustomVisualizationLibraryBundle, CustomVisualizationLibraryFile, ExportApiConfig, ExportApiOidcConfig, OidcClientConfig } from "@/types/dataspace";
 
 interface TemplateTagHelp {
   tag: string;
@@ -1513,6 +1514,35 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   });
 })();`;
 
+const emptyExportApiOidc = (): ExportApiOidcConfig => ({
+  enabled: false,
+  grantType: "client_credentials",
+  customGrantType: "",
+  clientId: "",
+  clientSecret: "",
+  discoveryUrl: "",
+});
+
+const isValidOidcDiscoveryUrl = (url: string): boolean => {
+  if (!url.trim()) return false;
+  try {
+    new URL(url);
+    return url.includes("/.well-known");
+  } catch {
+    return false;
+  }
+};
+
+const emptyOidcClient = (): OidcClientConfig => ({
+  id: crypto.randomUUID(),
+  name: "",
+  grantType: "client_credentials",
+  customGrantType: "",
+  clientId: "",
+  clientSecret: "",
+  discoveryUrl: "",
+});
+
 const emptyExportApi = (): ExportApiConfig => ({
   id: crypto.randomUUID(),
   name: "",
@@ -1521,6 +1551,7 @@ const emptyExportApi = (): ExportApiConfig => ({
   api_version: "",
   is_active: false,
   authorization: "",
+  oidc: emptyExportApiOidc(),
   params: [],
   body_template: '{\n  "data": ##result\n}',
   target_resources: [],
@@ -1656,6 +1687,14 @@ const getExportApisFromFeatures = (features: unknown): ExportApiConfig[] => {
     : [];
 };
 
+const getOidcClientsFromFeatures = (features: unknown): OidcClientConfig[] => {
+  if (!isRecord(features)) return [];
+  const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  return Array.isArray(resultPage.oidcClients)
+    ? (resultPage.oidcClients as unknown as OidcClientConfig[])
+    : [];
+};
+
 const getCustomVisualizationsFromFeatures = (features: unknown): CustomVisualizationConfig[] => {
   if (!isRecord(features)) return [];
   const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
@@ -1685,6 +1724,9 @@ const ResultPageSettingsSection = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [globalFeatures, setGlobalFeatures] = useState<Record<string, unknown>>({});
   const [exportApis, setExportApis] = useState<ExportApiConfig[]>([]);
+  const [oidcClients, setOidcClients] = useState<OidcClientConfig[]>([]);
+  const [editingOidcClientId, setEditingOidcClientId] = useState<string | null>(null);
+  const [deleteOidcClientId, setDeleteOidcClientId] = useState<string | null>(null);
   const [customVisualizations, setCustomVisualizations] = useState<CustomVisualizationConfig[]>([]);
   const [customVisualizationLibraryBundles, setCustomVisualizationLibraryBundles] = useState<CustomVisualizationLibraryBundle[]>([]);
   const [visualizationTargets, setVisualizationTargets] = useState<VisualizationTargetOption[]>([]);
@@ -1693,6 +1735,9 @@ const ResultPageSettingsSection = () => {
   const [isTagHelpOpen, setIsTagHelpOpen] = useState(false);
   const [selectedTagHelp, setSelectedTagHelp] = useState<TemplateTagHelp | null>(null);
   const [editingExportApiId, setEditingExportApiId] = useState<string | null>(null);
+  const [isTestingOidcConnection, setIsTestingOidcConnection] = useState(false);
+  const [oidcTestResult, setOidcTestResult] = useState<unknown>(null);
+  const [oidcTestError, setOidcTestError] = useState<string | null>(null);
   const [toggleExportApiId, setToggleExportApiId] = useState<string | null>(null);
   const [deleteExportApiId, setDeleteExportApiId] = useState<string | null>(null);
   const [editingVisualizationId, setEditingVisualizationId] = useState<string | null>(null);
@@ -1705,6 +1750,11 @@ const ResultPageSettingsSection = () => {
   const editingExportApi = editingExportApiIndex >= 0 ? exportApis[editingExportApiIndex] : null;
   const toggleExportApi = exportApis.find((api) => api.id === toggleExportApiId);
   const deleteExportApi = exportApis.find((api) => api.id === deleteExportApiId);
+  const editingOidcClientIndex = oidcClients.findIndex((client) => client.id === editingOidcClientId);
+  const editingOidcClient = editingOidcClientIndex >= 0 ? oidcClients[editingOidcClientIndex] : null;
+  const deleteOidcClient = oidcClients.find((client) => client.id === deleteOidcClientId);
+  const oidcClientUsageCount = (clientId: string) =>
+    exportApis.filter((api) => api.oidc_client_id === clientId).length;
   const editingVisualizationIndex = customVisualizations.findIndex(
     (visualization) => visualization.id === editingVisualizationId
   );
@@ -1766,8 +1816,14 @@ const ResultPageSettingsSection = () => {
         is_active: api.is_active ?? true,
         target_resources: Array.isArray(api.target_resources) ? api.target_resources : [],
         params: Array.isArray(api.params) ? api.params : [],
+        oidc: { ...emptyExportApiOidc(), ...(api.oidc || {}) },
       }));
       const storedExportApis = normalizeExportApis(getExportApisFromFeatures(features));
+      const storedOidcClients = getOidcClientsFromFeatures(features).map((client) => ({
+        ...emptyOidcClient(),
+        ...client,
+        id: client.id || crypto.randomUUID(),
+      }));
       const storedCustomVisualizations = getCustomVisualizationsFromFeatures(features);
       const storedLibraryBundles = getCustomVisualizationLibraryBundlesFromFeatures(features);
       const legacyExportApis = normalizeExportApis((legacyData || []).flatMap((config) =>
@@ -1791,6 +1847,7 @@ const ResultPageSettingsSection = () => {
 
       setGlobalFeatures(features);
       setExportApis(storedExportApis.length > 0 ? storedExportApis : legacyExportApis);
+      setOidcClients(storedOidcClients);
       setCustomVisualizations(storedCustomVisualizations);
       setCustomVisualizationLibraryBundles(storedLibraryBundles);
       setVisualizationTargets([...softwareTargets, ...serviceChainTargets]);
@@ -1812,6 +1869,59 @@ const ResultPageSettingsSection = () => {
       updated[index] = { ...updated[index], ...next };
       return updated;
     });
+  };
+
+  const updateApiOidc = (index: number, next: Partial<ExportApiOidcConfig>) => {
+    setExportApis((current) => {
+      const updated = [...current];
+      const currentOidc = updated[index]?.oidc || emptyExportApiOidc();
+      updated[index] = { ...updated[index], oidc: { ...currentOidc, ...next } };
+      return updated;
+    });
+  };
+
+  const handleTestOidcConnection = async (
+    oidc: Pick<ExportApiOidcConfig, "grantType" | "customGrantType" | "clientId" | "clientSecret" | "discoveryUrl">,
+  ) => {
+    setOidcTestResult(null);
+    setOidcTestError(null);
+    if (!oidc.clientId.trim() || !oidc.clientSecret.trim()) {
+      setOidcTestError("Client ID and Client Secret are required to test the connection.");
+      return;
+    }
+    if (!isValidOidcDiscoveryUrl(oidc.discoveryUrl)) {
+      setOidcTestError("Discovery URL must be a valid URL containing '/.well-known' (e.g. /.well-known/openid-configuration).");
+      return;
+    }
+    if (oidc.grantType === "custom" && !oidc.customGrantType?.trim()) {
+      setOidcTestError("Custom grant type value is required.");
+      return;
+    }
+
+    setIsTestingOidcConnection(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("export-api-oidc-token", {
+        body: {
+          discoveryUrl: oidc.discoveryUrl,
+          clientId: oidc.clientId,
+          clientSecret: oidc.clientSecret,
+          grantType: oidc.grantType,
+          customGrantType: oidc.customGrantType,
+        },
+      });
+
+      if (error) throw error;
+      setOidcTestResult(data);
+      if ((data as { ok?: boolean } | null)?.ok) {
+        toast.success("OIDC connection succeeded");
+      } else {
+        toast.error("OIDC connection returned an error response");
+      }
+    } catch (err) {
+      setOidcTestError(err instanceof Error ? err.message : "Failed to test OIDC connection");
+    } finally {
+      setIsTestingOidcConnection(false);
+    }
   };
 
   const toggleExportApiTarget = (index: number, targetId: string, checked: boolean) => {
@@ -2076,6 +2186,7 @@ const ResultPageSettingsSection = () => {
     successMessage: string,
     overrides?: {
       exportApis?: ExportApiConfig[];
+      oidcClients?: OidcClientConfig[];
       customVisualizations?: CustomVisualizationConfig[];
       customVisualizationLibraryBundles?: CustomVisualizationLibraryBundle[];
     },
@@ -2085,6 +2196,7 @@ const ResultPageSettingsSection = () => {
     setIsSaving(true);
     try {
       const nextExportApis = overrides?.exportApis ?? exportApis;
+      const nextOidcClients = overrides?.oidcClients ?? oidcClients;
       const nextCustomVisualizations = overrides?.customVisualizations ?? customVisualizations;
       const nextLibraryBundles = overrides?.customVisualizationLibraryBundles ?? customVisualizationLibraryBundles;
       const nextFeatures = {
@@ -2092,6 +2204,7 @@ const ResultPageSettingsSection = () => {
         resultPage: {
           ...(isRecord(globalFeatures.resultPage) ? globalFeatures.resultPage : {}),
           exportApiConfigs: nextExportApis,
+          oidcClients: nextOidcClients,
           customVisualizations: nextCustomVisualizations,
           customVisualizationLibraryBundles: nextLibraryBundles,
         },
@@ -2162,6 +2275,56 @@ const ResultPageSettingsSection = () => {
     }
     setDeleteExportApiId(null);
     await saveResultPageSettings("Export API endpoint deleted", { exportApis: updated });
+  };
+
+  const updateOidcClient = (index: number, next: Partial<OidcClientConfig>) => {
+    setOidcClients((current) => {
+      const updated = [...current];
+      updated[index] = { ...updated[index], ...next };
+      return updated;
+    });
+  };
+
+  const handleAddOidcClient = () => {
+    const client = emptyOidcClient();
+    setActiveTab("export-api");
+    setOidcTestResult(null);
+    setOidcTestError(null);
+    setOidcClients((current) => [...current, client]);
+    setEditingOidcClientId(client.id);
+  };
+
+  const handleApplyOidcClientChanges = async () => {
+    if (editingOidcClientIndex < 0) return;
+    if (!oidcClients[editingOidcClientIndex].name.trim()) {
+      toast.error("OIDC Client name is required");
+      return;
+    }
+
+    setActiveTab("export-api");
+    const saved = await saveResultPageSettings("OIDC client saved");
+    if (saved) {
+      setEditingOidcClientId(null);
+    }
+  };
+
+  const handleConfirmDeleteOidcClient = async () => {
+    if (!deleteOidcClientId) return;
+
+    setActiveTab("export-api");
+    const updatedClients = oidcClients.filter((client) => client.id !== deleteOidcClientId);
+    // Unlink any Export API endpoints that referenced the deleted client; they fall back
+    // to their inline OIDC fields (or manual authorization) until re-linked.
+    const updatedApis = exportApis.map((api) =>
+      api.oidc_client_id === deleteOidcClientId ? { ...api, oidc_client_id: undefined } : api
+    );
+    setOidcClients(updatedClients);
+    setExportApis(updatedApis);
+    if (editingOidcClientId === deleteOidcClientId) {
+      setEditingOidcClientId(null);
+    }
+    setDeleteOidcClientId(null);
+    await saveResultPageSettings("OIDC client deleted", { oidcClients: updatedClients, exportApis: updatedApis });
   };
 
   const handleAddCustomVisualization = () => {
@@ -2307,15 +2470,26 @@ const ResultPageSettingsSection = () => {
                         Configure API endpoints available for users to export result data from the result page.
                       </p>
                     </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleAddExportApi}
-                    >
-                      <Plus className="h-4 w-4 mr-1" />
-                      Add API
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleAddOidcClient}
+                      >
+                        <KeyRound className="h-4 w-4 mr-1" />
+                        Add OIDC Client
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleAddExportApi}
+                      >
+                        <Plus className="h-4 w-4 mr-1" />
+                        Add API
+                      </Button>
+                    </div>
                   </div>
 
                   {exportApis.length === 0 ? (
@@ -2384,7 +2558,11 @@ const ResultPageSettingsSection = () => {
                                     type="button"
                                     variant="outline"
                                     size="sm"
-                                    onClick={() => setEditingExportApiId(api.id || null)}
+                                    onClick={() => {
+                                      setOidcTestResult(null);
+                                      setOidcTestError(null);
+                                      setEditingExportApiId(api.id || null);
+                                    }}
                                   >
                                     <Pencil className="h-4 w-4 mr-1" />
                                     Edit
@@ -2407,7 +2585,251 @@ const ResultPageSettingsSection = () => {
                   )}
                 </div>
 
-                <Dialog open={Boolean(editingExportApi)} onOpenChange={(open) => !open && setEditingExportApiId(null)}>
+                <div className="space-y-3 border rounded-lg p-4">
+                  <div>
+                    <Label className="flex items-center gap-2">
+                      <KeyRound className="w-4 h-4" />
+                      OIDC Clients
+                    </Label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Reusable OpenID Connect / OAuth2 client credentials (e.g. Keycloak) that any export API endpoint above can select and share.
+                    </p>
+                  </div>
+
+                  {oidcClients.length === 0 ? (
+                    <div className="text-center py-8 text-sm text-muted-foreground border border-dashed rounded-lg">
+                      No OIDC clients created yet.
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Grant Type</TableHead>
+                            <TableHead>Discovery URL</TableHead>
+                            <TableHead>Used By</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {oidcClients.map((client, clientIndex) => (
+                            <TableRow key={client.id || clientIndex}>
+                              <TableCell className="font-medium">{client.name || `OIDC Client #${clientIndex + 1}`}</TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {client.grantType === "custom" ? (client.customGrantType || "custom") : client.grantType}
+                              </TableCell>
+                              <TableCell className="max-w-[260px]">
+                                <code className="text-xs text-muted-foreground break-all">{client.discoveryUrl || "Not set"}</code>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {oidcClientUsageCount(client.id)} endpoint{oidcClientUsageCount(client.id) === 1 ? "" : "s"}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex justify-end gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      setOidcTestResult(null);
+                                      setOidcTestError(null);
+                                      setEditingOidcClientId(client.id);
+                                    }}
+                                  >
+                                    <Pencil className="h-4 w-4 mr-1" />
+                                    Edit
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setDeleteOidcClientId(client.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+
+                <Dialog
+                  open={Boolean(editingOidcClient)}
+                  onOpenChange={(open) => {
+                    if (!open) {
+                      setEditingOidcClientId(null);
+                      setOidcTestResult(null);
+                      setOidcTestError(null);
+                    }
+                  }}
+                >
+                  <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+                    <DialogHeader>
+                      <DialogTitle>{editingOidcClientIndex >= 0 && oidcClients[editingOidcClientIndex]?.name ? "Edit OIDC Client" : "Create OIDC Client"}</DialogTitle>
+                      <DialogDescription>
+                        These credentials can be shared by multiple export API endpoints.
+                      </DialogDescription>
+                    </DialogHeader>
+
+                    {editingOidcClient && (
+                      <div className="space-y-4">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Name</Label>
+                          <Input
+                            value={editingOidcClient.name}
+                            onChange={(e) => updateOidcClient(editingOidcClientIndex, { name: e.target.value })}
+                            placeholder="Keycloak - LMS Realm"
+                          />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Grant Type</Label>
+                            <Select
+                              value={editingOidcClient.grantType}
+                              onValueChange={(value) =>
+                                updateOidcClient(editingOidcClientIndex, { grantType: value as OidcClientConfig["grantType"] })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="client_credentials">client_credentials</SelectItem>
+                                <SelectItem value="authorization_code">authorization_code</SelectItem>
+                                <SelectItem value="custom">Custom...</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {editingOidcClient.grantType === "custom" && (
+                            <div className="space-y-1">
+                              <Label className="text-xs">Custom Grant Type</Label>
+                              <Input
+                                value={editingOidcClient.customGrantType || ""}
+                                onChange={(e) => updateOidcClient(editingOidcClientIndex, { customGrantType: e.target.value })}
+                                placeholder="urn:ietf:params:oauth:grant-type:..."
+                              />
+                            </div>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Client ID</Label>
+                            <Input
+                              value={editingOidcClient.clientId}
+                              onChange={(e) => updateOidcClient(editingOidcClientIndex, { clientId: e.target.value })}
+                              placeholder="ptx-export-client"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Client Secret</Label>
+                            <Input
+                              type="password"
+                              value={editingOidcClient.clientSecret}
+                              onChange={(e) => updateOidcClient(editingOidcClientIndex, { clientSecret: e.target.value })}
+                              placeholder="Enter client secret"
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Discovery URL</Label>
+                          <Input
+                            value={editingOidcClient.discoveryUrl}
+                            onChange={(e) => updateOidcClient(editingOidcClientIndex, { discoveryUrl: e.target.value })}
+                            placeholder="https://keycloak.example.com/realms/my-realm/.well-known/openid-configuration"
+                          />
+                          {editingOidcClient.discoveryUrl.trim() && !isValidOidcDiscoveryUrl(editingOidcClient.discoveryUrl) && (
+                            <p className="text-xs text-destructive">
+                              Must be a valid URL containing "/.well-known", e.g. .../.well-known/openid-configuration
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={isTestingOidcConnection}
+                            onClick={() => handleTestOidcConnection(editingOidcClient)}
+                          >
+                            {isTestingOidcConnection ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Testing...
+                              </>
+                            ) : (
+                              "Test OIDC Connection"
+                            )}
+                          </Button>
+                        </div>
+                        {oidcTestError && (
+                          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                            {oidcTestError}
+                          </p>
+                        )}
+                        {oidcTestResult !== null && (
+                          <div className="rounded-md border bg-muted/30 p-3">
+                            <Label className="text-xs">Test Result</Label>
+                            <pre className="mt-1 max-h-64 w-full overflow-y-auto overflow-x-hidden text-xs font-mono whitespace-pre-wrap break-all">
+                              {JSON.stringify(oidcTestResult, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setEditingOidcClientId(null)}>
+                        Cancel
+                      </Button>
+                      <Button onClick={handleApplyOidcClientChanges} disabled={isSaving}>
+                        {isSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                        Save OIDC Client
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog
+                  open={Boolean(deleteOidcClient)}
+                  onOpenChange={(open) => !open && setDeleteOidcClientId(null)}
+                >
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Delete OIDC Client?</DialogTitle>
+                      <DialogDescription>
+                        This removes "{deleteOidcClient?.name || "this OIDC client"}" from the shared list and saves the change immediately.
+                        {deleteOidcClient && oidcClientUsageCount(deleteOidcClient.id) > 0 && (
+                          <> {oidcClientUsageCount(deleteOidcClient.id)} export API endpoint{oidcClientUsageCount(deleteOidcClient.id) === 1 ? "" : "s"} currently use this client and will fall back to its own inline OIDC fields or manual authorization.</>
+                        )}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setDeleteOidcClientId(null)}>
+                        Cancel
+                      </Button>
+                      <Button variant="destructive" onClick={handleConfirmDeleteOidcClient} disabled={isSaving}>
+                        {isSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                        Delete
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog
+                  open={Boolean(editingExportApi)}
+                  onOpenChange={(open) => {
+                    if (!open) {
+                      setEditingExportApiId(null);
+                      setOidcTestResult(null);
+                      setOidcTestError(null);
+                    }
+                  }}
+                >
                   <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
                     <DialogHeader>
                       <DialogTitle>Edit Export API Endpoint</DialogTitle>
@@ -2459,8 +2881,219 @@ const ResultPageSettingsSection = () => {
                             value={editingExportApi.authorization || ""}
                             onChange={(e) => updateApi(editingExportApiIndex, { authorization: e.target.value })}
                             placeholder="Bearer <token>"
+                            disabled={Boolean(editingExportApi.oidc?.enabled)}
                           />
+                          {editingExportApi.oidc?.enabled && (
+                            <p className="text-xs text-muted-foreground">
+                              Ignored while OIDC Client Credentials is enabled below. The gateway fetches a fresh access token instead.
+                            </p>
+                          )}
                         </div>
+
+                        <Card className="border-dashed">
+                          <CardHeader className="pb-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <CardTitle className="text-sm flex items-center gap-2">
+                                  <KeyRound className="h-4 w-4" />
+                                  OIDC Client Credentials
+                                </CardTitle>
+                                <CardDescription className="text-xs">
+                                  Use this when the external system requires an OpenID Connect / OAuth2 access token (e.g. Keycloak) instead of a static
+                                  token. The gateway fetches a fresh access token before every export/import request and uses it as the Bearer token.
+                                </CardDescription>
+                              </div>
+                              <Switch
+                                checked={Boolean(editingExportApi.oidc?.enabled)}
+                                onCheckedChange={(value) => updateApiOidc(editingExportApiIndex, { enabled: value })}
+                              />
+                            </div>
+                          </CardHeader>
+                          {editingExportApi.oidc?.enabled && (
+                            <CardContent className="space-y-3">
+                              <div className="flex gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={editingExportApi.oidc_client_id === undefined ? "default" : "outline"}
+                                  onClick={() => {
+                                    updateApi(editingExportApiIndex, { oidc_client_id: undefined });
+                                    setOidcTestResult(null);
+                                    setOidcTestError(null);
+                                  }}
+                                >
+                                  Create New
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={editingExportApi.oidc_client_id !== undefined ? "default" : "outline"}
+                                  onClick={() => {
+                                    updateApi(editingExportApiIndex, { oidc_client_id: editingExportApi.oidc_client_id ?? (oidcClients[0]?.id || "") });
+                                    setOidcTestResult(null);
+                                    setOidcTestError(null);
+                                  }}
+                                >
+                                  Use Existing
+                                </Button>
+                              </div>
+
+                              {editingExportApi.oidc_client_id !== undefined ? (
+                                <div className="space-y-3">
+                                  {oidcClients.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      No OIDC clients created yet. Use the "Add OIDC Client" button above to create one, or switch to "Create New" to enter credentials directly for this endpoint.
+                                    </p>
+                                  ) : (
+                                    <>
+                                      <div className="space-y-1">
+                                        <Label className="text-xs">OIDC Client</Label>
+                                        <Select
+                                          value={editingExportApi.oidc_client_id || ""}
+                                          onValueChange={(value) => {
+                                            updateApi(editingExportApiIndex, { oidc_client_id: value });
+                                            setOidcTestResult(null);
+                                            setOidcTestError(null);
+                                          }}
+                                        >
+                                          <SelectTrigger>
+                                            <SelectValue placeholder="Select an OIDC client" />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            {oidcClients.map((client) => (
+                                              <SelectItem key={client.id} value={client.id}>
+                                                {client.name || client.id}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          disabled={isTestingOidcConnection || !editingExportApi.oidc_client_id}
+                                          onClick={() => {
+                                            const selected = oidcClients.find((client) => client.id === editingExportApi.oidc_client_id);
+                                            if (selected) void handleTestOidcConnection(selected);
+                                          }}
+                                        >
+                                          {isTestingOidcConnection ? (
+                                            <>
+                                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                              Testing...
+                                            </>
+                                          ) : (
+                                            "Test Selected Client"
+                                          )}
+                                        </Button>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="space-y-3">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div className="space-y-1">
+                                      <Label className="text-xs">Grant Type</Label>
+                                      <Select
+                                        value={editingExportApi.oidc.grantType}
+                                        onValueChange={(value) =>
+                                          updateApiOidc(editingExportApiIndex, { grantType: value as ExportApiOidcConfig["grantType"] })
+                                        }
+                                      >
+                                        <SelectTrigger>
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="client_credentials">client_credentials</SelectItem>
+                                          <SelectItem value="authorization_code">authorization_code</SelectItem>
+                                          <SelectItem value="custom">Custom...</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    {editingExportApi.oidc.grantType === "custom" && (
+                                      <div className="space-y-1">
+                                        <Label className="text-xs">Custom Grant Type</Label>
+                                        <Input
+                                          value={editingExportApi.oidc.customGrantType || ""}
+                                          onChange={(e) => updateApiOidc(editingExportApiIndex, { customGrantType: e.target.value })}
+                                          placeholder="urn:ietf:params:oauth:grant-type:..."
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div className="space-y-1">
+                                      <Label className="text-xs">Client ID</Label>
+                                      <Input
+                                        value={editingExportApi.oidc.clientId}
+                                        onChange={(e) => updateApiOidc(editingExportApiIndex, { clientId: e.target.value })}
+                                        placeholder="ptx-export-client"
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <Label className="text-xs">Client Secret</Label>
+                                      <Input
+                                        type="password"
+                                        value={editingExportApi.oidc.clientSecret}
+                                        onChange={(e) => updateApiOidc(editingExportApiIndex, { clientSecret: e.target.value })}
+                                        placeholder="Enter client secret"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label className="text-xs">Discovery URL</Label>
+                                    <Input
+                                      value={editingExportApi.oidc.discoveryUrl}
+                                      onChange={(e) => updateApiOidc(editingExportApiIndex, { discoveryUrl: e.target.value })}
+                                      placeholder="https://keycloak.example.com/realms/my-realm/.well-known/openid-configuration"
+                                    />
+                                    {editingExportApi.oidc.discoveryUrl.trim() && !isValidOidcDiscoveryUrl(editingExportApi.oidc.discoveryUrl) && (
+                                      <p className="text-xs text-destructive">
+                                        Must be a valid URL containing "/.well-known", e.g. .../.well-known/openid-configuration
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      disabled={isTestingOidcConnection}
+                                      onClick={() => editingExportApi.oidc && handleTestOidcConnection(editingExportApi.oidc)}
+                                    >
+                                      {isTestingOidcConnection ? (
+                                        <>
+                                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                          Testing...
+                                        </>
+                                      ) : (
+                                        "Test OIDC Connection"
+                                      )}
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {oidcTestError && (
+                                <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                                  {oidcTestError}
+                                </p>
+                              )}
+                              {oidcTestResult !== null && (
+                                <div className="rounded-md border bg-muted/30 p-3">
+                                  <Label className="text-xs">Test Result</Label>
+                                  <pre className="mt-1 max-h-64 w-full overflow-y-auto overflow-x-hidden text-xs font-mono whitespace-pre-wrap break-all">
+                                    {JSON.stringify(oidcTestResult, null, 2)}
+                                  </pre>
+                                </div>
+                              )}
+                            </CardContent>
+                          )}
+                        </Card>
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div className="space-y-1">
                             <Label className="text-xs">Post-Import Button Text (optional)</Label>

@@ -368,16 +368,10 @@ const AdminDashboard = () => {
                       Placeholders
                     </TabsTrigger>
                     <TabsTrigger
-                      value="external-oidc"
+                      value="oidc-provider"
                       className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
                     >
-                      External OIDC
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="external-oauth2"
-                      className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
-                    >
-                      OAuth2 Client
+                      OIDC Provider
                     </TabsTrigger>
                     <TabsTrigger
                       value="llm"
@@ -423,11 +417,8 @@ const AdminDashboard = () => {
               <TabsContent value="placeholders" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
                 <PlaceholdersConfigSection />
               </TabsContent>
-              <TabsContent value="external-oidc" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
-                <GlobalConfigSection section="external-oidc" />
-              </TabsContent>
-              <TabsContent value="external-oauth2" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
-                <GlobalConfigSection section="external-oauth2" />
+              <TabsContent value="oidc-provider" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
+                <GlobalConfigSection section="oidc-provider" />
               </TabsContent>
               <TabsContent value="llm" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
                 <LlmSettingsSection />

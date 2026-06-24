@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { ResultUrlInfo, formatResultUrlWithParams, buildResultRequestBody } from "@/utils/resultUrlResolver";
 import { isDebugMode } from "@/config/global.config";
 import { supabase } from "@/integrations/supabase/client";
-import { AnalyticsOption, CustomVisualizationConfig, DataResource, ExportApiConfig } from "@/types/dataspace";
+import { AnalyticsOption, CustomVisualizationConfig, DataResource, ExportApiConfig, ExportApiOidcConfig, OidcClientConfig } from "@/types/dataspace";
 import D3InsightChart, { LlmVisualizationSpec } from "@/components/results/D3InsightChart";
 
 interface ResultsViewProps {
@@ -17,6 +17,7 @@ interface ResultsViewProps {
   onRestart: () => void;
   resultUrlInfo?: ResultUrlInfo | null;
   exportApiConfigs?: ExportApiConfig[];
+  oidcClients?: OidcClientConfig[];
   forcedResultData?: unknown;
   forcedResultNotice?: string | null;
   organizationId?: string | null;
@@ -125,6 +126,51 @@ const formatDateTime = (value: Date | string | number | null | undefined): strin
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "N/A";
   return date.toLocaleString();
+};
+
+type OidcCredentialFields = Pick<ExportApiOidcConfig, "grantType" | "customGrantType" | "clientId" | "clientSecret" | "discoveryUrl">;
+
+// Resolves which OIDC credentials (if any) apply to an Export API config: a shared,
+// reusable OidcClientConfig referenced by oidc_client_id takes precedence; otherwise
+// falls back to the endpoint's own inline oidc fields.
+const resolveOidcForConfig = (
+  config: ExportApiConfig,
+  oidcClients: OidcClientConfig[],
+): OidcCredentialFields | null => {
+  if (!config.oidc?.enabled) return null;
+  if (config.oidc_client_id) {
+    const shared = oidcClients.find((client) => client.id === config.oidc_client_id);
+    if (shared) return shared;
+  }
+  return config.oidc;
+};
+
+// Fetches a fresh OIDC access token for an Export API endpoint (e.g. Keycloak client_credentials).
+// Called before every export/import request when the endpoint has OIDC enabled, so tokens are
+// never cached or persisted client-side.
+const resolveExportApiAccessToken = async (oidc: OidcCredentialFields): Promise<string> => {
+  const { data, error } = await supabase.functions.invoke("export-api-oidc-token", {
+    body: {
+      discoveryUrl: oidc.discoveryUrl,
+      clientId: oidc.clientId,
+      clientSecret: oidc.clientSecret,
+      grantType: oidc.grantType,
+      customGrantType: oidc.customGrantType,
+    },
+  });
+
+  if (error) {
+    throw new Error(`OIDC token request failed: ${error.message}`);
+  }
+
+  const payload = data as { ok?: boolean; data?: { access_token?: string; error?: string; error_description?: string } } | null;
+  const accessToken = payload?.data?.access_token;
+  if (!payload?.ok || !accessToken) {
+    const reason = payload?.data?.error_description || payload?.data?.error || "No access_token returned";
+    throw new Error(`OIDC token request failed: ${reason}`);
+  }
+
+  return accessToken;
 };
 
 const extractFirstMatchingValue = (
@@ -2318,6 +2364,7 @@ const ResultsView = ({
   onRestart,
   resultUrlInfo,
   exportApiConfigs = [],
+  oidcClients = [],
   forcedResultData,
   forcedResultNotice,
   organizationId,
@@ -3000,14 +3047,18 @@ const ResultsView = ({
       }
     }
 
+    const matchedConfig = selectedExportApi
+      ? compatibleExportApiConfigs.find((config) => config.name === selectedExportApi)
+      : compatibleExportApiConfigs.find((config) => config.url === apiUrl);
+
     return {
       targetUrl: finalUrl,
       bodies,
-      hasAuthorization: Boolean(apiAuthorization.trim()),
+      hasAuthorization: Boolean(matchedConfig && resolveOidcForConfig(matchedConfig, oidcClients)) || Boolean(apiAuthorization.trim()),
       forEachMode: bodies.length > 1,
       forEachRange,
     };
-  }, [apiUrl, apiAuthorization, apiParams, apiTemplate, resultData]);
+  }, [apiUrl, apiAuthorization, apiParams, apiTemplate, resultData, selectedExportApi, compatibleExportApiConfigs, oidcClients]);
 
   const buildApiRequestPreviewForConfig = useCallback((config: ExportApiConfig): ApiRequestPreview => {
     if (!config.url?.trim()) {
@@ -3033,11 +3084,11 @@ const ResultsView = ({
     return {
       targetUrl: finalUrl,
       bodies,
-      hasAuthorization: Boolean(config.authorization?.trim()),
+      hasAuthorization: Boolean(resolveOidcForConfig(config, oidcClients)) || Boolean(config.authorization?.trim()),
       forEachMode: bodies.length > 1,
       forEachRange,
     };
-  }, [resultData]);
+  }, [resultData, oidcClients]);
 
   const handlePreviewApiExport = useCallback(() => {
     try {
@@ -3061,7 +3112,15 @@ const ResultsView = ({
         apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
       };
 
-      if (apiAuthorization.trim()) {
+      const matchedConfig = selectedExportApi
+        ? compatibleExportApiConfigs.find((config) => config.name === selectedExportApi)
+        : compatibleExportApiConfigs.find((config) => config.url === apiUrl);
+
+      const matchedOidc = matchedConfig ? resolveOidcForConfig(matchedConfig, oidcClients) : null;
+      if (matchedOidc) {
+        const accessToken = await resolveExportApiAccessToken(matchedOidc);
+        proxyHeaders["x-result-authorization"] = accessToken;
+      } else if (apiAuthorization.trim()) {
         proxyHeaders["x-result-authorization"] = apiAuthorization;
       }
 
@@ -3086,9 +3145,6 @@ const ResultsView = ({
           : "Data sent to API successfully!"
       );
 
-      const matchedConfig = selectedExportApi
-        ? compatibleExportApiConfigs.find((config) => config.name === selectedExportApi)
-        : compatibleExportApiConfigs.find((config) => config.url === apiUrl);
       const postImportUrl = matchedConfig?.post_import_button_url?.trim();
       const postImportText = matchedConfig?.post_import_button_text?.trim();
       if (matchedConfig && postImportUrl && postImportText) {
@@ -3111,7 +3167,7 @@ const ResultsView = ({
     } finally {
       setIsSendingToApi(false);
     }
-  }, [apiAuthorization, apiUrl, buildApiRequestPreview, compatibleExportApiConfigs, selectedExportApi]);
+  }, [apiAuthorization, apiUrl, buildApiRequestPreview, compatibleExportApiConfigs, selectedExportApi, oidcClients]);
 
   const handleConfirmApiExport = useCallback(async () => {
     setIsPreviewOpen(false);
@@ -3137,7 +3193,11 @@ const ResultsView = ({
           apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
         };
 
-        if (config.authorization?.trim()) {
+        const configOidc = resolveOidcForConfig(config, oidcClients);
+        if (configOidc) {
+          const accessToken = await resolveExportApiAccessToken(configOidc);
+          proxyHeaders["x-result-authorization"] = accessToken;
+        } else if (config.authorization?.trim()) {
           proxyHeaders["x-result-authorization"] = config.authorization;
         }
 
@@ -3185,7 +3245,7 @@ const ResultsView = ({
     } finally {
       setIsSendingToApi(false);
     }
-  }, [buildApiRequestPreviewForConfig, compatibleExportApiConfigs]);
+  }, [buildApiRequestPreviewForConfig, compatibleExportApiConfigs, oidcClients]);
 
   const handleSelectExportApi = (configName: string) => {
     setSelectedExportApi(configName);

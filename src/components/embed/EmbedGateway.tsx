@@ -599,6 +599,7 @@ const EmbedGatewayContent = () => {
               onRestart={handleRestart}
               resultUrlInfo={resultUrlInfo}
               exportApiConfigs={pdcConfig?.export_api_configs}
+              oidcClients={pdcConfig?.oidc_clients}
               organizationId={validatedOrgId}
               orgExecutionToken={orgExecutionToken}
               llmPromptContext={llmPromptContext}

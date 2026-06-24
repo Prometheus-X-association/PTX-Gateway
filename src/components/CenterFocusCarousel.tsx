@@ -259,7 +259,7 @@ const CenterFocusCarousel = ({
                 className={`
                   absolute cursor-pointer overflow-hidden
                   rounded-xl border bg-card/95 backdrop-blur-xl
-                  transition-all duration-700 ease-[cubic-bezier(0.4,0,0.2,1)]
+                  transition-all duration-700 ease-in-out
                   ${isCenter 
                     ? 'w-[280px] sm:w-[360px] md:w-[420px] lg:w-[500px] xl:w-[560px] h-56 sm:h-60 md:h-64 shadow-2xl' 
                     : 'w-24 sm:w-28 md:w-32 lg:w-40 h-40 sm:h-44 md:h-48 shadow-lg'

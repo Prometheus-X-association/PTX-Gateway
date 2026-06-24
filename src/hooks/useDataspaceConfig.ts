@@ -13,6 +13,7 @@ import {
   ServiceChainService,
   ServiceChainEmbeddedResource,
   ExportApiConfig,
+  OidcClientConfig,
   CustomVisualizationConfig,
   CustomVisualizationLibraryBundle,
   DataSelectionSettings,
@@ -137,6 +138,14 @@ const getResultPageExportApiConfigs = (features: unknown): ExportApiConfig[] => 
   const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
   return Array.isArray(resultPage.exportApiConfigs)
     ? (resultPage.exportApiConfigs as unknown as ExportApiConfig[])
+    : [];
+};
+
+const getResultPageOidcClients = (features: unknown): OidcClientConfig[] => {
+  if (!isRecord(features)) return [];
+  const resultPage = isRecord(features.resultPage) ? features.resultPage : {};
+  return Array.isArray(resultPage.oidcClients)
+    ? (resultPage.oidcClients as unknown as OidcClientConfig[])
     : [];
 };
 
@@ -298,6 +307,7 @@ export const useDataspaceConfig = (
       const exportApiConfigs = resultPageExportApiConfigs.length > 0
         ? resultPageExportApiConfigs
         : legacyExportApiConfigs;
+      const oidcClients = getResultPageOidcClients(effectiveGlobalFeatures);
       const customVisualizations = getResultPageCustomVisualizations(effectiveGlobalFeatures);
       const dataSelectionSettings = getDataSelectionSettings(effectiveGlobalFeatures);
       const processingPageSettings = getProcessingPageSettings(effectiveGlobalFeatures);
@@ -314,6 +324,7 @@ export const useDataspaceConfig = (
             is_active: pdcData.is_active ?? true,
             organization_id: pdcData.organization_id,
             export_api_configs: exportApiConfigs,
+            oidc_clients: oidcClients,
           }
         : null;
 

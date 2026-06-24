@@ -4,6 +4,31 @@
 export type VisualizationType = 'upload_document' | 'manual_json_input' | 'data_api';
 
 // PDC Configuration from dataspace_configs table
+// OIDC client-credentials configuration for an Export API endpoint.
+// When enabled, the gateway fetches a fresh access token from the discovery
+// document's token_endpoint before every export/import request, instead of
+// using the manually entered "authorization" value.
+export interface ExportApiOidcConfig {
+  enabled: boolean;
+  grantType: "client_credentials" | "authorization_code" | "custom";
+  customGrantType?: string;
+  clientId: string;
+  clientSecret: string;
+  discoveryUrl: string;
+}
+
+// A named, reusable OIDC client that can be shared across multiple Export API
+// endpoints, managed independently from any single endpoint.
+export interface OidcClientConfig {
+  id: string;
+  name: string;
+  grantType: "client_credentials" | "authorization_code" | "custom";
+  customGrantType?: string;
+  clientId: string;
+  clientSecret: string;
+  discoveryUrl: string;
+}
+
 // Export API configuration for admin-managed endpoints
 export interface ExportApiConfig {
   id?: string;
@@ -13,6 +38,11 @@ export interface ExportApiConfig {
   api_version?: string;
   is_active?: boolean;
   authorization?: string;
+  // Inline/private OIDC config for this endpoint only.
+  oidc?: ExportApiOidcConfig;
+  // When set (and oidc.enabled is true), references a shared OidcClientConfig
+  // (see PdcConfig.oidc_clients) instead of using the inline oidc fields above.
+  oidc_client_id?: string;
   params?: Array<{ key: string; value: string }>;
   body_template?: string;
   target_resources?: string[];
@@ -106,6 +136,7 @@ export interface PdcConfig {
   is_active: boolean;
   organization_id: string | null;
   export_api_configs?: ExportApiConfig[];
+  oidc_clients?: OidcClientConfig[];
 }
 
 // Parameter structure (stored as JSONB)
