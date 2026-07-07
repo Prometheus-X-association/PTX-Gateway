@@ -1,5 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
+// Deno globals — available at runtime; declared here for TypeScript LSP compatibility.
+declare const Deno: { env: { get(key: string): string | undefined } };
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -35,7 +38,33 @@ const resolveGrantType = (body: TokenRequestBody): string => {
   return body.grantType || "client_credentials";
 };
 
-serve(async (req) => {
+// Rewrite any URL that is only reachable from the host machine (localhost, 127.0.0.1,
+// or internal Supabase container hostnames) to the Docker-internal SUPABASE_URL so
+// that edge functions running inside the container network can reach each other.
+// External URLs (ngrok, public domains, etc.) are returned unchanged.
+const resolveInternalUrl = (url: string): string => {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname;
+    const isHostOnly =
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host.startsWith("supabase_edge_runtime") ||
+      host.startsWith("supabase_kong");
+    if (!isHostOnly) return url;
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    if (!supabaseUrl) return url;
+    const internalBase = new URL(supabaseUrl);
+    parsed.protocol = internalBase.protocol;
+    parsed.hostname = internalBase.hostname;
+    parsed.port = internalBase.port;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+};
+
+serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -72,8 +101,10 @@ serve(async (req) => {
       );
     }
 
-    // Step 1: fetch the discovery document and resolve token_endpoint.
-    const discoveryResponse = await fetch(body.discoveryUrl, {
+    // Step 1: fetch the discovery document.
+    // Rewrite localhost / host-only URLs so the fetch works from inside Docker.
+    const resolvedDiscoveryUrl = resolveInternalUrl(body.discoveryUrl);
+    const discoveryResponse = await fetch(resolvedDiscoveryUrl, {
       method: "GET",
       headers: { Accept: "application/json" },
     });
@@ -107,13 +138,16 @@ serve(async (req) => {
       );
     }
 
-    // Step 2: request the access token from the resolved token endpoint.
+    // Step 2: request the access token.
+    // Apply the same internal rewrite to the token_endpoint extracted from the doc.
+    const resolvedTokenEndpoint = resolveInternalUrl(tokenEndpoint);
+
     const form = new URLSearchParams();
     form.set("grant_type", grantType);
     form.set("client_id", body.clientId);
     form.set("client_secret", body.clientSecret);
 
-    const tokenResponse = await fetch(tokenEndpoint, {
+    const tokenResponse = await fetch(resolvedTokenEndpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -135,6 +169,7 @@ serve(async (req) => {
         ok: tokenResponse.ok,
         status: tokenResponse.status,
         tokenEndpoint,
+        resolvedTokenEndpoint: resolvedTokenEndpoint !== tokenEndpoint ? resolvedTokenEndpoint : undefined,
         data: tokenResponseBody,
       }),
       {

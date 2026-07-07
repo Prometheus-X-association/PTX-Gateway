@@ -319,12 +319,6 @@ serve(async (req) => {
     }
 
     const body = (await req.json()) as LlmInsightsRequest;
-    if (body.result === undefined || body.result === null) {
-      return new Response(JSON.stringify({ error: "Missing result payload" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
     const authHeader = req.headers.get("Authorization");
     const requestedOrgId = req.headers.get("x-organization-id");
@@ -380,6 +374,14 @@ serve(async (req) => {
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    // Only "generate" requires a result payload — validate here after the status early-return.
+    if (body.result === undefined || body.result === null) {
+      return new Response(JSON.stringify({ error: "Missing result payload" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     if (!llmConfig.enabled) {

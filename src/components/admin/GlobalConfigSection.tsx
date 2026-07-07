@@ -155,12 +155,24 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
   const [leaveSharedIssuerId, setLeaveSharedIssuerId] = useState<string | null>(null);
   const [deleteSharedIssuerId, setDeleteSharedIssuerId] = useState<string | null>(null);
 
+  // Discovery document — fetched live so the displayed URLs always reflect the
+  // OIDC_PUBLIC_BASE_URL that the edge function is actually using, rather than
+  // being built from VITE_SUPABASE_URL which may differ (e.g. when ngrok is active).
+  const [discoveryDoc, setDiscoveryDoc] = useState<Record<string, string> | null>(null);
+
   const orgSlug = user?.organization?.slug || "";
-  const issuerUrl = orgSlug
-    ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/oidc-provider/${orgSlug}`
-    : "";
-  const buildSharedIssuerUrl = (slug: string) =>
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/oidc-provider/shared/${slug}`;
+  // Local base URL: used only to reach the discovery endpoint from this browser.
+  const localBase = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/oidc-provider`;
+  // issuerUrl falls back to the local-computed value until the discovery doc loads.
+  const issuerUrl = discoveryDoc?.issuer
+    || (orgSlug ? `${localBase}/${orgSlug}` : "");
+  const buildSharedIssuerUrl = (slug: string) => {
+    // Prefer the public base from the discovery doc if available.
+    const pubBase = discoveryDoc?.issuer
+      ? discoveryDoc.issuer.replace(/\/[^/]+$/, "")  // strip org-slug segment
+      : localBase;
+    return `${pubBase}/shared/${slug}`;
+  };
 
   const callOidcProviderAdmin = async <T = unknown,>(action: string, extra?: Record<string, unknown>): Promise<T> => {
     if (!user?.organization?.id) throw new Error("Missing organization context");
@@ -171,6 +183,22 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
     const payload = data as { data?: T; error?: string } | null;
     if (payload?.error) throw new Error(payload.error);
     return payload?.data as T;
+  };
+
+  // Fetch the live discovery document so the displayed URLs always reflect
+  // what the edge function is publishing (OIDC_PUBLIC_BASE_URL), not what the
+  // frontend compile-time env (VITE_SUPABASE_URL) happens to be.
+  const fetchDiscoveryDoc = async () => {
+    if (!orgSlug) return;
+    try {
+      const res = await fetch(`${localBase}/${orgSlug}/.well-known/openid-configuration`);
+      if (res.ok) {
+        const doc = await res.json() as Record<string, string>;
+        setDiscoveryDoc(doc);
+      }
+    } catch {
+      // non-fatal: fall back to computed issuerUrl
+    }
   };
 
   const loadOidcProviderData = async () => {
@@ -184,6 +212,8 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
       setOidcKeyInfo(keyInfo);
       setOidcClients(clients || []);
       setSharedIssuers(issuers || []);
+      // Non-blocking: fetch discovery doc to get the real public URLs.
+      fetchDiscoveryDoc();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load OIDC provider settings");
     }
@@ -853,10 +883,10 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {[
-                    { label: "Issuer", value: issuerUrl, field: "issuer" },
-                    { label: "Discovery URL", value: issuerUrl ? `${issuerUrl}/.well-known/openid-configuration` : "", field: "discovery" },
-                    { label: "JWKS URL", value: issuerUrl ? `${issuerUrl}/.well-known/jwks.json` : "", field: "jwks" },
-                    { label: "Token URL", value: issuerUrl ? `${issuerUrl}/token` : "", field: "token" },
+                    { label: "Issuer", value: discoveryDoc?.issuer || issuerUrl, field: "issuer" },
+                    { label: "Discovery URL", value: discoveryDoc?.issuer ? `${discoveryDoc.issuer}/.well-known/openid-configuration` : (issuerUrl ? `${issuerUrl}/.well-known/openid-configuration` : ""), field: "discovery" },
+                    { label: "JWKS URL", value: discoveryDoc?.jwks_uri || (issuerUrl ? `${issuerUrl}/.well-known/jwks.json` : ""), field: "jwks" },
+                    { label: "Token URL", value: discoveryDoc?.token_endpoint || (issuerUrl ? `${issuerUrl}/token` : ""), field: "token" },
                   ].map((row) => (
                     <div key={row.field} className="space-y-1">
                       <Label className="text-xs">{row.label}</Label>
