@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Maximize2, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink, Copy } from "lucide-react";
+import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink, Copy } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -961,7 +961,7 @@ interface JsonNodeProps {
   depth: number;
   isLast: boolean;
   isArrayItem: boolean;
-  collapsedPaths: Set<string>;
+  expandedPaths: Set<string>;
   editingPath: string | null;
   editingType: 'key' | 'value' | null;
   onToggle: (path: string) => void;
@@ -973,17 +973,59 @@ interface JsonNodeProps {
   onDelete: (path: string) => void;
 }
 
+const JSON_CHILD_PAGE_SIZE = 100;
+
+const getVisibleJsonEntries = (
+  value: unknown,
+  isArray: boolean,
+  offset: number,
+  limit: number,
+): { entries: Array<[string, unknown]>; hasPrevious: boolean; hasMore: boolean } => {
+  const entries: Array<[string, unknown]> = [];
+
+  if (isArray) {
+    const items = value as unknown[];
+    const start = Math.min(offset, items.length);
+    const end = Math.min(start + limit, items.length);
+    for (let index = start; index < end; index += 1) {
+      entries.push([String(index), items[index]]);
+    }
+    return { entries, hasPrevious: start > 0, hasMore: end < items.length };
+  }
+
+  if (typeof value !== "object" || value === null) {
+    return { entries, hasPrevious: false, hasMore: false };
+  }
+
+  let skipped = 0;
+  for (const key in value as Record<string, unknown>) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    if (skipped < offset) {
+      skipped += 1;
+      continue;
+    }
+    if (entries.length >= limit) return { entries, hasPrevious: offset > 0, hasMore: true };
+    entries.push([key, (value as Record<string, unknown>)[key]]);
+  }
+
+  return { entries, hasPrevious: offset > 0, hasMore: false };
+};
+
 const JsonNode = ({ 
-  keyName, value, path, depth, isLast, isArrayItem, collapsedPaths, editingPath, editingType,
+  keyName, value, path, depth, isLast, isArrayItem, expandedPaths, editingPath, editingType,
   onToggle, onValueEdit, onKeyEdit, onStartEdit, onEndEdit, onAdd, onDelete
 }: JsonNodeProps) => {
   const [tempKeyName, setTempKeyName] = useState(keyName || '');
   const [tempValue, setTempValue] = useState('');
+  const [childPage, setChildPage] = useState(0);
+  useEffect(() => setChildPage(0), [value]);
   const indent = depth * 20;
-  const isCollapsed = collapsedPaths.has(path);
   const isObject = typeof value === 'object' && value !== null && !Array.isArray(value);
   const isArray = Array.isArray(value);
   const isExpandable = isObject || isArray;
+  // Large result payloads can contain thousands of nodes. Keep every expandable
+  // branch closed until the user explicitly opens that branch.
+  const isCollapsed = isExpandable && !expandedPaths.has(path);
   const isEditingThisKey = editingPath === path && editingType === 'key';
   const isEditingThisValue = editingPath === path && editingType === 'value';
 
@@ -1137,9 +1179,11 @@ const JsonNode = ({
   }
 
   // Object or Array
-  const entries = isArray 
-    ? (value as unknown[]).map((v, i) => [String(i), v] as [string, unknown])
-    : Object.entries(value as object);
+  // Do not enumerate a collapsed branch. When opened, render a bounded page so a
+  // result such as `edges` (tens of thousands of items) cannot block the main thread.
+  const { entries, hasPrevious: hasPreviousEntries, hasMore: hasMoreEntries } = isCollapsed
+    ? { entries: [] as Array<[string, unknown]>, hasPrevious: false, hasMore: false }
+    : getVisibleJsonEntries(value, isArray, childPage * JSON_CHILD_PAGE_SIZE, JSON_CHILD_PAGE_SIZE);
   const openBracket = isArray ? '[' : '{';
   const closeBracket = isArray ? ']' : '}';
 
@@ -1197,9 +1241,9 @@ const JsonNode = ({
               value={val}
               path={`${path}.${key}`}
               depth={depth + 1}
-              isLast={index === entries.length - 1}
+              isLast={index === entries.length - 1 && !hasMoreEntries}
               isArrayItem={isArray}
-              collapsedPaths={collapsedPaths}
+              expandedPaths={expandedPaths}
               editingPath={editingPath}
               editingType={editingType}
               onToggle={onToggle}
@@ -1211,6 +1255,28 @@ const JsonNode = ({
               onDelete={onDelete}
             />
           ))}
+          {(hasPreviousEntries || hasMoreEntries) && (
+            <div style={{ paddingLeft: `${indent + 20}px` }} className="flex gap-3 py-1">
+              {hasPreviousEntries && (
+                <button
+                  type="button"
+                  onClick={() => setChildPage((page) => Math.max(0, page - 1))}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Previous {JSON_CHILD_PAGE_SIZE} entries
+                </button>
+              )}
+              {hasMoreEntries && (
+                <button
+                  type="button"
+                  onClick={() => setChildPage((page) => page + 1)}
+                  className="text-xs text-primary hover:underline"
+                >
+                  Next {JSON_CHILD_PAGE_SIZE} entries
+                </button>
+              )}
+            </div>
+          )}
           <div style={{ paddingLeft: `${indent}px` }} className="leading-relaxed">
             <span className="w-5 inline-block" />
             <span className="text-foreground">{closeBracket}</span>
@@ -1223,12 +1289,12 @@ const JsonNode = ({
 };
 
 const CollapsibleJson = ({ data, onChange }: CollapsibleJsonProps) => {
-  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [editingType, setEditingType] = useState<'key' | 'value' | null>(null);
 
   const togglePath = useCallback((path: string) => {
-    setCollapsedPaths(prev => {
+    setExpandedPaths(prev => {
       const next = new Set(prev);
       if (next.has(path)) {
         next.delete(path);
@@ -1239,20 +1305,9 @@ const CollapsibleJson = ({ data, onChange }: CollapsibleJsonProps) => {
     });
   }, []);
 
-  const expandAll = useCallback(() => setCollapsedPaths(new Set()), []);
-
-  const collapseAll = useCallback(() => {
-    const paths = new Set<string>();
-    const collectPaths = (obj: unknown, path: string) => {
-      if (typeof obj === 'object' && obj !== null) {
-        paths.add(path);
-        const entries = Array.isArray(obj) ? obj.map((v, i) => [String(i), v]) : Object.entries(obj);
-        entries.forEach(([key, val]) => collectPaths(val, `${path}.${key}`));
-      }
-    };
-    collectPaths(data, 'root');
-    setCollapsedPaths(paths);
-  }, [data]);
+  // This deliberately does not walk the result tree: a recursive "Collapse All"
+  // was itself expensive enough to block the UI for large Digital-Twin results.
+  const collapseAll = useCallback(() => setExpandedPaths(new Set()), []);
 
   const setNestedValue = useCallback((obj: unknown, path: string, value: unknown): unknown => {
     const keys = path.split('.').filter(k => k && k !== 'root');
@@ -1339,10 +1394,6 @@ const CollapsibleJson = ({ data, onChange }: CollapsibleJsonProps) => {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end gap-2">
-        <button onClick={expandAll} className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-s)]">
-          <Maximize2 className="w-3.5 h-3.5" />
-          Expand All
-        </button>
         <button onClick={collapseAll} className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-s)]">
           <Minimize2 className="w-3.5 h-3.5" />
           Collapse All
@@ -1357,7 +1408,7 @@ const CollapsibleJson = ({ data, onChange }: CollapsibleJsonProps) => {
           depth={0}
           isLast={true}
           isArrayItem={false}
-          collapsedPaths={collapsedPaths}
+          expandedPaths={expandedPaths}
           editingPath={editingPath}
           editingType={editingType}
           onToggle={togglePath}
@@ -1397,24 +1448,51 @@ interface FlattenedRow {
   isExpandable: boolean;
   parentPath: string;
   isArrayItem: boolean;
+  hasPreviousChildren: boolean;
+  hasMoreChildren: boolean;
 }
 
-const flattenData = (data: unknown, parentPath = '', depth = 0, parentIsArray = false): FlattenedRow[] => {
+const flattenData = (
+  data: unknown,
+  expandedPaths: Set<string>,
+  childPages: Map<string, number>,
+  parentPath = '',
+  depth = 0,
+  parentIsArray = false,
+): FlattenedRow[] => {
   const rows: FlattenedRow[] = [];
   if (typeof data !== 'object' || data === null) return rows;
 
   const isArray = Array.isArray(data);
-  const entries = Object.entries(data);
+  const pagePath = parentPath || 'root';
+  const page = childPages.get(pagePath) || 0;
+  const { entries } = getVisibleJsonEntries(data, isArray, page * JSON_CHILD_PAGE_SIZE, JSON_CHILD_PAGE_SIZE);
   
   for (const [key, value] of entries) {
     const keyPath = parentPath ? `${parentPath}.${key}` : key;
     const isExpandable = typeof value === 'object' && value !== null;
     const displayKey = isArray ? `[${key}]` : key;
+    const isExpanded = isExpandable && expandedPaths.has(keyPath);
+    const childPage = childPages.get(keyPath) || 0;
+    const childWindow = isExpanded
+      ? getVisibleJsonEntries(value, Array.isArray(value), childPage * JSON_CHILD_PAGE_SIZE, JSON_CHILD_PAGE_SIZE)
+      : { hasPrevious: false, hasMore: false };
     
-    rows.push({ keyPath, displayKey, actualKey: key, value, depth, isExpandable, parentPath, isArrayItem: parentIsArray });
+    rows.push({
+      keyPath,
+      displayKey,
+      actualKey: key,
+      value,
+      depth,
+      isExpandable,
+      parentPath,
+      isArrayItem: parentIsArray,
+      hasPreviousChildren: childWindow.hasPrevious,
+      hasMoreChildren: childWindow.hasMore,
+    });
     
-    if (isExpandable) {
-      rows.push(...flattenData(value, keyPath, depth + 1, Array.isArray(value)));
+    if (isExpanded) {
+      rows.push(...flattenData(value, expandedPaths, childPages, keyPath, depth + 1, Array.isArray(value)));
     }
   }
   return rows;
@@ -1429,25 +1507,20 @@ interface NestedTableProps {
 }
 
 const NestedTable = ({ data, onEdit, onKeyEdit, onAdd, onDelete }: NestedTableProps) => {
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => {
-    const initial = new Set<string>();
-    if (typeof data === 'object' && data !== null) {
-      Object.keys(data).forEach(key => initial.add(key));
-    }
-    return initial;
-  });
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [childPages, setChildPages] = useState<Map<string, number>>(new Map());
   const [editingKeyPath, setEditingKeyPath] = useState<string | null>(null);
 
-  const allRows = useMemo(() => flattenData(data), [data]);
+  const visibleRows = useMemo(
+    () => flattenData(data, expandedPaths, childPages),
+    [data, expandedPaths, childPages],
+  );
 
-  // Reset expanded paths when data structure changes significantly
+  // Reset the visible tree and its paging whenever a new result arrives.
   useEffect(() => {
-    if (typeof data === 'object' && data !== null) {
-      const newInitial = new Set<string>();
-      Object.keys(data).forEach(key => newInitial.add(key));
-      setExpandedPaths(newInitial);
-    }
-  }, []);
+    setExpandedPaths(new Set());
+    setChildPages(new Map());
+  }, [data]);
 
   const toggleExpand = (path: string) => {
     setExpandedPaths(prev => {
@@ -1463,18 +1536,13 @@ const NestedTable = ({ data, onEdit, onKeyEdit, onAdd, onDelete }: NestedTablePr
     });
   };
 
-  const isVisible = (row: FlattenedRow): boolean => {
-    if (row.depth === 0) return true;
-    const parts = row.parentPath.split('.');
-    let currentPath = '';
-    for (const part of parts) {
-      currentPath = currentPath ? `${currentPath}.${part}` : part;
-      if (!expandedPaths.has(currentPath)) return false;
-    }
-    return true;
+  const moveChildPage = (path: string, offset: number) => {
+    setChildPages((previous) => {
+      const next = new Map(previous);
+      next.set(path, Math.max(0, (next.get(path) || 0) + offset));
+      return next;
+    });
   };
-
-  const visibleRows = allRows.filter(isVisible);
 
   const handleKeySubmit = (row: FlattenedRow, newKeyName: string) => {
     if (newKeyName && newKeyName !== row.actualKey) {
@@ -1544,9 +1612,29 @@ const NestedTable = ({ data, onEdit, onKeyEdit, onAdd, onDelete }: NestedTablePr
                     </TableCell>
                     <TableCell className="py-2">
                       {row.isExpandable ? (
-                        <span className="text-sm text-muted-foreground italic">
-                          {Array.isArray(row.value) ? `${(row.value as unknown[]).length} items` : `${Object.keys(row.value as object).length} properties`}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="text-sm text-muted-foreground italic">
+                            {Array.isArray(row.value) ? `${(row.value as unknown[]).length} items` : `${Object.keys(row.value as object).length} properties`}
+                          </span>
+                          {row.hasPreviousChildren && (
+                            <button
+                              type="button"
+                              onClick={() => moveChildPage(row.keyPath, -1)}
+                              className="text-xs text-primary hover:underline"
+                            >
+                              Previous {JSON_CHILD_PAGE_SIZE}
+                            </button>
+                          )}
+                          {row.hasMoreChildren && (
+                            <button
+                              type="button"
+                              onClick={() => moveChildPage(row.keyPath, 1)}
+                              className="text-xs text-primary hover:underline"
+                            >
+                              Next {JSON_CHILD_PAGE_SIZE}
+                            </button>
+                          )}
+                        </div>
                       ) : (
                         <Input
                           value={String(row.value ?? '')}
