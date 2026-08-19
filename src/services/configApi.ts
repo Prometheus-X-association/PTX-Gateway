@@ -109,7 +109,26 @@ export interface GlobalConfigData {
     allowContinueOnPdcError?: boolean;
     llmInsights?: {
       enabled?: boolean;
-      provider?: 'openai' | 'custom';
+      providers?: Array<{
+        id?: string;
+        name?: string;
+        apiBaseUrl?: string;
+        apiKey?: string;
+        model?: string;
+        enabled?: boolean;
+      }>;
+      insightSystemPrompt?: string;
+      chatSystemPrompt?: string;
+      mcpServers?: Array<{
+        id?: string;
+        name?: string;
+        url?: string;
+        apiKey?: string;
+        enabled?: boolean;
+      }>;
+      predefinedPrompts?: string[];
+      // legacy flat fields (read-only, migrated on load)
+      provider?: string;
       apiBaseUrl?: string;
       apiKey?: string;
       model?: string;

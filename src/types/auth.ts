@@ -70,11 +70,24 @@ export interface GlobalConfig {
     allowContinueOnPdcError: boolean;
     llmInsights: {
       enabled: boolean;
-      provider: 'openai' | 'custom';
-      apiBaseUrl: string;
-      apiKey: string;
-      model: string;
-      promptTemplate: string;
+      providers: Array<{
+        id: string;
+        name: string;
+        apiBaseUrl: string;
+        apiKey: string;
+        model: string;
+        enabled: boolean;
+      }>;
+      insightSystemPrompt: string;
+      chatSystemPrompt: string;
+      mcpServers: Array<{
+        id: string;
+        name: string;
+        url: string;
+        apiKey: string;
+        enabled: boolean;
+      }>;
+      predefinedPrompts: string[];
     };
     maxFileSizeMB: number;
     maxFilesCount: number;

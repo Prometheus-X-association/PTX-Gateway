@@ -21,11 +21,24 @@ export interface GlobalConfig {
     allowContinueOnPdcError: boolean;
     llmInsights: {
       enabled: boolean;
-      provider: "openai" | "custom";
-      apiBaseUrl: string;
-      apiKey: string;
-      model: string;
-      promptTemplate: string;
+      providers: Array<{
+        id: string;
+        name: string;
+        apiBaseUrl: string;
+        apiKey: string;
+        model: string;
+        enabled: boolean;
+      }>;
+      insightSystemPrompt: string;
+      chatSystemPrompt: string;
+      mcpServers: Array<{
+        id: string;
+        name: string;
+        url: string;
+        apiKey: string;
+        enabled: boolean;
+      }>;
+      predefinedPrompts: string[];
     };
     maxFileSizeMB: number;
     maxFilesCount: number;
@@ -60,12 +73,20 @@ export const globalConfig: GlobalConfig = {
     allowContinueOnPdcError: false,
     llmInsights: {
       enabled: false,
-      provider: "openai",
-      apiBaseUrl: "https://api.openai.com/v1",
-      apiKey: "",
-      model: "gpt-4o-mini",
-      promptTemplate:
+      providers: [],
+      insightSystemPrompt:
         "Analyze the JSON data and generate practical insights for business users. Return JSON only with keys: summary, insights (array of strings), visualization (object with type, title, xKey, yKey, categoryKey, valueKey, and data array).",
+      chatSystemPrompt:
+        "You are a data analyst assistant. The user is viewing a result dataset provided in the system context. Answer questions about it clearly and concisely. When asked for a chart or visualization, return a self-contained HTML snippet using Apache ECharts from CDN.",
+      mcpServers: [],
+      predefinedPrompts: [
+        "Summarize the key findings in 3 bullet points",
+        "Which item has the highest value and why might that be?",
+        "Show me a bar chart of the top 10 results",
+        "Are there any outliers or anomalies in this data?",
+        "What trends do you see?",
+        "Group these results by category and visualize it",
+      ],
     },
     maxFileSizeMB: 50,
     maxFilesCount: 10,

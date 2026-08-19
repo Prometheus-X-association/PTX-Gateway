@@ -26,14 +26,92 @@ interface ExecutionTokenPayload {
   exp: number;
 }
 
+interface LlmProvider {
+  id?: string;
+  name?: string;
+  apiBaseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  enabled?: boolean;
+}
+
 interface LlmInsightsConfig {
   enabled?: boolean;
-  provider?: "openai" | "custom";
+  // new format
+  providers?: LlmProvider[];
+  insightSystemPrompt?: string;
+  chatSystemPrompt?: string;
+  mcpServers?: unknown[];
+  predefinedPrompts?: string[];
+  // legacy flat fields (backward compat)
   apiBaseUrl?: string;
   apiKey?: string;
   model?: string;
   promptTemplate?: string;
 }
+
+const resolveProviders = (cfg: LlmInsightsConfig): LlmProvider[] => {
+  if (Array.isArray(cfg.providers) && cfg.providers.length > 0) {
+    return cfg.providers.filter((p) => p.enabled !== false);
+  }
+  // migrate old flat format
+  if (cfg.apiKey?.trim()) {
+    return [{
+      apiBaseUrl: cfg.apiBaseUrl || "https://api.openai.com/v1",
+      apiKey: cfg.apiKey,
+      model: cfg.model || "gpt-4o-mini",
+      enabled: true,
+    }];
+  }
+  return [];
+};
+
+const callWithFallback = async (
+  providers: LlmProvider[],
+  messages: Array<{ role: string; content: string }>,
+  temperature = 0.2,
+): Promise<{ text: string; providerName: string }> => {
+  const errors: string[] = [];
+
+  for (const provider of providers) {
+    const apiKey = provider.apiKey?.trim();
+    const model = provider.model?.trim();
+    const baseUrl = (provider.apiBaseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
+    if (!apiKey || !model) {
+      errors.push(`${provider.name || model || "unnamed"}: missing apiKey or model`);
+      continue;
+    }
+    const url = baseUrl.endsWith("/chat/completions")
+      ? baseUrl
+      : `${baseUrl}/chat/completions`;
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model, temperature, messages }),
+      });
+      const raw = await resp.text();
+      if (!resp.ok) {
+        errors.push(`${provider.name || model}: ${resp.status} ${raw.slice(0, 200)}`);
+        continue;
+      }
+      let content = "";
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        content = String(
+          ((parsed.choices as Array<Record<string, unknown>> | undefined)?.[0]?.message as Record<string, unknown> | undefined)?.content || ""
+        );
+      } catch {
+        content = raw;
+      }
+      return { text: content, providerName: provider.name || model };
+    } catch (e) {
+      errors.push(`${provider.name || model}: ${String(e)}`);
+    }
+  }
+
+  throw new Error(`All providers failed:\n${errors.join("\n")}`);
+};
 
 type SupportedChartType =
   | "bar"
@@ -362,15 +440,14 @@ serve(async (req) => {
 
     const features = toObject(globalConfig.features);
     const llmConfig = toObject(features.llmInsights) as LlmInsightsConfig;
-    const apiKey = llmConfig.apiKey?.trim();
-    const model = llmConfig.model?.trim();
+    const providers = resolveProviders(llmConfig);
 
     if (body.action === "status") {
       return new Response(
         JSON.stringify({
           ok: true,
           enabled: Boolean(llmConfig.enabled),
-          configured: Boolean(apiKey && model),
+          configured: providers.some((p) => p.apiKey?.trim() && p.model?.trim()),
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -391,27 +468,21 @@ serve(async (req) => {
       });
     }
 
-    const baseUrl = llmConfig.apiBaseUrl?.trim() || "https://api.openai.com/v1";
-
-    if (!apiKey || !model) {
-      return new Response(JSON.stringify({ error: "LLM API key or model is missing in LLM Settings" }), {
+    if (providers.length === 0) {
+      return new Response(JSON.stringify({ error: "No LLM providers configured in LLM Settings" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const completionUrl = baseUrl.endsWith("/chat/completions")
-      ? baseUrl
-      : `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
-
     const resultJson = JSON.stringify(body.result, null, 2);
     const clippedJson = resultJson.length > 30000 ? `${resultJson.slice(0, 30000)}\n...<truncated>` : resultJson;
 
-    const promptTemplate = llmConfig.promptTemplate?.trim() ||
-      "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best visualization type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide compatible structure: data[] for cartesian/pie/radial, nodes[]+links[] for network, hierarchy object for treemap, and data[] with lat/lng for map. Keep labels concise and chart-friendly; limit to at most 12 major points and aggregate extras as 'Other'. User can switch to another compatible chart type in UI.";
-    const basePrompt = promptTemplate.includes("{{json}}")
-      ? promptTemplate.replace(/\{\{json\}\}/g, clippedJson)
-      : `${promptTemplate}\n\nJSON:\n${clippedJson}`;
+    const insightPrompt = (llmConfig.insightSystemPrompt?.trim() || llmConfig.promptTemplate?.trim() ||
+      "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best visualization type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide compatible structure: data[] for cartesian/pie/radial, nodes[]+links[] for network, hierarchy object for treemap, and data[] with lat/lng for map. Keep labels concise and chart-friendly; limit to at most 12 major points and aggregate extras as 'Other'. User can switch to another compatible chart type in UI.");
+    const basePrompt = insightPrompt.includes("{{json}}")
+      ? insightPrompt.replace(/\{\{json\}\}/g, clippedJson)
+      : `${insightPrompt}\n\nJSON:\n${clippedJson}`;
     const contextText = typeof body.prompt_context === "string" ? body.prompt_context.trim() : "";
     const forcedChartType = contextText ? extractForcedChartType(contextText) : null;
     const chartSelectionRule = forcedChartType
@@ -421,45 +492,25 @@ serve(async (req) => {
       ? `${basePrompt}\n\nAdditional domain context from gateway configuration:\n${contextText}`
       : basePrompt;
 
-    const llmResponse = await fetch(completionUrl, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        messages: [
+    let content: string;
+    try {
+      const result = await callWithFallback(
+        providers,
+        [
           {
             role: "system",
-            content:
-              `You are a data analyst. Return valid JSON only. Required shape: { summary: string, insights: string[], visualization: { type: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map', title: string, xKey?: string, yKey?: string, categoryKey?: string, valueKey?: string, latKey?: string, lngKey?: string, sourceKey?: string, targetKey?: string, data?: object[], nodes?: object[], links?: object[], hierarchy?: object } }. ${chartSelectionRule} Use structure that matches chosen type. Keep labels concise and aggregate long tails as 'Other'.`,
+            content: `You are a data analyst. Return valid JSON only. Required shape: { summary: string, insights: string[], visualization: { type: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map', title: string, xKey?: string, yKey?: string, categoryKey?: string, valueKey?: string, latKey?: string, lngKey?: string, sourceKey?: string, targetKey?: string, data?: object[], nodes?: object[], links?: object[], hierarchy?: object } }. ${chartSelectionRule} Use structure that matches chosen type. Keep labels concise and aggregate long tails as 'Other'.`,
           },
-          {
-            role: "user",
-            content: userPrompt,
-          },
+          { role: "user", content: userPrompt },
         ],
-      }),
-    });
-
-    const rawText = await llmResponse.text();
-    if (!llmResponse.ok) {
+        0.2,
+      );
+      content = result.text;
+    } catch (e) {
       return new Response(
-        JSON.stringify({ error: `LLM request failed: ${llmResponse.status} ${rawText}` }),
+        JSON.stringify({ error: `All LLM providers failed: ${String(e)}` }),
         { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
-    }
-
-    let content = "";
-    try {
-      const parsed = JSON.parse(rawText) as Record<string, unknown>;
-      content = String(
-        ((parsed.choices as Array<Record<string, unknown>> | undefined)?.[0]?.message as Record<string, unknown> | undefined)?.content || ""
-      );
-    } catch {
-      content = rawText;
     }
 
     let insightPayload: unknown;

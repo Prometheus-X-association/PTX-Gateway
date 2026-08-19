@@ -35,14 +35,7 @@ interface GlobalConfigState {
     enableTextInput: boolean;
     enableCustomApi: boolean;
     allowContinueOnPdcError: boolean;
-    llmInsights: {
-      enabled: boolean;
-      provider: "openai" | "custom";
-      apiBaseUrl: string;
-      apiKey: string;
-      model: string;
-      promptTemplate: string;
-    };
+    llmInsights: Record<string, unknown>;
     processingPage: {
       verticalStepBarTopText: string;
       [key: string]: unknown;
@@ -66,15 +59,7 @@ const DEFAULT_CONFIG: GlobalConfigState = {
     enableTextInput: true,
     enableCustomApi: true,
     allowContinueOnPdcError: false,
-    llmInsights: {
-      enabled: false,
-      provider: "openai",
-      apiBaseUrl: "https://api.openai.com/v1",
-      apiKey: "",
-      model: "gpt-4o-mini",
-      promptTemplate:
-        "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide matching structure: data[] for cartesian/pie/radial, nodes[]+links[] for network, hierarchy for treemap, and data[] with lat/lng for map. Keep labels concise and aggregate long-tail items as 'Other'. User can switch to another compatible chart type in UI.",
-    },
+    llmInsights: { enabled: false },
     processingPage: {
       verticalStepBarTopText: "",
     },
@@ -241,10 +226,7 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
             features: {
               ...DEFAULT_CONFIG.features,
               ...features,
-              llmInsights: {
-                ...DEFAULT_CONFIG.features.llmInsights,
-                ...llmInsights,
-              },
+              llmInsights: (llmInsights as Record<string, unknown>) || DEFAULT_CONFIG.features.llmInsights,
               processingPage: {
                 ...processingPage,
                 verticalStepBarTopText:
