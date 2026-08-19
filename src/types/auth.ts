@@ -78,8 +78,6 @@ export interface GlobalConfig {
         model: string;
         enabled: boolean;
       }>;
-      insightSystemPrompt: string;
-      chatSystemPrompt: string;
       mcpServers: Array<{
         id: string;
         name: string;
@@ -87,7 +85,20 @@ export interface GlobalConfig {
         apiKey: string;
         enabled: boolean;
       }>;
-      predefinedPrompts: string[];
+      agents: Array<{
+        id: string;
+        name: string;
+        description: string;
+        systemPrompt: string;
+        expectedOutput: 'text' | 'echarts' | 'table' | 'mixed';
+        mcpServerIds: string[];
+        defaultPrompts: string[];
+        enabled: boolean;
+      }>;
+      // Legacy fields kept for backward compat
+      insightSystemPrompt?: string;
+      chatSystemPrompt?: string;
+      predefinedPrompts?: string[];
     };
     maxFileSizeMB: number;
     maxFilesCount: number;

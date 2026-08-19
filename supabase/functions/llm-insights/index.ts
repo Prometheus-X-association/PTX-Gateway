@@ -35,6 +35,17 @@ interface LlmProvider {
   enabled?: boolean;
 }
 
+interface LlmAgent {
+  id?: string;
+  name?: string;
+  description?: string;
+  systemPrompt?: string;
+  expectedOutput?: string;
+  mcpServerIds?: string[];
+  defaultPrompts?: string[];
+  enabled?: boolean;
+}
+
 interface LlmInsightsConfig {
   enabled?: boolean;
   // new format
@@ -43,6 +54,7 @@ interface LlmInsightsConfig {
   chatSystemPrompt?: string;
   mcpServers?: unknown[];
   predefinedPrompts?: string[];
+  agents?: LlmAgent[];
   // legacy flat fields (backward compat)
   apiBaseUrl?: string;
   apiKey?: string;
@@ -443,11 +455,30 @@ serve(async (req) => {
     const providers = resolveProviders(llmConfig);
 
     if (body.action === "status") {
+      // Build safe agent list (no systemPrompt / mcpServerIds exposed to client)
+      const agentList = Array.isArray(llmConfig.agents)
+        ? llmConfig.agents
+            .filter((a) => a.enabled !== false)
+            .map((a) => ({
+              id: String(a.id || ""),
+              name: String(a.name || "Agent"),
+              description: String(a.description || ""),
+              expectedOutput: String(a.expectedOutput || "text"),
+              defaultPrompts: Array.isArray(a.defaultPrompts)
+                ? a.defaultPrompts.map(String).filter(Boolean)
+                : [],
+            }))
+        : [];
+
       return new Response(
         JSON.stringify({
           ok: true,
           enabled: Boolean(llmConfig.enabled),
           configured: providers.some((p) => p.apiKey?.trim() && p.model?.trim()),
+          agents: agentList,
+          predefinedPrompts: Array.isArray(llmConfig.predefinedPrompts)
+            ? llmConfig.predefinedPrompts.map(String).filter(Boolean)
+            : [],
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -499,7 +530,7 @@ serve(async (req) => {
         [
           {
             role: "system",
-            content: `You are a data analyst. Return valid JSON only. Required shape: { summary: string, insights: string[], visualization: { type: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map', title: string, xKey?: string, yKey?: string, categoryKey?: string, valueKey?: string, latKey?: string, lngKey?: string, sourceKey?: string, targetKey?: string, data?: object[], nodes?: object[], links?: object[], hierarchy?: object } }. ${chartSelectionRule} Use structure that matches chosen type. Keep labels concise and aggregate long tails as 'Other'.`,
+            content: `You are a data analyst. Return valid JSON only. Required shape: { summary: string, insights: string[], visualization: { type: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map', title: string, xKey?: string, yKey?: string, categoryKey?: string, valueKey?: string, latKey?: string, lngKey?: string, sourceKey?: string, targetKey?: string, data?: object[], nodes?: object[], links?: object[], hierarchy?: object }, echartsOption: object }. ALWAYS include echartsOption with a complete, valid Apache ECharts 5 option object — it is the primary visualization. ${chartSelectionRule} Also populate visualization as a fallback spec with matching structure for the chosen type. Keep labels concise and aggregate long tails as 'Other'.`,
           },
           { role: "user", content: userPrompt },
         ],
@@ -520,10 +551,21 @@ serve(async (req) => {
       insightPayload = { summary: content, insights: [], visualization: { type: "bar", title: "No chart", data: [] } };
     }
 
+    const normalized = normalizeInsightsPayload(insightPayload, forcedChartType);
+
+    // If the LLM returned an echartsOption object, pass it through alongside the D3 spec
+    const rawPayload = insightPayload as Record<string, unknown> | null;
+    const echartsOption =
+      rawPayload &&
+      typeof rawPayload.echartsOption === "object" &&
+      rawPayload.echartsOption !== null
+        ? rawPayload.echartsOption
+        : null;
+
     return new Response(
       JSON.stringify({
         ok: true,
-        insight: normalizeInsightsPayload(insightPayload, forcedChartType),
+        insight: { ...normalized, ...(echartsOption ? { echartsOption } : {}) },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

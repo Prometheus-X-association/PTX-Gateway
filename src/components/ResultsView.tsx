@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink, Copy } from "lucide-react";
+import { createPortal } from "react-dom";
+import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink, Copy, MessageSquareDot } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,7 +11,7 @@ import { ResultUrlInfo, formatResultUrlWithParams, buildResultRequestBody } from
 import { isDebugMode } from "@/config/global.config";
 import { supabase } from "@/integrations/supabase/client";
 import { AnalyticsOption, CustomVisualizationConfig, DataResource, ExportApiConfig, ExportApiOidcConfig, OidcClientConfig } from "@/types/dataspace";
-import D3InsightChart, { LlmVisualizationSpec } from "@/components/results/D3InsightChart";
+import ChatDrawer from "@/components/chat/ChatDrawer";
 
 interface ResultsViewProps {
   analyticsType: string;
@@ -28,12 +29,6 @@ interface ResultsViewProps {
   selectedAnalyticsTargetId?: string | null;
   customVisualizations?: CustomVisualizationConfig[];
   showDebugApiExportConfig?: boolean;
-}
-
-interface LlmInsightPayload {
-  summary?: string;
-  insights?: string[];
-  visualization?: LlmVisualizationSpec | null;
 }
 
 interface ApiRequestPreview {
@@ -2484,10 +2479,13 @@ const ResultsView = ({
   const [postImportButtons, setPostImportButtons] = useState<PostImportButtonConfig[]>([]);
   const [isPostImportAttentionActive, setIsPostImportAttentionActive] = useState(false);
   const [reportPerformedAt] = useState<Date>(new Date());
-  const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
   const [llmInsightsEnabled, setLlmInsightsEnabled] = useState(false);
-  const [insightError, setInsightError] = useState<string | null>(null);
-  const [llmInsight, setLlmInsight] = useState<LlmInsightPayload | null>(null);
+  const [llmAgents, setLlmAgents] = useState<Array<{
+    id: string; name: string; description: string;
+    expectedOutput: string; defaultPrompts: string[];
+  }>>([]);
+  const [llmGlobalPrompts, setLlmGlobalPrompts] = useState<string[]>([]);
+  const [isChatOpen, setIsChatOpen] = useState(false);
   const selectedTargetId = useMemo(() => {
     if (selectedAnalytics) {
       return selectedAnalytics.type === "software"
@@ -2653,46 +2651,6 @@ const ResultsView = ({
     }
   }, [forcedResultData, resultUrlInfo, applyResultDataUpdate, persistFetchedResultSnapshot]);
 
-  const generateLlmInsight = useCallback(async () => {
-    if (!llmInsightsEnabled) return;
-
-    setIsGeneratingInsight(true);
-    setInsightError(null);
-
-    try {
-      const headers: Record<string, string> = {};
-      if (organizationId) {
-        headers["x-organization-id"] = organizationId;
-      }
-
-      const { data, error } = await supabase.functions.invoke("llm-insights", {
-        headers,
-        body: {
-          org_execution_token: orgExecutionToken || undefined,
-          result: resultData,
-          prompt_context: llmPromptContext || undefined,
-        },
-      });
-
-      if (error || !data?.ok) {
-        throw new Error(data?.error || error?.message || "Failed to generate insights");
-      }
-
-      const insight = (data.insight || {}) as LlmInsightPayload;
-      setLlmInsight({
-        summary: typeof insight.summary === "string" ? insight.summary : "",
-        insights: Array.isArray(insight.insights) ? insight.insights.map(String) : [],
-        visualization: insight.visualization || null,
-      });
-      toast.success("AI insights generated");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to generate AI insights";
-      setInsightError(message);
-      toast.error(message);
-    } finally {
-      setIsGeneratingInsight(false);
-    }
-  }, [organizationId, orgExecutionToken, resultData, llmPromptContext, llmInsightsEnabled]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2719,6 +2677,22 @@ const ResultsView = ({
 
         if (!isMounted) return;
         setLlmInsightsEnabled(!error && Boolean(data?.ok) && Boolean(data?.enabled));
+        if (Array.isArray(data?.agents)) {
+          setLlmAgents(
+            (data.agents as Array<Record<string, unknown>>).map((a) => ({
+              id: String(a.id || ""),
+              name: String(a.name || "Agent"),
+              description: String(a.description || ""),
+              expectedOutput: String(a.expectedOutput || "text"),
+              defaultPrompts: Array.isArray(a.defaultPrompts)
+                ? (a.defaultPrompts as unknown[]).map(String)
+                : [],
+            }))
+          );
+        }
+        if (Array.isArray(data?.predefinedPrompts)) {
+          setLlmGlobalPrompts((data.predefinedPrompts as unknown[]).map(String).filter(Boolean));
+        }
       } catch {
         if (isMounted) {
           setLlmInsightsEnabled(false);
@@ -2763,21 +2737,9 @@ const ResultsView = ({
   }, [compatibleExportApiConfigs, selectedExportApi]);
 
   useEffect(() => {
-    setLlmInsight(null);
-    setInsightError(null);
-  }, [resultData]);
-
-  useEffect(() => {
     setPostImportButtons([]);
     setIsPostImportAttentionActive(false);
   }, [selectedTargetId]);
-
-  useEffect(() => {
-    if (!llmInsightsEnabled) {
-      setLlmInsight(null);
-      setInsightError(null);
-    }
-  }, [llmInsightsEnabled]);
 
   const setNestedValue = useCallback((obj: unknown, path: string, value: unknown): unknown => {
     const keys = path.split('.').filter(k => k);
@@ -3423,44 +3385,6 @@ const ResultsView = ({
         </div>
       )}
 
-      {llmInsightsEnabled && (
-        <div className="glass-card p-6 mb-8">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-            <div>
-              <h3 className="font-semibold">AI Insight + Dynamic D3 Visualization</h3>
-              <p className="text-sm text-muted-foreground">
-                Uses organization LLM Settings to interpret any JSON result and build a D3 chart.
-              </p>
-            </div>
-            <button
-              onClick={generateLlmInsight}
-              disabled={isGeneratingInsight || isLoading}
-              className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {isGeneratingInsight ? "Generating..." : "Generate AI Insight"}
-            </button>
-          </div>
-
-          {insightError && (
-            <p className="text-sm text-destructive mb-3">{insightError}</p>
-          )}
-
-          {llmInsight?.summary && (
-            <p className="text-sm mb-3">{llmInsight.summary}</p>
-          )}
-
-          {llmInsight?.insights && llmInsight.insights.length > 0 && (
-            <ul className="list-disc list-inside text-sm text-muted-foreground mb-4 space-y-1">
-              {llmInsight.insights.map((item, idx) => (
-                <li key={`${item}-${idx}`}>{item}</li>
-              ))}
-            </ul>
-          )}
-
-          <D3InsightChart spec={llmInsight?.visualization || null} />
-        </div>
-      )}
-
       {/* Data Result - JSON/Table Views */}
       <div className="glass-card p-6 mb-8">
         <div className="mb-3 relative">
@@ -3899,6 +3823,33 @@ const ResultsView = ({
           Start New Analysis
         </button>
       </div>
+
+      {/* Ask AI button and chat drawer — portalled to body to avoid ancestor transform/filter breaking fixed position */}
+      {llmInsightsEnabled && createPortal(
+        <>
+          {!isChatOpen && (
+            <button
+              onClick={() => setIsChatOpen(true)}
+              className="fixed bottom-5 right-4 z-[9998] flex items-center gap-2 px-4 py-3 rounded-full shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              aria-label="Open AI Chat"
+            >
+              <MessageSquareDot className="h-5 w-5" />
+              <span className="text-sm font-medium">Ask AI</span>
+            </button>
+          )}
+          <ChatDrawer
+            resultData={resultData}
+            organizationId={organizationId}
+            orgExecutionToken={orgExecutionToken}
+            agents={llmAgents}
+            globalPrompts={llmGlobalPrompts}
+            enabled={llmInsightsEnabled}
+            isOpen={isChatOpen}
+            onClose={() => setIsChatOpen(false)}
+          />
+        </>,
+        document.body
+      )}
     </div>
   );
 };

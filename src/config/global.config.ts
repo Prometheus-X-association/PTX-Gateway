@@ -1,6 +1,29 @@
 // Global Configuration
 // Controls admin/debug mode and application-wide settings
 
+const DATA_ANALYST_SYSTEM_PROMPT =
+  "You are a data analyst assistant. The user is viewing a result dataset. Answer questions clearly and concisely with insights, trends, patterns, and actionable recommendations. Structure your response with headings and bullet points for clarity.";
+
+const CHART_BUILDER_SYSTEM_PROMPT =
+  "You are a data visualization expert. When asked for a chart, return ONLY a self-contained HTML block: a container div with id='chart' and style='height:400px', followed by a script tag loading ECharts from 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js', then an init script using document.getElementById('chart'). Output no text outside the HTML block.";
+
+const AI_INSIGHT_SYSTEM_PROMPT =
+  "You are a business intelligence expert. For the given data, provide: 1) A concise summary paragraph, 2) 3-5 key bullet point insights, 3) A self-contained ECharts HTML visualization at the end. The visualization must be a <div id='chart' style='height:400px'></div> followed by the ECharts CDN <script> tag and an init script that calls document.getElementById('chart').";
+
+const SWITCHABLE_CHART_SYSTEM_PROMPT =
+  "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best visualization type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide the matching data structure: data[] for cartesian/pie/radial types, nodes[]+links[] for network, hierarchy object for treemap, data[] with lat/lng fields for map. Keep labels concise and aggregate long-tail items as 'Other'. The user can switch to another compatible chart type in the UI after generation.";
+
+export interface LlmAgentConfig {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  expectedOutput: "text" | "echarts" | "table" | "mixed";
+  mcpServerIds: string[];
+  defaultPrompts: string[];
+  enabled: boolean;
+}
+
 export interface GlobalConfig {
   admin: {
     enabled: boolean;
@@ -29,8 +52,6 @@ export interface GlobalConfig {
         model: string;
         enabled: boolean;
       }>;
-      insightSystemPrompt: string;
-      chatSystemPrompt: string;
       mcpServers: Array<{
         id: string;
         name: string;
@@ -38,7 +59,7 @@ export interface GlobalConfig {
         apiKey: string;
         enabled: boolean;
       }>;
-      predefinedPrompts: string[];
+      agents: LlmAgentConfig[];
     };
     maxFileSizeMB: number;
     maxFilesCount: number;
@@ -74,18 +95,66 @@ export const globalConfig: GlobalConfig = {
     llmInsights: {
       enabled: false,
       providers: [],
-      insightSystemPrompt:
-        "Analyze the JSON data and generate practical insights for business users. Return JSON only with keys: summary, insights (array of strings), visualization (object with type, title, xKey, yKey, categoryKey, valueKey, and data array).",
-      chatSystemPrompt:
-        "You are a data analyst assistant. The user is viewing a result dataset provided in the system context. Answer questions about it clearly and concisely. When asked for a chart or visualization, return a self-contained HTML snippet using Apache ECharts from CDN.",
       mcpServers: [],
-      predefinedPrompts: [
-        "Summarize the key findings in 3 bullet points",
-        "Which item has the highest value and why might that be?",
-        "Show me a bar chart of the top 10 results",
-        "Are there any outliers or anomalies in this data?",
-        "What trends do you see?",
-        "Group these results by category and visualize it",
+      agents: [
+        {
+          id: "data-analyst",
+          name: "Data Analyst",
+          description: "General data analysis, insights, and trend identification",
+          systemPrompt: DATA_ANALYST_SYSTEM_PROMPT,
+          expectedOutput: "text",
+          mcpServerIds: [],
+          defaultPrompts: [
+            "Summarize the key findings in 3 bullet points",
+            "Which item has the highest value and why might that be?",
+            "Are there any outliers or anomalies in this data?",
+            "What trends do you see?",
+          ],
+          enabled: true,
+        },
+        {
+          id: "chart-builder",
+          name: "Chart Builder",
+          description: "Creates interactive ECharts visualizations from data",
+          systemPrompt: CHART_BUILDER_SYSTEM_PROMPT,
+          expectedOutput: "echarts",
+          mcpServerIds: [],
+          defaultPrompts: [
+            "Show me a bar chart of the top 10 results",
+            "Create a pie chart of the data distribution",
+            "Show a line chart of values over time",
+            "Visualize the top 5 items as a horizontal bar chart",
+          ],
+          enabled: true,
+        },
+        {
+          id: "ai-insight",
+          name: "AI Insight",
+          description: "Full analysis with written insights and a chart visualization",
+          systemPrompt: AI_INSIGHT_SYSTEM_PROMPT,
+          expectedOutput: "mixed",
+          mcpServerIds: [],
+          defaultPrompts: [
+            "Generate a complete AI insight with visualization for this data",
+            "Give me a business summary with a supporting chart",
+            "Analyze this data and show me the most important visualization",
+          ],
+          enabled: true,
+        },
+        {
+          id: "switchable-chart",
+          name: "Switchable Chart",
+          description: "Returns structured JSON with summary, insights, and a chart spec the user can switch between types",
+          systemPrompt: SWITCHABLE_CHART_SYSTEM_PROMPT,
+          expectedOutput: "mixed",
+          mcpServerIds: [],
+          defaultPrompts: [
+            "Analyze this data and generate an interactive chart I can switch between types",
+            "Generate a summary with insights and a switchable visualization",
+            "What is the best chart type for this data? Show me the result",
+          ],
+          enabled: true,
+        },
       ],
     },
     maxFileSizeMB: 50,
