@@ -44,9 +44,10 @@ interface LlmAgent {
   name: string;
   description: string;
   systemPrompt: string;
-  expectedOutput: "text" | "echarts" | "table" | "mixed";
+  expectedOutput: "text" | "json" | "html" | "mixed";
+  outputInstructions: string; // injected into system prompt as "## Output Format" section
   mcpServerIds: string[];
-  mcpToolFilter: Record<string, string[]>; // serverId → allowed tool names (empty = all tools)
+  mcpToolFilter: Record<string, string[]>;
   providerIds: string[];
   agentProviders: LlmProvider[];
   defaultPrompts: string[];
@@ -82,6 +83,64 @@ const AI_INSIGHT_PROMPT =
 const SWITCHABLE_CHART_PROMPT =
   "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best visualization type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide the matching data structure: data[] for cartesian/pie/radial types, nodes[]+links[] for network, hierarchy object for treemap, data[] with lat/lng fields for map. Keep labels concise and aggregate long-tail items as 'Other'. The user can switch to another compatible chart type in the UI after generation.";
 
+// ─── Output type options (must be before DEFAULT_AGENTS) ──────────────────────
+
+const OUTPUT_OPTIONS: Array<{
+  value: LlmAgent["expectedOutput"];
+  label: string;
+  description: string;
+  color: string;
+  defaultInstructions: string;
+}> = [
+  {
+    value: "text",
+    label: "Text",
+    description: "Markdown prose — headings, bullets, bold",
+    color: "bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30",
+    defaultInstructions:
+      "Respond in clear, well-structured markdown.\n" +
+      "Use ## headings for sections, **bold** for key terms, and - bullet lists for findings.\n" +
+      "Keep the response concise and actionable.",
+  },
+  {
+    value: "json",
+    label: "JSON",
+    description: "Structured JSON object — parseable, schema-defined",
+    color: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30",
+    defaultInstructions:
+      "Return ONLY valid JSON. No markdown, no code fences, no text before or after the JSON object.\n\n" +
+      "Required keys:\n" +
+      '- "summary": string — one-paragraph overview\n' +
+      '- "insights": string[] — 3–5 key findings as an array of strings\n' +
+      '- "data": any — structured data relevant to the question',
+  },
+  {
+    value: "html",
+    label: "HTML Chart",
+    description: "Self-contained ECharts HTML block rendered in an iframe",
+    color: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
+    defaultInstructions:
+      "Return ONLY a self-contained HTML visualization. No text outside the HTML block.\n\n" +
+      "Required structure:\n" +
+      '<div id="chart" style="height:400px"></div>\n' +
+      '<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>\n' +
+      "<script>\n" +
+      "  const chart = echarts.init(document.getElementById('chart'));\n" +
+      "  chart.setOption({ /* ECharts option object */ });\n" +
+      "</script>",
+  },
+  {
+    value: "mixed",
+    label: "Mixed",
+    description: "Markdown analysis followed by an ECharts HTML chart",
+    color: "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30",
+    defaultInstructions:
+      "Structure your response in two parts:\n\n" +
+      "1. **Analysis** — 2–3 paragraphs of insight plus a bullet-point summary in markdown.\n" +
+      '2. **Visualization** — immediately after the text, append a self-contained ECharts HTML block starting with <div id="chart" style="height:400px">.',
+  },
+];
+
 const DEFAULT_AGENTS: LlmAgent[] = [
   {
     id: "data-analyst",
@@ -89,6 +148,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "General data analysis, insights, and trend identification",
     systemPrompt: DATA_ANALYST_PROMPT,
     expectedOutput: "text",
+    outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
     defaultPrompts: [
       "Summarize the key findings in 3 bullet points",
@@ -103,7 +163,8 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     name: "Chart Builder",
     description: "Creates interactive ECharts visualizations from data",
     systemPrompt: CHART_BUILDER_PROMPT,
-    expectedOutput: "echarts",
+    expectedOutput: "html",
+    outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "html")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
     defaultPrompts: [
       "Show me a bar chart of the top 10 results",
@@ -119,6 +180,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "Full analysis with written insights and a chart visualization",
     systemPrompt: AI_INSIGHT_PROMPT,
     expectedOutput: "mixed",
+    outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "mixed")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
     defaultPrompts: [
       "Generate a complete AI insight with visualization for this data",
@@ -130,9 +192,11 @@ const DEFAULT_AGENTS: LlmAgent[] = [
   {
     id: "switchable-chart",
     name: "Switchable Chart",
-    description: "Returns structured JSON with summary, insights, and a chart spec the user can switch between types",
+    description: "Returns structured JSON with summary, insights, and a switchable chart spec",
     systemPrompt: SWITCHABLE_CHART_PROMPT,
-    expectedOutput: "mixed",
+    expectedOutput: "json",
+    outputInstructions:
+      'Return ONLY valid JSON. No markdown, no code fences.\n\nRequired keys:\n- "summary": string\n- "insights": string[]\n- "visualization": { "type": "bar"|"line"|"pie"|"scatter"|"area", "data": array, "labels"?: string[] }',
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
     defaultPrompts: [
       "Analyze this data and generate an interactive chart I can switch between types",
@@ -182,7 +246,9 @@ const emptyMcpServer = (): McpServer => ({
 const emptyAgent = (): LlmAgent => ({
   id: uid(), name: "New Agent", description: "",
   systemPrompt: "You are a helpful data assistant. Answer questions about the result data clearly and concisely.",
-  expectedOutput: "text", mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], defaultPrompts: [], enabled: true,
+  expectedOutput: "text",
+  outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
+  mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], defaultPrompts: [], enabled: true,
 });
 
 const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
@@ -215,8 +281,19 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       name: String(a.name || "Agent"),
       description: String(a.description || ""),
       systemPrompt: String(a.systemPrompt || ""),
-      expectedOutput: (["text", "echarts", "table", "mixed"].includes(String(a.expectedOutput))
-        ? a.expectedOutput : "text") as LlmAgent["expectedOutput"],
+      expectedOutput: (() => {
+        const raw = String(a.expectedOutput ?? "text");
+        if (raw === "echarts") return "html";
+        if (raw === "table") return "text";
+        return (["text", "json", "html", "mixed"].includes(raw) ? raw : "text") as LlmAgent["expectedOutput"];
+      })(),
+      outputInstructions: typeof a.outputInstructions === "string" && a.outputInstructions
+        ? a.outputInstructions
+        : (() => {
+            const raw = String(a.expectedOutput ?? "text");
+            const mapped = raw === "echarts" ? "html" : raw === "table" ? "text" : raw;
+            return OUTPUT_OPTIONS.find((o) => o.value === mapped)?.defaultInstructions ?? OUTPUT_OPTIONS[0].defaultInstructions;
+          })(),
       mcpServerIds: Array.isArray(a.mcpServerIds) ? (a.mcpServerIds as unknown[]).map(String) : [],
       mcpToolFilter: (a.mcpToolFilter && typeof a.mcpToolFilter === "object" && !Array.isArray(a.mcpToolFilter))
         ? Object.fromEntries(
@@ -248,6 +325,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         ...DEFAULT_AGENTS[0],
         id: uid(),
         systemPrompt: legacyPrompt,
+        outputInstructions: OUTPUT_OPTIONS[0].defaultInstructions,
         mcpToolFilter: {},
         providerIds: [],
         agentProviders: [],
@@ -266,13 +344,6 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
 
   return { enabled: Boolean(raw.enabled ?? false), providers, mcpServers, agents, predefinedPrompts };
 };
-
-const OUTPUT_OPTIONS: Array<{ value: LlmAgent["expectedOutput"]; label: string; description: string }> = [
-  { value: "text", label: "Text", description: "Plain markdown / structured text response" },
-  { value: "echarts", label: "ECharts", description: "HTML block with an ECharts visualization" },
-  { value: "table", label: "Table", description: "Tabular data response" },
-  { value: "mixed", label: "Mixed", description: "Text analysis + ECharts chart at the end" },
-];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -822,7 +893,7 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
         </Button>
       </div>
 
-      {/* Name + Output + Description */}
+      {/* Name + Description */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="space-y-1">
           <Label className="text-xs">Agent Name</Label>
@@ -830,21 +901,6 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
             value={agent.name} onChange={(e) => onChange({ ...agent, name: e.target.value })} />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs">Expected Output</Label>
-          <Select value={agent.expectedOutput}
-            onValueChange={(v) => onChange({ ...agent, expectedOutput: v as LlmAgent["expectedOutput"] })}>
-            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {OUTPUT_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  <span className="font-medium">{o.label}</span>
-                  <span className="text-muted-foreground ml-2 text-xs">{o.description}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1 md:col-span-2">
           <Label className="text-xs">Short Description (shown in chat)</Label>
           <Input className="h-8 text-xs" placeholder="e.g. General data analysis and insights"
             value={agent.description} onChange={(e) => onChange({ ...agent, description: e.target.value })} />
@@ -857,8 +913,89 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
         <Textarea className="text-xs font-mono" rows={5} value={agent.systemPrompt}
           onChange={(e) => onChange({ ...agent, systemPrompt: e.target.value })} />
         <p className="text-[10px] text-muted-foreground">
-          The result dataset JSON is automatically appended to the system context.
+          Defines the agent's persona and expertise. The result dataset JSON and output instructions are appended automatically.
         </p>
+      </div>
+
+      {/* Output Format */}
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs">Output Format</Label>
+          <span className="text-[10px] text-muted-foreground">Controls how the chat renders the response</span>
+        </div>
+
+        {/* Type pills */}
+        <div className="flex flex-wrap gap-2">
+          {OUTPUT_OPTIONS.map((opt) => (
+            <button key={opt.value} type="button"
+              onClick={() => onChange({
+                ...agent,
+                expectedOutput: opt.value,
+                outputInstructions: agent.outputInstructions || opt.defaultInstructions,
+              })}
+              className={`inline-flex flex-col items-start px-3 py-2 rounded-lg border text-xs transition-all ${
+                agent.expectedOutput === opt.value
+                  ? `${opt.color} border-current ring-1 ring-current/30 font-medium`
+                  : "bg-background border-border text-muted-foreground hover:border-primary"
+              }`}>
+              <span className="font-semibold">{opt.label}</span>
+              <span className="text-[10px] opacity-75 leading-tight mt-0.5">{opt.description}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Instructions textarea */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs">Output Instructions</Label>
+            <button type="button"
+              className="text-[10px] text-primary hover:underline"
+              onClick={() => {
+                const preset = OUTPUT_OPTIONS.find((o) => o.value === agent.expectedOutput);
+                if (preset) onChange({ ...agent, outputInstructions: preset.defaultInstructions });
+              }}>
+              Reset to preset
+            </button>
+          </div>
+          <Textarea
+            className="text-xs font-mono min-h-[100px]"
+            rows={6}
+            placeholder="Describe exactly what format the LLM should return…"
+            value={agent.outputInstructions}
+            onChange={(e) => onChange({ ...agent, outputInstructions: e.target.value })}
+          />
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            This is injected into the system prompt as <code className="bg-muted px-1 rounded">## Output Format</code>.
+            You can reference MCP tool names here (e.g. <em>"call the generate_report tool with the findings"</em>).
+          </p>
+        </div>
+
+        {/* Compiled system prompt preview */}
+        {agent.outputInstructions && (
+          <details className="text-[10px]">
+            <summary className="cursor-pointer text-muted-foreground hover:text-foreground select-none">
+              Preview compiled system prompt →
+            </summary>
+            <pre className="mt-2 bg-muted/60 rounded-md p-3 font-mono text-[10px] whitespace-pre-wrap overflow-x-auto text-muted-foreground max-h-48 overflow-y-auto">
+              {[
+                agent.systemPrompt || "(system prompt)",
+                "",
+                "---",
+                "Result dataset (JSON):",
+                "{ … }",
+                "",
+                "## Output Format",
+                agent.outputInstructions,
+                ...(agent.mcpServerIds.length > 0 || agent.agentProviders.length > 0
+                  ? ["", "## Available Tools", agent.mcpServerIds.map((sid) => {
+                      const filter = agent.mcpToolFilter[sid];
+                      return filter?.length ? filter.map((t) => `- ${t}`).join("\n") : `- (all tools from server ${sid})`;
+                    }).join("\n")]
+                  : []),
+              ].join("\n")}
+            </pre>
+          </details>
+        )}
       </div>
 
       {/* LLM Providers */}

@@ -19,6 +19,7 @@ interface ChatMessageData {
   role: MessageRole;
   content: string;
   htmlViz?: string;
+  jsonData?: Record<string, unknown>;
   toolEvents?: ToolEvent[];
   streaming?: boolean;
 }
@@ -66,6 +67,34 @@ const splitHtmlViz = (text: string): { prose: string; html: string | null } => {
   const divStart = text.search(/<div\b/i);
   if (divStart === -1) return { prose: text, html: null };
   return { prose: text.slice(0, divStart).trim(), html: text.slice(divStart).trim() };
+};
+
+// Strip ```json ... ``` fences and parse JSON safely
+const parseJsonResponse = (text: string): Record<string, unknown> | null => {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const raw = (fenced ? fenced[1] : text).trim();
+  try { return JSON.parse(raw) as Record<string, unknown>; } catch { return null; }
+};
+
+// Route the finished LLM response to { prose, html, json } based on agent output type
+const routeResponse = (
+  text: string,
+  outputFormat: string,
+): { prose: string; html: string | null; json: Record<string, unknown> | null } => {
+  if (outputFormat === "json") {
+    const json = parseJsonResponse(text);
+    return { prose: json ? "" : text, html: null, json };
+  }
+  if (outputFormat === "html") {
+    const { prose, html } = splitHtmlViz(text);
+    return { prose, html, json: null };
+  }
+  if (outputFormat === "mixed") {
+    const { prose, html } = splitHtmlViz(text);
+    return { prose, html, json: null };
+  }
+  // text — skip HTML splitting entirely
+  return { prose: text, html: null, json: null };
 };
 
 const renderMarkdown = (md: string): string =>
@@ -118,6 +147,49 @@ const VizBubble = ({ html }: { html: string }) => (
   />
 );
 
+// ─── JsonBubble ───────────────────────────────────────────────────────────────
+
+const JsonBubble = ({ data }: { data: Record<string, unknown> }) => {
+  const summary = typeof data.summary === "string" ? data.summary : null;
+  const insights = Array.isArray(data.insights)
+    ? (data.insights as unknown[]).filter((x): x is string => typeof x === "string")
+    : null;
+  const hasKnownKeys = summary || insights;
+
+  return (
+    <div className="mt-2 space-y-2 text-sm">
+      {summary && (
+        <p className="leading-relaxed">{summary}</p>
+      )}
+      {insights && insights.length > 0 && (
+        <ul className="space-y-1 pl-1">
+          {insights.map((ins, i) => (
+            <li key={i} className="flex gap-2 text-xs leading-relaxed">
+              <span className="text-primary font-bold shrink-0 mt-0.5">·</span>
+              <span>{ins}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!hasKnownKeys && (
+        <pre className="text-[10px] font-mono bg-background/40 rounded-md p-2 overflow-x-auto whitespace-pre-wrap">
+          {JSON.stringify(data, null, 2)}
+        </pre>
+      )}
+      {hasKnownKeys && Object.keys(data).some((k) => k !== "summary" && k !== "insights") && (
+        <details className="text-[10px]">
+          <summary className="cursor-pointer text-muted-foreground/70 hover:text-muted-foreground select-none">
+            Raw JSON
+          </summary>
+          <pre className="mt-1 font-mono bg-background/40 rounded-md p-2 overflow-x-auto whitespace-pre-wrap text-muted-foreground">
+            {JSON.stringify(data, null, 2)}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+};
+
 // ─── ChatMessageBubble ────────────────────────────────────────────────────────
 
 const ChatMessageBubble = ({ msg }: { msg: ChatMessageData }) => {
@@ -141,11 +213,12 @@ const ChatMessageBubble = ({ msg }: { msg: ChatMessageData }) => {
             ))}
           </div>
         )}
-        {msg.streaming && !msg.content ? (
-          <Loader2 className="h-4 w-4 animate-spin opacity-60" />
-        ) : (
-          <div className="prose-sm break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
-        )}
+        {msg.streaming && !msg.content
+          ? <Loader2 className="h-4 w-4 animate-spin opacity-60" />
+          : msg.jsonData
+            ? <JsonBubble data={msg.jsonData} />
+            : <div className="prose-sm break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+        }
         {msg.htmlViz && <VizBubble html={msg.htmlViz} />}
       </div>
     </div>
@@ -307,11 +380,12 @@ const ChatDrawer = ({
           }
         }
 
-        const { prose, html } = splitHtmlViz(accText);
+        const activeAgent = agents.find((a) => a.id === activeAgentId);
+        const { prose, html, json } = routeResponse(accText, activeAgent?.expectedOutput ?? "text");
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
-              ? { ...m, content: prose, htmlViz: html ?? undefined, streaming: false, toolEvents }
+              ? { ...m, content: prose, htmlViz: html ?? undefined, jsonData: json ?? undefined, streaming: false, toolEvents }
               : m
           )
         );

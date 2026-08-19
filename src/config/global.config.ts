@@ -27,7 +27,8 @@ export interface LlmAgentConfig {
   name: string;
   description: string;
   systemPrompt: string;
-  expectedOutput: "text" | "echarts" | "table" | "mixed";
+  expectedOutput: "text" | "json" | "html" | "mixed";
+  outputInstructions: string;
   mcpServerIds: string[];
   mcpToolFilter: Record<string, string[]>;
   providerIds: string[];

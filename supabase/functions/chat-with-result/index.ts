@@ -62,6 +62,7 @@ interface LlmAgent {
   name?: string;
   systemPrompt?: string;
   expectedOutput?: string;
+  outputInstructions?: string;
   mcpServerIds?: string[];
   mcpToolFilter?: Record<string, string[]>;
   providerIds?: string[];
@@ -214,7 +215,8 @@ const resolveAgentProviders = (agent: LlmAgent, cfg: LlmInsightsConfig): LlmProv
 const callLlmOnce = async (
   providers: LlmProvider[],
   messages: ChatMessage[],
-  tools?: OpenAITool[]
+  tools?: OpenAITool[],
+  jsonMode?: boolean
 ): Promise<{ message: ChatMessage; providerName: string }> => {
   const errors: string[] = [];
   for (const p of providers) {
@@ -228,6 +230,7 @@ const callLlmOnce = async (
     try {
       const body: Record<string, unknown> = { model, temperature: 0.7, messages };
       if (tools && tools.length > 0) body.tools = tools;
+      if (jsonMode && !tools?.length) body.response_format = { type: "json_object" };
       const resp = await fetch(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -476,22 +479,25 @@ serve(async (req: Request) => {
     : null;
 
   const defaultChatPrompt =
-    "You are a data analyst assistant. The user is viewing a result dataset. Answer questions clearly and concisely. When asked for a chart or visualization, return a self-contained HTML snippet using Apache ECharts from CDN (https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js) inside a single <div> with inline styles and a <script> block.";
+    "You are a data analyst assistant. The user is viewing a result dataset. Answer questions clearly and concisely.";
   const systemPromptBase =
     activeAgent?.systemPrompt?.trim() ||
     llmConfig.chatSystemPrompt?.trim() ||
     defaultChatPrompt;
 
-  // Inject result context into system message
-  const resultJson = body.result !== undefined
-    ? JSON.stringify(body.result, null, 2)
-    : null;
+  // Inject result context
+  const resultJson = body.result !== undefined ? JSON.stringify(body.result, null, 2) : null;
   const clippedResult = resultJson && resultJson.length > 40000
     ? `${resultJson.slice(0, 40000)}\n...<truncated>`
     : resultJson;
-  const systemContent = clippedResult
-    ? `${systemPromptBase}\n\n---\nResult dataset (JSON):\n${clippedResult}`
-    : systemPromptBase;
+
+  // Append output instructions as a dedicated section
+  const outputInstructions = activeAgent?.outputInstructions?.trim();
+  const systemContent = [
+    systemPromptBase,
+    clippedResult ? `\n---\nResult dataset (JSON):\n${clippedResult}` : null,
+    outputInstructions ? `\n## Output Format\n${outputInstructions}` : null,
+  ].filter(Boolean).join("\n");
 
   // Build message history
   const history: ChatMessage[] = [
@@ -541,12 +547,14 @@ serve(async (req: Request) => {
         let loopMessages = [...history];
         const MAX_ITERATIONS = 5;
 
+        const isJsonAgent = activeAgent?.expectedOutput === "json";
         for (let i = 0; i < MAX_ITERATIONS; i++) {
           const hasTools = allTools.length > 0;
           const { message } = await callLlmOnce(
             providers,
             loopMessages,
-            hasTools ? allTools : undefined
+            hasTools ? allTools : undefined,
+            isJsonAgent && !hasTools
           );
 
           // No tool calls — final text response, stream it
