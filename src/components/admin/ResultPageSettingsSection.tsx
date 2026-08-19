@@ -1514,6 +1514,85 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
   });
 })();`;
 
+const TABULATOR_NODES_RENDER_CODE_EXAMPLE = (() => {
+  return TABULATOR_RENDER_CODE_EXAMPLE
+    .replace(
+      `  const getResultRoot = (data) =>
+    data?.data?.content?.data?.result ||
+    data?.content?.data?.result ||
+    data?.data?.result ||
+    data?.result;`,
+      `  const getResultRoot = (data) => {
+    const nodes = data?.data?.nodes;
+    if (!Array.isArray(nodes)) return null;
+    const obj = {};
+    nodes.forEach((n) => { if (n?.label) obj[String(n.label)] = n; });
+    return Object.keys(obj).length ? obj : null;
+  };`
+    )
+    .replace(
+      `  const extractRow = (key, value) => {
+    const record    = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const firstSkill = Array.isArray(record.skills) && typeof record.skills[0] === "object"
+      ? record.skills[0] : {};
+    return {
+      skill_name:        toDisplayName(key),
+      skill_description: firstSkill?.description?.literal ?? "",
+    };
+  };`,
+      `  const extractRow = (key, value) => ({
+    skill_name:        toDisplayName(key),
+    skill_description: String(value?.description || ""),
+  });`
+    )
+    .replace(
+      `  const writeRowBack = (record, rowData) => {
+    if (!Array.isArray(record.skills))
+      record.skills = [{ description: { literal: "", mimetype: "plain/text" } }];
+    if (!record.skills[0] || typeof record.skills[0] !== "object")
+      record.skills[0] = { description: { literal: "", mimetype: "plain/text" } };
+    if (!record.skills[0].description || typeof record.skills[0].description !== "object")
+      record.skills[0].description = { mimetype: "plain/text" };
+    record.skills[0].description.literal   = rowData[TRACKED_FIELDS[1]] || "";
+    record.skills[0].description.mimetype  = record.skills[0].description.mimetype || "plain/text";
+  };`,
+      `  const writeRowBack = (record, rowData) => {
+    record.description = rowData[TRACKED_FIELDS[1]] || "";
+  };`
+    )
+    .replace(
+      `      const snapshotRoot =
+        candidate?.data?.content?.data?.result ||
+        candidate?.content?.data?.result ||
+        candidate?.data?.result ||
+        candidate?.result ||
+        null;
+      return snapshotRoot && typeof snapshotRoot === "object" && !Array.isArray(snapshotRoot)
+        ? snapshotRoot
+        : null;`,
+      `      const nodes = candidate?.data?.nodes;
+      if (!Array.isArray(nodes)) return null;
+      const obj = {};
+      nodes.forEach((n) => { if (n?.label) obj[String(n.label)] = n; });
+      return Object.keys(obj).length ? obj : null;`
+    )
+    .replace(
+      `  const getMutableResultRoot = (draft) => {
+    if (draft?.data?.content?.data?.result) return draft.data.content.data.result;
+    if (draft?.content?.data?.result) return draft.content.data.result;
+    if (draft?.data?.result) return draft.data.result;
+    if (draft?.result) return draft.result;
+    return null;
+  };`,
+      `  const getMutableResultRoot = (draft) => {
+    if (!Array.isArray(draft?.data?.nodes)) return null;
+    const obj = {};
+    draft.data.nodes.forEach((n) => { if (n?.label) obj[String(n.label)] = n; });
+    return obj;
+  };`
+    );
+})();
+
 const emptyExportApiOidc = (): ExportApiOidcConfig => ({
   enabled: false,
   grantType: "client_credentials",
@@ -2112,6 +2191,12 @@ const ResultPageSettingsSection = () => {
     if (!customVisualizations[index]) return;
     updateCustomVisualization(index, { render_code: TABULATOR_RENDER_CODE_EXAMPLE });
     toast.success("Tabulator example applied. Click Save Result Page Settings to publish the comparison table changes.");
+  };
+
+  const handleApplyTabulatorNodesExample = (index: number) => {
+    if (!customVisualizations[index]) return;
+    updateCustomVisualization(index, { render_code: TABULATOR_NODES_RENDER_CODE_EXAMPLE });
+    toast.success("Tabulator nodes example applied. Click Save Result Page Settings to publish the table changes.");
   };
 
   const getVisualizationLibrarySummary = (visualization: CustomVisualizationConfig) => {
@@ -3908,6 +3993,10 @@ const ResultPageSettingsSection = () => {
                             <DropdownMenuItem onClick={() => handleApplyTabulatorExample(editingVisualizationIndex)}>
                               <TableIcon className="mr-2 h-4 w-4" />
                               Tabulator editable skills table
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleApplyTabulatorNodesExample(editingVisualizationIndex)}>
+                              <TableIcon className="mr-2 h-4 w-4" />
+                              Tabulator skills from data.nodes
                             </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => handleApplyDdvExample(editingVisualizationIndex)}>
                               <Palette className="mr-2 h-4 w-4" />
