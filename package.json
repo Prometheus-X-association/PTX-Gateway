@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "functions": "npx supabase functions serve",
     "stack": "bash scripts/start-stack.sh local",
     "stack:local": "bash scripts/start-stack.sh local",
     "stack:ngrok": "bash scripts/start-stack.sh local --host 0.0.0.0 --frontend-port 8080",

@@ -13,6 +13,8 @@ import {
 import {
   Loader2, Brain, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Eye, EyeOff, Server, Zap, RotateCcw, Bot, MessageSquarePlus,
+  Pencil, X, ChevronsUpDown, Info, Link2, FlaskConical,
+  CheckCircle2, XCircle, ChevronRight, Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -44,6 +46,9 @@ interface LlmAgent {
   systemPrompt: string;
   expectedOutput: "text" | "echarts" | "table" | "mixed";
   mcpServerIds: string[];
+  mcpToolFilter: Record<string, string[]>; // serverId → allowed tool names (empty = all tools)
+  providerIds: string[];
+  agentProviders: LlmProvider[];
   defaultPrompts: string[];
   enabled: boolean;
 }
@@ -84,7 +89,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "General data analysis, insights, and trend identification",
     systemPrompt: DATA_ANALYST_PROMPT,
     expectedOutput: "text",
-    mcpServerIds: [],
+    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
     defaultPrompts: [
       "Summarize the key findings in 3 bullet points",
       "Which item has the highest value and why might that be?",
@@ -99,7 +104,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "Creates interactive ECharts visualizations from data",
     systemPrompt: CHART_BUILDER_PROMPT,
     expectedOutput: "echarts",
-    mcpServerIds: [],
+    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
     defaultPrompts: [
       "Show me a bar chart of the top 10 results",
       "Create a pie chart of the data distribution",
@@ -114,7 +119,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "Full analysis with written insights and a chart visualization",
     systemPrompt: AI_INSIGHT_PROMPT,
     expectedOutput: "mixed",
-    mcpServerIds: [],
+    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
     defaultPrompts: [
       "Generate a complete AI insight with visualization for this data",
       "Give me a business summary with a supporting chart",
@@ -128,7 +133,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "Returns structured JSON with summary, insights, and a chart spec the user can switch between types",
     systemPrompt: SWITCHABLE_CHART_PROMPT,
     expectedOutput: "mixed",
-    mcpServerIds: [],
+    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
     defaultPrompts: [
       "Analyze this data and generate an interactive chart I can switch between types",
       "Generate a summary with insights and a switchable visualization",
@@ -177,7 +182,7 @@ const emptyMcpServer = (): McpServer => ({
 const emptyAgent = (): LlmAgent => ({
   id: uid(), name: "New Agent", description: "",
   systemPrompt: "You are a helpful data assistant. Answer questions about the result data clearly and concisely.",
-  expectedOutput: "text", mcpServerIds: [], defaultPrompts: [], enabled: true,
+  expectedOutput: "text", mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], defaultPrompts: [], enabled: true,
 });
 
 const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
@@ -213,6 +218,22 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       expectedOutput: (["text", "echarts", "table", "mixed"].includes(String(a.expectedOutput))
         ? a.expectedOutput : "text") as LlmAgent["expectedOutput"],
       mcpServerIds: Array.isArray(a.mcpServerIds) ? (a.mcpServerIds as unknown[]).map(String) : [],
+      mcpToolFilter: (a.mcpToolFilter && typeof a.mcpToolFilter === "object" && !Array.isArray(a.mcpToolFilter))
+        ? Object.fromEntries(
+            Object.entries(a.mcpToolFilter as Record<string, unknown>).map(([k, v]) => [
+              k, Array.isArray(v) ? (v as unknown[]).map(String) : [],
+            ])
+          )
+        : {},
+      providerIds: Array.isArray(a.providerIds) ? (a.providerIds as unknown[]).map(String) : [],
+      agentProviders: Array.isArray(a.agentProviders)
+        ? (a.agentProviders as LlmProvider[]).map((p) => ({
+            id: String(p.id || uid()), name: String(p.name || ""),
+            apiBaseUrl: String(p.apiBaseUrl || "https://api.openai.com/v1"),
+            apiKey: String(p.apiKey || ""), model: String(p.model || "gpt-4o-mini"),
+            enabled: p.enabled !== false,
+          }))
+        : [],
       defaultPrompts: Array.isArray(a.defaultPrompts) ? (a.defaultPrompts as unknown[]).map(String).filter(Boolean) : [],
       enabled: a.enabled !== false,
     }));
@@ -227,6 +248,9 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         ...DEFAULT_AGENTS[0],
         id: uid(),
         systemPrompt: legacyPrompt,
+        mcpToolFilter: {},
+        providerIds: [],
+        agentProviders: [],
         defaultPrompts: legacyPredefined.length > 0 ? legacyPredefined : DEFAULT_AGENTS[0].defaultPrompts,
       }, DEFAULT_AGENTS[1], DEFAULT_AGENTS[2]];
     } else {
@@ -306,17 +330,81 @@ const ProviderCard = ({ provider, index, total, onChange, onMove, onRemove }: Pr
   );
 };
 
+// ─── MCP test result types ────────────────────────────────────────────────────
+
+interface McpTool {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+interface McpTestResult {
+  ok: boolean;
+  latencyMs?: number;
+  tools?: McpTool[];
+  serverInfo?: { name?: string; version?: string };
+  error?: string;
+  hint?: string;
+}
+
+// Proxy the MCP test through the Edge Function to avoid CORS restrictions.
+// The Deno runtime on the server side can reach any HTTP endpoint freely.
+async function testMcpServer(
+  url: string,
+  apiKey: string,
+  supabaseClient: typeof import("@/integrations/supabase/client").supabase,
+  organizationId?: string,
+): Promise<McpTestResult> {
+  if (!url.trim()) return { ok: false, error: "No URL configured." };
+
+  const { data, error } = await supabaseClient.functions.invoke("mcp-test", {
+    body: { url: url.trim(), apiKey: apiKey.trim() || undefined },
+    headers: organizationId ? { "x-organization-id": organizationId } : undefined,
+  });
+
+  if (error) {
+    // FunctionsHttpError surfaces the function's JSON body in error.context
+    const ctx = (error as { context?: { error?: string; hint?: string } }).context;
+    return {
+      ok: false,
+      error: ctx?.error ?? error.message ?? String(error),
+      hint: ctx?.hint,
+    };
+  }
+
+  return data as McpTestResult;
+}
+
+// ─── MCP card ─────────────────────────────────────────────────────────────────
+
 interface McpCardProps {
   server: McpServer; index: number;
+  supabaseClient: typeof supabase;
+  organizationId?: string;
   onChange: (updated: McpServer) => void;
   onRemove: () => void;
 }
 
-const McpCard = ({ server, onChange, onRemove }: McpCardProps) => {
+const McpCard = ({ server, supabaseClient, organizationId, onChange, onRemove }: McpCardProps) => {
   const [showKey, setShowKey] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<McpTestResult | null>(null);
+  const [showTools, setShowTools] = useState(false);
+
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    setShowTools(false);
+    const result = await testMcpServer(server.url, server.apiKey, supabaseClient, organizationId);
+    setTestResult(result);
+    setTesting(false);
+    if (result.ok && result.tools && result.tools.length > 0) setShowTools(true);
+  };
+
   return (
-    <div className="border rounded-lg p-4 space-y-3 bg-card">
-      <div className="flex items-center gap-2">
+    <div className="border rounded-lg overflow-hidden bg-card">
+      {/* Header row */}
+      <div className="flex items-center gap-2 px-4 pt-4 pb-3">
         <Input className="h-8 text-sm font-medium" placeholder="Server name (e.g. Analytics MCP)"
           value={server.name} onChange={(e) => onChange({ ...server, name: e.target.value })} />
         <div className="flex items-center gap-1 ml-auto shrink-0">
@@ -325,10 +413,12 @@ const McpCard = ({ server, onChange, onRemove }: McpCardProps) => {
             onClick={onRemove}><Trash2 className="h-4 w-4" /></Button>
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+
+      {/* Fields */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 px-4 pb-3">
         <div className="space-y-1 md:col-span-2">
-          <Label className="text-xs">SSE URL</Label>
-          <Input className="h-8 text-xs" placeholder="https://your-mcp-server.com/sse"
+          <Label className="text-xs">MCP Endpoint URL</Label>
+          <Input className="h-8 text-xs" placeholder="https://your-mcp-server.com/mcp"
             value={server.url} onChange={(e) => onChange({ ...server, url: e.target.value })} />
         </div>
         <div className="space-y-1 md:col-span-2">
@@ -343,22 +433,320 @@ const McpCard = ({ server, onChange, onRemove }: McpCardProps) => {
           </div>
         </div>
       </div>
+
+      {/* Test bar */}
+      <div className="border-t border-border/60 bg-muted/30 px-4 py-2.5 flex items-center gap-3">
+        <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7"
+          disabled={testing || !server.url.trim()} onClick={runTest}>
+          {testing
+            ? <><Loader2 className="h-3 w-3 animate-spin" />Testing…</>
+            : <><FlaskConical className="h-3 w-3" />Test Connection</>}
+        </Button>
+
+        {testResult && !testing && (
+          <div className="flex items-center gap-2 text-xs min-w-0">
+            {testResult.ok ? (
+              <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+            ) : (
+              <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+            )}
+            {testResult.ok ? (
+              <span className="text-green-600 dark:text-green-400 font-medium">
+                Connected
+                {testResult.serverInfo?.name && ` · ${testResult.serverInfo.name}${testResult.serverInfo.version ? ` v${testResult.serverInfo.version}` : ""}`}
+                {testResult.latencyMs !== undefined && ` · ${testResult.latencyMs}ms`}
+                {testResult.tools !== undefined && ` · ${testResult.tools.length} tool${testResult.tools.length === 1 ? "" : "s"}`}
+              </span>
+            ) : (
+              <span className="text-destructive truncate">{testResult.error}</span>
+            )}
+
+            {testResult.ok && testResult.tools && testResult.tools.length > 0 && (
+              <button type="button"
+                className="ml-auto shrink-0 flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setShowTools((v) => !v)}>
+                <Wrench className="h-3 w-3" />
+                <span>{showTools ? "Hide" : "Show"} tools</span>
+                <ChevronRight className={`h-3 w-3 transition-transform ${showTools ? "rotate-90" : ""}`} />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Error hint */}
+      {testResult && !testResult.ok && testResult.hint && (
+        <div className="border-t border-border/60 bg-amber-50 dark:bg-amber-950/20 px-4 py-2 text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-2">
+          <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>{testResult.hint}</span>
+        </div>
+      )}
+
+      {/* Error detail (for partial success) */}
+      {testResult?.ok && testResult.error && (
+        <div className="border-t border-border/60 bg-amber-50 dark:bg-amber-950/20 px-4 py-2 text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-2">
+          <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>{testResult.error}</span>
+        </div>
+      )}
+
+      {/* Tools list */}
+      {showTools && testResult?.tools && testResult.tools.length > 0 && (
+        <div className="border-t border-border/60 px-4 py-3 space-y-2 bg-muted/20">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Discovered tools ({testResult.tools.length})
+          </p>
+          <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+            {testResult.tools.map((tool, i) => (
+              <div key={i} className="border border-border/60 rounded-md px-3 py-2 bg-background space-y-0.5">
+                <div className="flex items-center gap-1.5">
+                  <Wrench className="h-3 w-3 text-primary shrink-0" />
+                  <span className="text-xs font-mono font-semibold text-foreground">{tool.name}</span>
+                </div>
+                {tool.description && (
+                  <p className="text-[11px] text-muted-foreground leading-relaxed pl-4">{tool.description}</p>
+                )}
+                {tool.inputSchema && (
+                  <details className="pl-4">
+                    <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground select-none">
+                      Input schema
+                    </summary>
+                    <pre className="mt-1 text-[10px] font-mono bg-muted/60 rounded p-2 overflow-x-auto text-muted-foreground">
+                      {JSON.stringify(tool.inputSchema, null, 2)}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Empty tools notice */}
+      {testResult?.ok && testResult.tools && testResult.tools.length === 0 && (
+        <div className="border-t border-border/60 px-4 py-2.5 text-[11px] text-muted-foreground flex items-center gap-2">
+          <Info className="h-3.5 w-3.5 shrink-0" />
+          <span>Server connected but returned no tools via <code className="font-mono bg-muted px-1 rounded">tools/list</code>. It may not expose any tools yet.</span>
+        </div>
+      )}
     </div>
   );
 };
 
-interface AgentCardProps {
+// ─── MCP guide ────────────────────────────────────────────────────────────────
+
+const McpGuide = () => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border border-border/60 rounded-lg overflow-hidden text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2.5 bg-muted/40 hover:bg-muted/60 transition-colors text-left"
+      >
+        <span className="font-medium flex items-center gap-1.5">
+          <Info className="h-3.5 w-3.5 text-primary" />
+          How to set up and integrate MCP servers
+        </span>
+        {open ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+      </button>
+
+      {open && (
+        <div className="px-4 py-4 space-y-4 bg-background border-t border-border/60">
+
+          {/* What is MCP */}
+          <div className="space-y-1">
+            <p className="font-semibold text-foreground">What is MCP?</p>
+            <p className="text-muted-foreground leading-relaxed">
+              Model Context Protocol (MCP) is an open standard for exposing tools and data sources to LLMs.
+              Each MCP server publishes a list of callable functions — the LLM discovers them at request time
+              and calls them autonomously when relevant to the user's question.
+            </p>
+          </div>
+
+          {/* Connection protocol */}
+          <div className="space-y-2">
+            <p className="font-semibold text-foreground">Connection protocol</p>
+            <div className="space-y-1 text-muted-foreground">
+              <p>• Protocol: <span className="font-mono bg-muted px-1 rounded">HTTP POST</span> with <span className="font-mono bg-muted px-1 rounded">JSON-RPC 2.0</span> (Streamable HTTP)</p>
+              <p>• Response: JSON or <span className="font-mono bg-muted px-1 rounded">text/event-stream</span> (SSE) — both supported automatically</p>
+              <p>• Authentication: API Key is sent as <span className="font-mono bg-muted px-1 rounded">Authorization: Bearer &lt;key&gt;</span></p>
+            </div>
+            <div className="bg-muted/60 rounded-md p-3 font-mono leading-relaxed text-muted-foreground">
+              <p className="text-foreground font-semibold mb-1 font-sans text-[10px] uppercase tracking-wide">Example server URL</p>
+              <p>https://your-mcp-server.com/mcp</p>
+              <p>https://analytics.internal/api/mcp</p>
+              <p>http://localhost:8080/mcp  <span className="text-muted-foreground/60">(local dev)</span></p>
+            </div>
+          </div>
+
+          {/* How the flow works */}
+          <div className="space-y-2">
+            <p className="font-semibold text-foreground">How it works during chat</p>
+            <ol className="space-y-1 text-muted-foreground list-none">
+              {[
+                "Chat request arrives → gateway calls initialize then tools/list on each enabled server",
+                "Discovered tools are passed to the LLM as callable functions",
+                "LLM decides when to invoke a tool based on the conversation",
+                "Gateway executes the tool call and feeds the result back to the LLM",
+                "LLM uses the result to produce the final answer, which streams to the user",
+                "The chat UI shows which tools were called as inline badges",
+              ].map((step, i) => (
+                <li key={i} className="flex gap-2">
+                  <span className="shrink-0 w-4 h-4 rounded-full bg-primary/15 text-primary text-[10px] flex items-center justify-center font-bold">{i + 1}</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          {/* Example tool */}
+          <div className="space-y-2">
+            <p className="font-semibold text-foreground">Example tool response from MCP server</p>
+            <pre className="bg-muted/60 rounded-md p-3 font-mono text-[11px] leading-relaxed text-muted-foreground overflow-x-auto">{`{
+  "tools": [
+    {
+      "name": "query_database",
+      "description": "Run a SQL query on the analytics DB",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sql": { "type": "string", "description": "SQL query to execute" }
+        },
+        "required": ["sql"]
+      }
+    }
+  ]
+}`}</pre>
+          </div>
+
+          {/* Compatible use cases */}
+          <div className="space-y-2">
+            <p className="font-semibold text-foreground">Compatible server types</p>
+            <div className="grid grid-cols-2 gap-1.5 text-muted-foreground">
+              {[
+                ["Database / SQL", "Run queries against analytics DBs or data warehouses"],
+                ["Vector / RAG", "Search knowledge bases, documentation, or embeddings"],
+                ["Analytics APIs", "Fetch KPIs, reports, or aggregated metrics"],
+                ["Business logic", "ERP data, product catalogs, CRM records"],
+                ["File / document", "Read or search documents, PDFs, spreadsheets"],
+                ["Custom tools", "Any internal API wrapped in a JSON-RPC 2.0 endpoint"],
+              ].map(([title, desc]) => (
+                <div key={title} className="flex gap-1.5">
+                  <Link2 className="h-3 w-3 text-primary shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-medium text-foreground">{title}</span>
+                    <p className="text-muted-foreground/80">{desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Per-agent assignment tip */}
+          <div className="bg-primary/5 border border-primary/20 rounded-md px-3 py-2.5 space-y-1">
+            <p className="font-semibold text-primary flex items-center gap-1.5">
+              <Bot className="h-3.5 w-3.5" /> Per-agent tool assignment
+            </p>
+            <p className="text-muted-foreground leading-relaxed">
+              By default every agent can use <em>all</em> enabled servers. Open an agent's Edit panel
+              and select specific servers to restrict which tools that agent can call — useful when
+              a narrow agent (e.g. Chart Builder) shouldn't be distracted by unrelated tools like
+              "send email" or "write to database".
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── Agent table row ──────────────────────────────────────────────────────────
+
+interface AgentTableRowProps {
   agent: LlmAgent;
   index: number;
   total: number;
+  isEditing: boolean;
   mcpServers: McpServer[];
+  onToggleEdit: () => void;
   onChange: (updated: LlmAgent) => void;
   onMove: (from: number, to: number) => void;
   onRemove: () => void;
 }
 
-const AgentCard = ({ agent, index, total, mcpServers, onChange, onMove, onRemove }: AgentCardProps) => {
-  const [expanded, setExpanded] = useState(index === 0);
+const AgentTableRow = ({ agent, index, total, isEditing, mcpServers, onToggleEdit, onChange, onMove, onRemove }: AgentTableRowProps) => {
+  const outputOption = OUTPUT_OPTIONS.find((o) => o.value === agent.expectedOutput);
+  const mcpLabel = agent.mcpServerIds.length === 0
+    ? (mcpServers.length > 0 ? "All" : "—")
+    : `${agent.mcpServerIds.length}`;
+
+  return (
+    <div className={`grid grid-cols-[28px_1fr_80px_60px_48px_52px_auto] items-center gap-2 px-3 py-2.5 border-b border-border/50 last:border-0 text-sm transition-colors ${isEditing ? "bg-primary/5" : "hover:bg-muted/40"}`}>
+      {/* Order index */}
+      <span className="text-xs text-muted-foreground text-center tabular-nums">{index + 1}</span>
+
+      {/* Name + description */}
+      <div className="min-w-0">
+        <p className="font-medium truncate leading-tight">{agent.name || "Unnamed Agent"}</p>
+        {agent.description && (
+          <p className="text-xs text-muted-foreground truncate leading-tight mt-0.5">{agent.description}</p>
+        )}
+      </div>
+
+      {/* Output type */}
+      {outputOption ? (
+        <Badge variant="outline" className="text-[10px] justify-center">{outputOption.label}</Badge>
+      ) : <span />}
+
+      {/* Prompts count */}
+      <span className="text-xs text-muted-foreground text-center">{agent.defaultPrompts.length} prompts</span>
+
+      {/* MCP */}
+      <span className="text-xs text-muted-foreground text-center">{mcpLabel}</span>
+
+      {/* Enabled */}
+      <Switch checked={agent.enabled} onCheckedChange={(v) => onChange({ ...agent, enabled: v })} className="mx-auto" />
+
+      {/* Actions */}
+      <div className="flex items-center gap-0.5 shrink-0">
+        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move up"
+          disabled={index === 0} onClick={() => onMove(index, index - 1)}>
+          <ChevronUp className="h-3.5 w-3.5" />
+        </Button>
+        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move down"
+          disabled={index === total - 1} onClick={() => onMove(index, index + 1)}>
+          <ChevronDown className="h-3.5 w-3.5" />
+        </Button>
+        <Button type="button" variant={isEditing ? "secondary" : "ghost"} size="icon" className="h-7 w-7" title={isEditing ? "Collapse detail" : "Edit agent"}
+          onClick={onToggleEdit}>
+          {isEditing ? <ChevronsUpDown className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+        </Button>
+        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Delete agent"
+          onClick={onRemove}>
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+// ─── Agent edit panel ─────────────────────────────────────────────────────────
+
+interface AgentEditPanelProps {
+  agent: LlmAgent;
+  mcpServers: McpServer[];
+  globalProviders: LlmProvider[];
+  supabaseClient: typeof supabase;
+  organizationId?: string;
+  onChange: (updated: LlmAgent) => void;
+  onClose: () => void;
+}
+
+const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, organizationId, onChange, onClose }: AgentEditPanelProps) => {
+  const [showAgentProviderKey, setShowAgentProviderKey] = useState<string | null>(null);
+  // per-server tool discovery state
+  const [serverTools, setServerTools] = useState<Record<string, { loading: boolean; tools: McpTool[]; error?: string }>>({});
 
   const updatePrompt = (i: number, val: string) =>
     onChange({ ...agent, defaultPrompts: agent.defaultPrompts.map((p, j) => (j === i ? val : p)) });
@@ -369,148 +757,400 @@ const AgentCard = ({ agent, index, total, mcpServers, onChange, onMove, onRemove
     const ids = agent.mcpServerIds.includes(serverId)
       ? agent.mcpServerIds.filter((id) => id !== serverId)
       : [...agent.mcpServerIds, serverId];
-    onChange({ ...agent, mcpServerIds: ids });
+    // clear tool filter for deselected server
+    const newFilter = { ...agent.mcpToolFilter };
+    if (ids.includes(serverId) === false) delete newFilter[serverId];
+    onChange({ ...agent, mcpServerIds: ids, mcpToolFilter: newFilter });
   };
 
-  const outputOption = OUTPUT_OPTIONS.find((o) => o.value === agent.expectedOutput);
+  const loadServerTools = async (server: McpServer) => {
+    setServerTools((prev) => ({ ...prev, [server.id]: { loading: true, tools: [] } }));
+    const result = await testMcpServer(server.url, server.apiKey, supabaseClient, organizationId);
+    setServerTools((prev) => ({
+      ...prev,
+      [server.id]: {
+        loading: false,
+        tools: result.tools ?? [],
+        error: result.ok ? undefined : (result.error ?? "Failed to load tools"),
+      },
+    }));
+  };
+
+  const toggleTool = (serverId: string, toolName: string) => {
+    const current = agent.mcpToolFilter[serverId] ?? [];
+    const next = current.includes(toolName)
+      ? current.filter((n) => n !== toolName)
+      : [...current, toolName];
+    onChange({ ...agent, mcpToolFilter: { ...agent.mcpToolFilter, [serverId]: next } });
+  };
+
+  const clearToolFilter = (serverId: string) => {
+    const newFilter = { ...agent.mcpToolFilter };
+    delete newFilter[serverId];
+    onChange({ ...agent, mcpToolFilter: newFilter });
+  };
+
+  const toggleProvider = (providerId: string) => {
+    const ids = agent.providerIds.includes(providerId)
+      ? agent.providerIds.filter((id) => id !== providerId)
+      : [...agent.providerIds, providerId];
+    onChange({ ...agent, providerIds: ids });
+  };
+
+  const updateAgentProvider = (i: number, updated: LlmProvider) =>
+    onChange({ ...agent, agentProviders: agent.agentProviders.map((p, j) => (j === i ? updated : p)) });
+  const removeAgentProvider = (i: number) => {
+    const removed = agent.agentProviders[i];
+    onChange({
+      ...agent,
+      agentProviders: agent.agentProviders.filter((_, j) => j !== i),
+      providerIds: agent.providerIds.filter((id) => id !== removed?.id),
+    });
+    if (showAgentProviderKey === removed?.id) setShowAgentProviderKey(null);
+  };
 
   return (
-    <div className="border rounded-lg bg-card overflow-hidden">
-      {/* Agent header row */}
-      <div className="flex items-center gap-2 px-4 py-3">
-        <button type="button" className="flex items-center gap-2 flex-1 min-w-0 text-left"
-          onClick={() => setExpanded((v) => !v)}>
-          <Bot className="h-4 w-4 text-primary shrink-0" />
-          <span className="font-medium text-sm truncate">{agent.name || "Unnamed Agent"}</span>
-          {outputOption && (
-            <Badge variant="outline" className="text-[10px] shrink-0">{outputOption.label}</Badge>
-          )}
-          {agent.defaultPrompts.length > 0 && (
-            <span className="text-xs text-muted-foreground shrink-0">{agent.defaultPrompts.length} prompts</span>
-          )}
-        </button>
-        <div className="flex items-center gap-1 shrink-0">
-          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={index === 0}
-            onClick={() => onMove(index, index - 1)}><ChevronUp className="h-4 w-4" /></Button>
-          <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={index === total - 1}
-            onClick={() => onMove(index, index + 1)}><ChevronDown className="h-4 w-4" /></Button>
-          <Switch checked={agent.enabled} onCheckedChange={(v) => onChange({ ...agent, enabled: v })} />
-          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive"
-            onClick={onRemove}><Trash2 className="h-4 w-4" /></Button>
+    <div className="border-t border-primary/20 bg-muted/20 px-4 pt-4 pb-5 space-y-4">
+      {/* Panel header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Bot className="h-3.5 w-3.5 text-primary" />
+          <span className="text-xs font-semibold text-primary">Editing: {agent.name || "Unnamed Agent"}</span>
+        </div>
+        <Button type="button" variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={onClose}>
+          <X className="h-3.5 w-3.5" /> Collapse
+        </Button>
+      </div>
+
+      {/* Name + Output + Description */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs">Agent Name</Label>
+          <Input className="h-8 text-sm" placeholder="e.g. Data Analyst"
+            value={agent.name} onChange={(e) => onChange({ ...agent, name: e.target.value })} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Expected Output</Label>
+          <Select value={agent.expectedOutput}
+            onValueChange={(v) => onChange({ ...agent, expectedOutput: v as LlmAgent["expectedOutput"] })}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {OUTPUT_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  <span className="font-medium">{o.label}</span>
+                  <span className="text-muted-foreground ml-2 text-xs">{o.description}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1 md:col-span-2">
+          <Label className="text-xs">Short Description (shown in chat)</Label>
+          <Input className="h-8 text-xs" placeholder="e.g. General data analysis and insights"
+            value={agent.description} onChange={(e) => onChange({ ...agent, description: e.target.value })} />
         </div>
       </div>
 
-      {expanded && (
-        <div className="px-4 pb-4 space-y-4 border-t border-border/60 pt-4">
-          {/* Name + Description */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Agent Name</Label>
-              <Input className="h-8 text-sm" placeholder="e.g. Data Analyst"
-                value={agent.name} onChange={(e) => onChange({ ...agent, name: e.target.value })} />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Expected Output</Label>
-              <Select value={agent.expectedOutput}
-                onValueChange={(v) => onChange({ ...agent, expectedOutput: v as LlmAgent["expectedOutput"] })}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {OUTPUT_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      <span className="font-medium">{o.label}</span>
-                      <span className="text-muted-foreground ml-2 text-xs">{o.description}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1 md:col-span-2">
-              <Label className="text-xs">Short Description (shown in chat)</Label>
-              <Input className="h-8 text-xs" placeholder="e.g. General data analysis and insights"
-                value={agent.description} onChange={(e) => onChange({ ...agent, description: e.target.value })} />
-            </div>
-          </div>
+      {/* System Prompt */}
+      <div className="space-y-1.5">
+        <Label className="text-xs">System Prompt</Label>
+        <Textarea className="text-xs font-mono" rows={5} value={agent.systemPrompt}
+          onChange={(e) => onChange({ ...agent, systemPrompt: e.target.value })} />
+        <p className="text-[10px] text-muted-foreground">
+          The result dataset JSON is automatically appended to the system context.
+        </p>
+      </div>
 
-          {/* System Prompt */}
-          <div className="space-y-1.5">
-            <Label className="text-xs">System Prompt</Label>
-            <Textarea className="text-xs font-mono" rows={5} value={agent.systemPrompt}
-              onChange={(e) => onChange({ ...agent, systemPrompt: e.target.value })} />
-            <p className="text-[10px] text-muted-foreground">
-              The result dataset JSON is automatically appended to the system context.
-            </p>
-          </div>
+      {/* LLM Providers */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs">LLM Providers</Label>
+          <span className="text-[10px] text-muted-foreground">
+            {agent.agentProviders.length === 0 && agent.providerIds.length === 0
+              ? "Using global providers"
+              : `${agent.agentProviders.length + agent.providerIds.length} selected`}
+          </span>
+        </div>
 
-          {/* MCP Servers */}
-          {mcpServers.length > 0 && (
-            <div className="space-y-1.5">
-              <Label className="text-xs">MCP Tools (leave all unchecked to use all)</Label>
-              <div className="flex flex-wrap gap-2">
-                {mcpServers.map((s) => (
-                  <button key={s.id} type="button"
-                    onClick={() => toggleMcp(s.id)}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs border transition-colors ${
-                      agent.mcpServerIds.includes(s.id)
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background border-border text-muted-foreground hover:border-primary"
-                    }`}>
-                    <Server className="h-3 w-3" />
-                    {s.name || s.url}
-                  </button>
-                ))}
+        {/* Agent-specific providers */}
+        {agent.agentProviders.length > 0 && (
+          <div className="space-y-2">
+            {agent.agentProviders.map((p, i) => (
+              <div key={p.id} className="border border-border/60 rounded-md px-3 py-2.5 space-y-2 bg-background">
+                <div className="flex items-center gap-2">
+                  <Zap className="h-3 w-3 text-primary shrink-0" />
+                  <Input className="h-7 text-xs font-medium flex-1" placeholder="Provider name"
+                    value={p.name} onChange={(e) => updateAgentProvider(i, { ...p, name: e.target.value })} />
+                  <Switch className="scale-75" checked={p.enabled} onCheckedChange={(v) => updateAgentProvider(i, { ...p, enabled: v })} />
+                  <Button type="button" variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
+                    onClick={() => removeAgentProvider(i)}><Trash2 className="h-3 w-3" /></Button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-0.5">
+                    <Label className="text-[10px]">Base URL</Label>
+                    <Input className="h-7 text-[11px]" placeholder="https://api.openai.com/v1"
+                      value={p.apiBaseUrl} onChange={(e) => updateAgentProvider(i, { ...p, apiBaseUrl: e.target.value })} />
+                  </div>
+                  <div className="space-y-0.5">
+                    <Label className="text-[10px]">Model</Label>
+                    <Input className="h-7 text-[11px]" placeholder="gpt-4o-mini"
+                      value={p.model} onChange={(e) => updateAgentProvider(i, { ...p, model: e.target.value })} />
+                  </div>
+                  <div className="space-y-0.5 col-span-2">
+                    <Label className="text-[10px]">API Key</Label>
+                    <div className="relative">
+                      <Input className="h-7 text-[11px] pr-8"
+                        type={showAgentProviderKey === p.id ? "text" : "password"}
+                        placeholder="sk-..."
+                        value={p.apiKey} onChange={(e) => updateAgentProvider(i, { ...p, apiKey: e.target.value })} />
+                      <button type="button"
+                        className="absolute inset-y-0 right-2 flex items-center text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowAgentProviderKey(showAgentProviderKey === p.id ? null : p.id)}>
+                        {showAgentProviderKey === p.id ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <p className="text-[10px] text-muted-foreground">
-                {agent.mcpServerIds.length === 0
-                  ? "No restriction — agent will use all available MCP servers."
-                  : `Agent will only use the ${agent.mcpServerIds.length} selected server(s).`}
-              </p>
+            ))}
+          </div>
+        )}
+
+        {/* Select from global providers */}
+        {globalProviders.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {globalProviders.map((p) => (
+              <button key={p.id} type="button" onClick={() => toggleProvider(p.id)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                  agent.providerIds.includes(p.id)
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-background border-border text-muted-foreground hover:border-primary"
+                }`}>
+                <Zap className="h-3 w-3" />
+                {p.name || p.model || "Provider"}
+                {p.model && <span className="opacity-70 text-[10px]">{p.model}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7"
+            onClick={() => {
+              const newP = emptyProvider();
+              onChange({ ...agent, agentProviders: [...agent.agentProviders, newP] });
+            }}>
+            <Plus className="h-3 w-3" /> Add provider for this agent
+          </Button>
+        </div>
+
+        <div className="bg-muted/40 rounded-md px-3 py-2 text-[11px] text-muted-foreground">
+          {agent.agentProviders.length === 0 && agent.providerIds.length === 0 ? (
+            <>
+              <span className="font-medium text-foreground">Using global provider list</span>
+              <span className="ml-1">— select providers above to restrict, or add an agent-specific one.</span>
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-foreground">Provider order: </span>
+              {agent.agentProviders.length > 0 && <span>agent-specific first</span>}
+              {agent.agentProviders.length > 0 && agent.providerIds.length > 0 && <span>, then </span>}
+              {agent.providerIds.length > 0 && <span>{agent.providerIds.length} selected global provider(s)</span>}
+              {agent.providerIds.length === 0 && agent.agentProviders.length > 0 && <span>, no global fallback</span>}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* MCP Servers + Tool Filter */}
+      {mcpServers.length > 0 ? (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs">MCP Tool Servers</Label>
+            <span className="text-[10px] text-muted-foreground">
+              {agent.mcpServerIds.length === 0 ? "Using all servers (all tools)" : `${agent.mcpServerIds.length} server(s) selected`}
+            </span>
+          </div>
+
+          {/* Server chips */}
+          <div className="flex flex-wrap gap-2">
+            {mcpServers.map((s) => {
+              const selected = agent.mcpServerIds.includes(s.id);
+              const filterCount = (agent.mcpToolFilter[s.id] ?? []).length;
+              return (
+                <button key={s.id} type="button" onClick={() => toggleMcp(s.id)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                    selected
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-background border-border text-muted-foreground hover:border-primary"
+                  }`}>
+                  <Server className="h-3 w-3" />
+                  {s.name || s.url}
+                  {selected && filterCount > 0 && (
+                    <span className="bg-primary-foreground/20 text-primary-foreground text-[9px] rounded-full px-1.5 py-0.5 font-medium">
+                      {filterCount} tool{filterCount !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Per-server tool filter — shown for each selected server */}
+          {agent.mcpServerIds.length > 0 && (
+            <div className="space-y-2">
+              {agent.mcpServerIds.map((sid) => {
+                const server = mcpServers.find((s) => s.id === sid);
+                if (!server) return null;
+                const state = serverTools[sid];
+                const selectedTools = agent.mcpToolFilter[sid] ?? [];
+                const discovered = state?.tools ?? [];
+
+                return (
+                  <div key={sid} className="border border-border/60 rounded-md overflow-hidden">
+                    {/* Server header */}
+                    <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 border-b border-border/60">
+                      <Server className="h-3 w-3 text-muted-foreground shrink-0" />
+                      <span className="text-xs font-medium flex-1 truncate">{server.name || server.url}</span>
+                      <span className="text-[10px] text-muted-foreground shrink-0">
+                        {selectedTools.length === 0
+                          ? "all tools"
+                          : `${selectedTools.length} of ${discovered.length || "?"} tool${selectedTools.length !== 1 ? "s" : ""}`}
+                      </span>
+                      {selectedTools.length > 0 && (
+                        <button type="button" onClick={() => clearToolFilter(sid)}
+                          className="text-[10px] text-muted-foreground hover:text-foreground shrink-0">
+                          clear
+                        </button>
+                      )}
+                      <Button type="button" variant="ghost" size="sm"
+                        className="h-6 gap-1 text-[11px] shrink-0 px-2"
+                        disabled={state?.loading}
+                        onClick={() => loadServerTools(server)}>
+                        {state?.loading
+                          ? <><Loader2 className="h-2.5 w-2.5 animate-spin" />Loading…</>
+                          : <><FlaskConical className="h-2.5 w-2.5" />{discovered.length > 0 ? "Reload" : "Load tools"}</>}
+                      </Button>
+                    </div>
+
+                    {/* Tool list */}
+                    {state?.error && (
+                      <div className="px-3 py-2 text-[11px] text-destructive flex items-start gap-1.5">
+                        <XCircle className="h-3 w-3 shrink-0 mt-0.5" />{state.error}
+                      </div>
+                    )}
+
+                    {!state && (
+                      <div className="px-3 py-2.5 text-[11px] text-muted-foreground text-center">
+                        Click "Load tools" to discover available tools from this server.
+                      </div>
+                    )}
+
+                    {discovered.length > 0 && (
+                      <div className="px-3 py-2 space-y-1.5 max-h-48 overflow-y-auto">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] text-muted-foreground uppercase tracking-wide font-semibold">
+                            {discovered.length} tool{discovered.length !== 1 ? "s" : ""} available
+                          </span>
+                          <button type="button" onClick={() => {
+                            if (selectedTools.length === discovered.length) {
+                              clearToolFilter(sid);
+                            } else {
+                              onChange({ ...agent, mcpToolFilter: { ...agent.mcpToolFilter, [sid]: discovered.map((t) => t.name) } });
+                            }
+                          }} className="text-[10px] text-primary hover:underline">
+                            {selectedTools.length === discovered.length ? "Deselect all" : "Select all"}
+                          </button>
+                        </div>
+                        {discovered.map((tool) => {
+                          const checked = selectedTools.length === 0 || selectedTools.includes(tool.name);
+                          const explicitlySelected = selectedTools.includes(tool.name);
+                          return (
+                            <label key={tool.name}
+                              className={`flex items-start gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${
+                                explicitlySelected ? "bg-primary/8" : "hover:bg-muted/50"
+                              } ${selectedTools.length > 0 && !explicitlySelected ? "opacity-50" : ""}`}>
+                              <input type="checkbox"
+                                className="mt-0.5 h-3 w-3 accent-primary shrink-0"
+                                checked={selectedTools.length === 0 ? true : explicitlySelected}
+                                onChange={() => toggleTool(sid, tool.name)}
+                              />
+                              <div className="min-w-0">
+                                <p className="text-xs font-mono font-medium leading-tight truncate">{tool.name}</p>
+                                {tool.description && (
+                                  <p className="text-[10px] text-muted-foreground leading-snug mt-0.5 line-clamp-2">{tool.description}</p>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Status footer */}
+                    {discovered.length > 0 && (
+                      <div className="px-3 py-1.5 bg-muted/20 border-t border-border/60 text-[10px] text-muted-foreground">
+                        {selectedTools.length === 0
+                          ? "All tools passed to LLM. Select specific tools above to restrict."
+                          : `LLM can only call: ${selectedTools.join(", ")}`}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
-          {/* Default Prompts */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Label className="text-xs">Default Prompts (shown in chat quick-pick)</Label>
+          {agent.mcpServerIds.length === 0 && (
+            <div className="bg-muted/40 rounded-md px-3 py-2 text-[11px] text-muted-foreground">
+              <span className="font-medium text-foreground">All servers active</span>
+              <span className="ml-1">— the LLM sees every tool from every enabled server. Select servers above to restrict.</span>
             </div>
-            {agent.defaultPrompts.length === 0 && (
-              <p className="text-xs text-muted-foreground border border-dashed rounded-md p-3 text-center">
-                No prompts yet. Add one below.
-              </p>
-            )}
-            {agent.defaultPrompts.map((p, i) => (
-              <div key={i} className="flex items-center gap-1">
-                <div className="flex flex-col gap-0 shrink-0">
-                  <Button type="button" variant="ghost" size="icon" className="h-5 w-6 rounded-none"
-                    disabled={i === 0}
-                    onClick={() => onChange({ ...agent, defaultPrompts: moveItem(agent.defaultPrompts, i, i - 1) })}>
-                    <ChevronUp className="h-3 w-3" />
-                  </Button>
-                  <Button type="button" variant="ghost" size="icon" className="h-5 w-6 rounded-none"
-                    disabled={i === agent.defaultPrompts.length - 1}
-                    onClick={() => onChange({ ...agent, defaultPrompts: moveItem(agent.defaultPrompts, i, i + 1) })}>
-                    <ChevronDown className="h-3 w-3" />
-                  </Button>
-                </div>
-                {i === 0 && (
-                  <span className="text-[9px] text-primary font-medium shrink-0 w-8 text-center leading-none">top</span>
-                )}
-                {i > 0 && <span className="w-8 shrink-0" />}
-                <Input className="h-8 text-xs flex-1" value={p} placeholder="Enter a quick prompt…"
-                  onChange={(e) => updatePrompt(i, e.target.value)} />
-                <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
-                  onClick={() => removePrompt(i)}><Trash2 className="h-3.5 w-3.5" /></Button>
-              </div>
-            ))}
-            <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs"
-              onClick={() => onChange({ ...agent, defaultPrompts: [...agent.defaultPrompts, ""] })}>
-              <MessageSquarePlus className="h-3.5 w-3.5" />
-              Add Prompt
-            </Button>
-          </div>
+          )}
+        </div>
+      ) : (
+        <div className="bg-muted/30 border border-dashed border-border rounded-md px-3 py-2.5 text-[11px] text-muted-foreground flex items-start gap-2">
+          <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
+          <span>No MCP servers configured yet. Add servers in the <strong>MCP Servers</strong> section above, then return here to assign them to this agent.</span>
         </div>
       )}
+
+      {/* Default Prompts */}
+      <div className="space-y-2">
+        <Label className="text-xs">Default Prompts (shown in chat quick-pick)</Label>
+        {agent.defaultPrompts.length === 0 && (
+          <p className="text-xs text-muted-foreground border border-dashed rounded-md p-3 text-center">
+            No prompts yet. Add one below.
+          </p>
+        )}
+        {agent.defaultPrompts.map((p, i) => (
+          <div key={i} className="flex items-center gap-1">
+            <div className="flex flex-col gap-0 shrink-0">
+              <Button type="button" variant="ghost" size="icon" className="h-5 w-6 rounded-none"
+                disabled={i === 0}
+                onClick={() => onChange({ ...agent, defaultPrompts: moveItem(agent.defaultPrompts, i, i - 1) })}>
+                <ChevronUp className="h-3 w-3" />
+              </Button>
+              <Button type="button" variant="ghost" size="icon" className="h-5 w-6 rounded-none"
+                disabled={i === agent.defaultPrompts.length - 1}
+                onClick={() => onChange({ ...agent, defaultPrompts: moveItem(agent.defaultPrompts, i, i + 1) })}>
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+            </div>
+            {i === 0
+              ? <span className="text-[9px] text-primary font-medium shrink-0 w-8 text-center leading-none">top</span>
+              : <span className="w-8 shrink-0" />}
+            <Input className="h-8 text-xs flex-1" value={p} placeholder="Enter a quick prompt…"
+              onChange={(e) => updatePrompt(i, e.target.value)} />
+            <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+              onClick={() => removePrompt(i)}><Trash2 className="h-3.5 w-3.5" /></Button>
+          </div>
+        ))}
+        <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs"
+          onClick={() => onChange({ ...agent, defaultPrompts: [...agent.defaultPrompts, ""] })}>
+          <MessageSquarePlus className="h-3.5 w-3.5" /> Add Prompt
+        </Button>
+      </div>
     </div>
   );
 };
@@ -525,6 +1165,7 @@ const LlmSettingsSection = () => {
   const [globalSnapshot, setGlobalSnapshot] = useState<GlobalConfigSnapshot>(DEFAULT_GLOBAL_SNAPSHOT);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchConfig = async () => {
@@ -678,6 +1319,7 @@ const LlmSettingsSection = () => {
           <p className="text-xs text-muted-foreground">
             Connect remote MCP servers to give agents additional tools. Each agent can be configured to use specific servers.
           </p>
+          <McpGuide />
           <div className="space-y-3">
             {llm.mcpServers.length === 0 && (
               <p className="text-sm text-muted-foreground border border-dashed rounded-lg p-4 text-center">
@@ -686,6 +1328,8 @@ const LlmSettingsSection = () => {
             )}
             {llm.mcpServers.map((server, i) => (
               <McpCard key={server.id} server={server} index={i}
+                supabaseClient={supabase}
+                organizationId={user?.organization?.id}
                 onChange={(updated) => updateMcp(i, updated)}
                 onRemove={() => removeMcp(i)} />
             ))}
@@ -719,21 +1363,46 @@ const LlmSettingsSection = () => {
             The first enabled agent is the default.
           </p>
 
-          {llm.agents.length === 0 && (
+          {llm.agents.length === 0 ? (
             <p className="text-sm text-muted-foreground border border-dashed rounded-lg p-4 text-center">
               No agents configured. Add one below or reset to defaults.
             </p>
+          ) : (
+            <div className="border rounded-lg overflow-hidden">
+              {/* Table header */}
+              <div className="grid grid-cols-[28px_1fr_80px_60px_48px_52px_auto] gap-2 px-3 py-2 bg-muted/50 border-b border-border text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                <span className="text-center">#</span>
+                <span>Name</span>
+                <span className="text-center">Output</span>
+                <span className="text-center">Prompts</span>
+                <span className="text-center">MCP</span>
+                <span className="text-center">On</span>
+                <span>Actions</span>
+              </div>
+
+              {/* Table rows + inline edit panels */}
+              {llm.agents.map((agent, i) => (
+                <div key={agent.id}>
+                  <AgentTableRow
+                    agent={agent} index={i} total={llm.agents.length}
+                    isEditing={editingAgentId === agent.id}
+                    mcpServers={llm.mcpServers}
+                    onToggleEdit={() => setEditingAgentId(editingAgentId === agent.id ? null : agent.id)}
+                    onChange={(updated) => updateAgent(i, updated)}
+                    onMove={moveAgent} onRemove={() => { removeAgent(i); if (editingAgentId === agent.id) setEditingAgentId(null); }}
+                  />
+                  {editingAgentId === agent.id && (
+                    <AgentEditPanel
+                      agent={agent} mcpServers={llm.mcpServers} globalProviders={llm.providers}
+                      supabaseClient={supabase} organizationId={user?.organization?.id}
+                      onChange={(updated) => updateAgent(i, updated)}
+                      onClose={() => setEditingAgentId(null)}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
           )}
-          <div className="space-y-3">
-            {llm.agents.map((agent, i) => (
-              <AgentCard
-                key={agent.id} agent={agent} index={i} total={llm.agents.length}
-                mcpServers={llm.mcpServers}
-                onChange={(updated) => updateAgent(i, updated)}
-                onMove={moveAgent} onRemove={() => removeAgent(i)}
-              />
-            ))}
-          </div>
 
           <Button type="button" variant="outline" size="sm" className="gap-2"
             onClick={() => patchLlm({ agents: [...llm.agents, emptyAgent()] })}>

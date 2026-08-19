@@ -13,6 +13,15 @@ const AI_INSIGHT_SYSTEM_PROMPT =
 const SWITCHABLE_CHART_SYSTEM_PROMPT =
   "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best visualization type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide the matching data structure: data[] for cartesian/pie/radial types, nodes[]+links[] for network, hierarchy object for treemap, data[] with lat/lng fields for map. Keep labels concise and aggregate long-tail items as 'Other'. The user can switch to another compatible chart type in the UI after generation.";
 
+export interface LlmProviderConfig {
+  id: string;
+  name: string;
+  apiBaseUrl: string;
+  apiKey: string;
+  model: string;
+  enabled: boolean;
+}
+
 export interface LlmAgentConfig {
   id: string;
   name: string;
@@ -20,6 +29,9 @@ export interface LlmAgentConfig {
   systemPrompt: string;
   expectedOutput: "text" | "echarts" | "table" | "mixed";
   mcpServerIds: string[];
+  mcpToolFilter: Record<string, string[]>;
+  providerIds: string[];
+  agentProviders: LlmProviderConfig[];
   defaultPrompts: string[];
   enabled: boolean;
 }
@@ -103,7 +115,7 @@ export const globalConfig: GlobalConfig = {
           description: "General data analysis, insights, and trend identification",
           systemPrompt: DATA_ANALYST_SYSTEM_PROMPT,
           expectedOutput: "text",
-          mcpServerIds: [],
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
           defaultPrompts: [
             "Summarize the key findings in 3 bullet points",
             "Which item has the highest value and why might that be?",
@@ -118,7 +130,7 @@ export const globalConfig: GlobalConfig = {
           description: "Creates interactive ECharts visualizations from data",
           systemPrompt: CHART_BUILDER_SYSTEM_PROMPT,
           expectedOutput: "echarts",
-          mcpServerIds: [],
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
           defaultPrompts: [
             "Show me a bar chart of the top 10 results",
             "Create a pie chart of the data distribution",
@@ -133,7 +145,7 @@ export const globalConfig: GlobalConfig = {
           description: "Full analysis with written insights and a chart visualization",
           systemPrompt: AI_INSIGHT_SYSTEM_PROMPT,
           expectedOutput: "mixed",
-          mcpServerIds: [],
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
           defaultPrompts: [
             "Generate a complete AI insight with visualization for this data",
             "Give me a business summary with a supporting chart",
@@ -147,7 +159,7 @@ export const globalConfig: GlobalConfig = {
           description: "Returns structured JSON with summary, insights, and a chart spec the user can switch between types",
           systemPrompt: SWITCHABLE_CHART_SYSTEM_PROMPT,
           expectedOutput: "mixed",
-          mcpServerIds: [],
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
           defaultPrompts: [
             "Analyze this data and generate an interactive chart I can switch between types",
             "Generate a summary with insights and a switchable visualization",

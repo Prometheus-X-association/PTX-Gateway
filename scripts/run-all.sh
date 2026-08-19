@@ -270,9 +270,17 @@ if [[ "$WITH_SUPABASE" == "true" ]]; then
     echo "Applying pending local database migrations..."
     npx supabase db push --local
   fi
+
+  echo "Starting Edge Functions runtime (hot-reload)..."
+  npx supabase functions serve > /tmp/supabase-functions.log 2>&1 &
+  FUNCTIONS_PID=$!
+  echo "Edge Functions PID: ${FUNCTIONS_PID} (logs: /tmp/supabase-functions.log)"
 fi
 
 cleanup() {
+  if [[ -n "${FUNCTIONS_PID:-}" ]]; then
+    kill "$FUNCTIONS_PID" 2>/dev/null || true
+  fi
   if [[ "$SUPABASE_STARTED" == "true" && "$STOP_ON_EXIT" == "true" ]]; then
     echo
     echo "Stopping local Supabase services..."

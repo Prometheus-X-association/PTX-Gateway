@@ -63,6 +63,9 @@ interface LlmAgent {
   systemPrompt?: string;
   expectedOutput?: string;
   mcpServerIds?: string[];
+  mcpToolFilter?: Record<string, string[]>;
+  providerIds?: string[];
+  agentProviders?: LlmProvider[];
   defaultPrompts?: string[];
   enabled?: boolean;
 }
@@ -192,6 +195,19 @@ const resolveProviders = (cfg: LlmInsightsConfig): LlmProvider[] => {
     }];
   }
   return [];
+};
+
+// Resolve providers for a specific agent:
+//   1. Agent-specific providers come first (highest priority)
+//   2. Then global providers filtered to agent's providerIds selection
+//   3. If no providerIds set, all global providers are used as fallback
+const resolveAgentProviders = (agent: LlmAgent, cfg: LlmInsightsConfig): LlmProvider[] => {
+  const agentSpecific = (agent.agentProviders ?? []).filter((p) => p.enabled !== false);
+  const globalAll = resolveProviders(cfg);
+  const globalSelected = (agent.providerIds ?? []).length > 0
+    ? globalAll.filter((p) => p.id && (agent.providerIds ?? []).includes(p.id))
+    : globalAll;
+  return [...agentSpecific, ...globalSelected];
 };
 
 // Non-streaming LLM call — returns full message (used in tool-use loop)
@@ -454,10 +470,7 @@ serve(async (req: Request) => {
 
   if (!llmConfig.enabled) return sendError("LLM insights are disabled", 400);
 
-  const providers = resolveProviders(llmConfig);
-  if (providers.length === 0) return sendError("No LLM providers configured", 400);
-
-  // Resolve active agent (if specified)
+  // Resolve active agent first (provider resolution depends on it)
   const activeAgent = body.agentId && Array.isArray(llmConfig.agents)
     ? llmConfig.agents.find((a) => a.id === body.agentId && a.enabled !== false) ?? null
     : null;
@@ -489,6 +502,12 @@ serve(async (req: Request) => {
     })),
   ];
 
+  // Resolve providers — agent-specific first, then global (filtered or all)
+  const providers = activeAgent
+    ? resolveAgentProviders(activeAgent, llmConfig)
+    : resolveProviders(llmConfig);
+  if (providers.length === 0) return sendError("No LLM providers configured", 400);
+
   // Discover MCP tools — filter to agent's assigned servers if agent specifies them
   const agentMcpIds = activeAgent?.mcpServerIds;
   const mcpServers = (llmConfig.mcpServers || []).filter((s) => {
@@ -499,7 +518,15 @@ serve(async (req: Request) => {
   let allTools: OpenAITool[] = [];
   for (const server of mcpServers) {
     const tools = await discoverMcpTools(server);
-    allTools = [...allTools, ...tools];
+    const allowedNames = activeAgent?.mcpToolFilter?.[server.id ?? ""];
+    const filtered = allowedNames && allowedNames.length > 0
+      ? tools.filter((t) => {
+          // qualified name is `${serverId}__${toolName}`
+          const rawName = t.function.name.replace(/^[^_]+__/, "");
+          return allowedNames.includes(rawName);
+        })
+      : tools;
+    allTools = [...allTools, ...filtered];
   }
 
   // SSE stream

@@ -92,6 +92,12 @@ export interface GlobalConfig {
         systemPrompt: string;
         expectedOutput: 'text' | 'echarts' | 'table' | 'mixed';
         mcpServerIds: string[];
+        mcpToolFilter: Record<string, string[]>;
+        providerIds: string[];
+        agentProviders: Array<{
+          id: string; name: string; apiBaseUrl: string;
+          apiKey: string; model: string; enabled: boolean;
+        }>;
         defaultPrompts: string[];
         enabled: boolean;
       }>;
