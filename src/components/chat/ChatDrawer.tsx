@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown } from "lucide-react";
+import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -55,18 +55,30 @@ interface ChatDrawerProps {
 
 const uid = () => Math.random().toString(36).slice(2);
 
+// Tags that mark the start of an HTML/chart block
+const HTML_START_RE = /<(div|script|svg|canvas|html|body)\b/i;
+
+const extractFencedHtml = (text: string): { prose: string; html: string } | null => {
+  // Match ```html ... ``` or ``` ... ``` where content looks like HTML
+  const m = text.match(/```(?:html)?\s*\r?\n?([\s\S]*?)```/i);
+  if (!m) return null;
+  const inner = m[1].trim();
+  if (!HTML_START_RE.test(inner)) return null;
+  const fenceStart = text.indexOf(m[0]);
+  return { prose: text.slice(0, fenceStart).trim(), html: inner };
+};
+
 const splitHtmlViz = (text: string): { prose: string; html: string | null } => {
-  const fenceMatch = text.match(/```(?:html)?\n?([\s\S]*?)```/i);
-  if (fenceMatch) {
-    const fencedContent = fenceMatch[1].trim();
-    if (/<div\b/i.test(fencedContent)) {
-      const fenceStart = text.indexOf(fenceMatch[0]);
-      return { prose: text.slice(0, fenceStart).trim(), html: fencedContent };
-    }
-  }
-  const divStart = text.search(/<div\b/i);
-  if (divStart === -1) return { prose: text, html: null };
-  return { prose: text.slice(0, divStart).trim(), html: text.slice(divStart).trim() };
+  const fenced = extractFencedHtml(text);
+  if (fenced) return { prose: fenced.prose, html: fenced.html };
+
+  // Find first HTML-ish tag
+  const match = HTML_START_RE.exec(text);
+  if (!match || match.index === undefined) return { prose: text, html: null };
+  return {
+    prose: text.slice(0, match.index).trim(),
+    html: text.slice(match.index).trim(),
+  };
 };
 
 // Strip ```json ... ``` fences and parse JSON safely
@@ -76,25 +88,32 @@ const parseJsonResponse = (text: string): Record<string, unknown> | null => {
   try { return JSON.parse(raw) as Record<string, unknown>; } catch { return null; }
 };
 
-// Route the finished LLM response to { prose, html, json } based on agent output type
+// Route the finished LLM response to { prose, html, json } based on agent output type.
+// HTML is ALWAYS detected regardless of agent type — any response containing an HTML/SVG
+// block is rendered as a visualization instead of escaped script text.
 const routeResponse = (
   text: string,
   outputFormat: string,
 ): { prose: string; html: string | null; json: Record<string, unknown> | null } => {
+  const trimmed = text.trim();
+
   if (outputFormat === "json") {
-    const json = parseJsonResponse(text);
-    return { prose: json ? "" : text, html: null, json };
+    const json = parseJsonResponse(trimmed);
+    return { prose: json ? "" : trimmed, html: null, json };
   }
+
   if (outputFormat === "html") {
-    const { prose, html } = splitHtmlViz(text);
+    const { prose, html } = splitHtmlViz(trimmed);
+    // html agent always produces html — if detection missed, treat entire response as html
+    if (!html && trimmed.length > 0) return { prose: "", html: trimmed, json: null };
     return { prose, html, json: null };
   }
-  if (outputFormat === "mixed") {
-    const { prose, html } = splitHtmlViz(text);
-    return { prose, html, json: null };
-  }
-  // text — skip HTML splitting entirely
-  return { prose: text, html: null, json: null };
+
+  // For mixed, text, or any other format — always try to split out an HTML block.
+  // This ensures that visualizations returned by any agent (including free chat) are
+  // rendered as iframes rather than escaped code text.
+  const { prose, html } = splitHtmlViz(trimmed);
+  return { prose, html, json: null };
 };
 
 const renderMarkdown = (md: string): string =>
@@ -137,15 +156,127 @@ const buildSrcdoc = (innerHtml: string) => `<!DOCTYPE html>
 <body>${innerHtml}</body>
 </html>`;
 
-const VizBubble = ({ html }: { html: string }) => (
-  <iframe
-    srcDoc={buildSrcdoc(html)}
-    sandbox="allow-scripts"
-    style={{ width: "100%", height: 400, border: "none" }}
-    className="mt-2 rounded-xl overflow-hidden border border-border"
-    title="AI Chart"
-  />
-);
+const VizBubble = ({ html }: { html: string }) => {
+  const [expanded, setExpanded] = useState(false);
+  // Floating window position (top-left corner)
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const [size, setSize] = useState({ w: 700, h: 480 });
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Centre on first open
+  const handleExpand = () => {
+    if (!pos) {
+      setPos({
+        x: Math.max(24, (window.innerWidth - size.w) / 2),
+        y: Math.max(24, (window.innerHeight - size.h) / 2),
+      });
+    }
+    setExpanded(true);
+  };
+
+  const onDragStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: pos!.x, origY: pos!.y };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const dx = ev.clientX - dragRef.current.startX;
+      const dy = ev.clientY - dragRef.current.startY;
+      setPos({
+        x: Math.max(0, Math.min(window.innerWidth - size.w, dragRef.current.origX + dx)),
+        y: Math.max(0, Math.min(window.innerHeight - size.h, dragRef.current.origY + dy)),
+      });
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  return (
+    <>
+      <div className="relative mt-2 rounded-xl overflow-hidden border border-border group">
+        <iframe
+          srcDoc={buildSrcdoc(html)}
+          sandbox="allow-scripts"
+          style={{ width: "100%", height: 380, border: "none", display: "block" }}
+          title="AI Visualization"
+        />
+        <button
+          onClick={handleExpand}
+          className="absolute top-2 right-2 p-1.5 rounded-md bg-background/80 backdrop-blur-sm border border-border shadow-sm text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Expand visualization"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {expanded && pos && (
+        <div
+          ref={panelRef}
+          className="fixed flex flex-col bg-background border border-border rounded-2xl shadow-2xl overflow-hidden"
+          style={{ left: pos.x, top: pos.y, width: size.w, height: size.h, zIndex: 999999, minWidth: 320, minHeight: 260 }}
+        >
+          {/* Drag handle / title bar */}
+          <div
+            className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-muted/50 shrink-0 cursor-grab active:cursor-grabbing select-none"
+            onMouseDown={onDragStart}
+          >
+            <span className="text-sm font-semibold text-foreground">AI Visualization</span>
+            <div className="flex items-center gap-1">
+              {/* Size presets */}
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setSize({ w: 520, h: 380 })}
+                className="text-[10px] px-2 py-0.5 rounded hover:bg-background transition-colors text-muted-foreground"
+                title="Small"
+              >S</button>
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setSize({ w: 700, h: 480 })}
+                className="text-[10px] px-2 py-0.5 rounded hover:bg-background transition-colors text-muted-foreground"
+                title="Medium"
+              >M</button>
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setSize({ w: 960, h: 640 })}
+                className="text-[10px] px-2 py-0.5 rounded hover:bg-background transition-colors text-muted-foreground"
+                title="Large"
+              >L</button>
+              <div className="w-px h-3 bg-border mx-1" />
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setExpanded(false)}
+                className="p-1 rounded hover:bg-background transition-colors text-muted-foreground hover:text-foreground"
+                title="Close"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Content — scrollable wrapper around the iframe */}
+          <div className="flex-1 overflow-auto min-h-0 bg-background">
+            <iframe
+              srcDoc={buildSrcdoc(html)}
+              sandbox="allow-scripts"
+              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+              title="AI Visualization (Expanded)"
+            />
+          </div>
+
+          {/* Drag hint */}
+          <div className="px-3 py-1 border-t border-border bg-muted/30 shrink-0 flex items-center justify-between">
+            <span className="text-[10px] text-muted-foreground/60">Drag title bar to move</span>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
 
 // ─── JsonBubble ───────────────────────────────────────────────────────────────
 
@@ -192,8 +323,14 @@ const JsonBubble = ({ data }: { data: Record<string, unknown> }) => {
 
 // ─── ChatMessageBubble ────────────────────────────────────────────────────────
 
-const ChatMessageBubble = ({ msg }: { msg: ChatMessageData }) => {
+const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; outputFormat?: string }) => {
   const isUser = msg.role === "user";
+  const isVisualAgent = outputFormat === "html" || outputFormat === "mixed" || outputFormat === "json";
+
+  // During streaming for visual agents, don't dump raw HTML/JSON as text —
+  // show a spinner with a label instead and let the final routeResponse handle rendering
+  const streamingVisual = msg.streaming && isVisualAgent;
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
       <div
@@ -213,11 +350,22 @@ const ChatMessageBubble = ({ msg }: { msg: ChatMessageData }) => {
             ))}
           </div>
         )}
-        {msg.streaming && !msg.content
-          ? <Loader2 className="h-4 w-4 animate-spin opacity-60" />
+
+        {(msg.streaming && !msg.content) || streamingVisual
+          ? (
+            <span className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {outputFormat === "html" ? "Generating chart…"
+                : outputFormat === "json" ? "Generating structured data…"
+                : outputFormat === "mixed" ? "Generating analysis…"
+                : "Thinking…"}
+            </span>
+          )
           : msg.jsonData
             ? <JsonBubble data={msg.jsonData} />
-            : <div className="prose-sm break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+            : msg.content
+              ? <div className="prose-sm break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+              : null
         }
         {msg.htmlViz && <VizBubble html={msg.htmlViz} />}
       </div>
@@ -265,7 +413,8 @@ const ChatDrawer = ({
     }
   }, [agents, activeAgentId]);
 
-  const activeAgent = agents.find((a) => a.id === activeAgentId) ?? agents[0] ?? null;
+  const isFreeChatMode = activeAgentId === "__free__";
+  const activeAgent = isFreeChatMode ? null : (agents.find((a) => a.id === activeAgentId) ?? agents[0] ?? null);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -308,7 +457,9 @@ const ChatDrawer = ({
       setShowPrompts(false);
       setShowAgentPicker(false);
 
-      const agentId = overrideAgentId ?? activeAgentId ?? undefined;
+      // "__free__" means no agent — send without agentId so backend uses generic LLM
+      const resolvedId = overrideAgentId ?? activeAgentId ?? undefined;
+      const agentId = resolvedId === "__free__" ? undefined : resolvedId;
 
       const userMsg: ChatMessageData = { id: uid(), role: "user", content: trimmed };
       const assistantId = uid();
@@ -409,13 +560,13 @@ const ChatDrawer = ({
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setInput(val);
-    // Show agent picker when user types '/' at the very start
     if (val === "/") {
       setShowAgentPicker(true);
       setShowPrompts(false);
     } else if (val === "") {
       setShowAgentPicker(false);
-      setShowPrompts(true);
+      // Only auto-reopen prompts when the chat is still empty
+      if (messages.length === 0) setShowPrompts(true);
     } else {
       setShowAgentPicker(false);
       setShowPrompts(false);
@@ -456,6 +607,9 @@ const ChatDrawer = ({
     echarts: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
     table: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
     mixed: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+    html: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+    json: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+    __free__: "bg-muted text-muted-foreground",
   };
 
   const panel = (
@@ -465,45 +619,65 @@ const ChatDrawer = ({
         <div className="flex items-center gap-2 min-w-0">
           <MessageSquareDot className="h-5 w-5 text-primary shrink-0" />
           <span className="font-semibold text-sm">AI Assistant</span>
-          {activeAgent && (
-            <div className="relative">
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowAgentPicker((v) => !v); }}
-                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors hover:opacity-80 ${agentBadgeColor[activeAgent.expectedOutput] || agentBadgeColor.text}`}
+          <div className="relative">
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowAgentPicker((v) => !v); }}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors hover:opacity-80 ${
+                isFreeChatMode
+                  ? agentBadgeColor.__free__
+                  : (agentBadgeColor[activeAgent?.expectedOutput ?? "text"] || agentBadgeColor.text)
+              }`}
+            >
+              {isFreeChatMode ? <MessageCircle className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
+              {isFreeChatMode ? "Free Chat" : (activeAgent?.name ?? "Agent")}
+              <ChevronDown className="h-3 w-3 opacity-60" />
+            </button>
+            {showAgentPicker && (
+              <div
+                className="absolute left-0 top-full mt-1 w-64 bg-background border border-border rounded-xl shadow-xl overflow-hidden z-50"
+                onMouseDown={(e) => e.stopPropagation()}
               >
-                <Bot className="h-3 w-3" />
-                {activeAgent.name}
-                {agents.length > 1 && <ChevronDown className="h-3 w-3 opacity-60" />}
-              </button>
-              {showAgentPicker && agents.length > 1 && (
-                <div
-                  className="absolute left-0 top-full mt-1 w-64 bg-background border border-border rounded-xl shadow-xl overflow-hidden z-50"
-                  onMouseDown={(e) => e.stopPropagation()}
-                >
-                  <div className="px-3 py-2 border-b border-border bg-muted/40">
-                    <span className="text-xs font-medium text-muted-foreground">Switch Agent</span>
-                  </div>
-                  {agents.map((a) => (
-                    <button
-                      key={a.id}
-                      onMouseDown={(e) => { e.preventDefault(); selectAgent(a.id); }}
-                      className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 last:border-0 ${a.id === activeAgentId ? "bg-primary/5" : ""}`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium">{a.name}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${agentBadgeColor[a.expectedOutput] || agentBadgeColor.text}`}>
-                          {OUTPUT_LABELS[a.expectedOutput] ?? a.expectedOutput}
-                        </span>
-                      </div>
-                      {a.description && (
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{a.description}</p>
-                      )}
-                    </button>
-                  ))}
+                <div className="px-3 py-2 border-b border-border bg-muted/40">
+                  <span className="text-xs font-medium text-muted-foreground">Switch Agent</span>
                 </div>
-              )}
-            </div>
-          )}
+                {/* Free Chat option */}
+                <button
+                  onMouseDown={(e) => { e.preventDefault(); selectAgent("__free__"); }}
+                  className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 ${isFreeChatMode ? "bg-primary/5" : ""}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-sm font-medium">Free Chat</span>
+                    </div>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">generic</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5 pl-5">Plain LLM — no data context, no constraints</p>
+                </button>
+                {/* Specialized agents */}
+                {agents.map((a) => (
+                  <button
+                    key={a.id}
+                    onMouseDown={(e) => { e.preventDefault(); selectAgent(a.id); }}
+                    className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 last:border-0 ${a.id === activeAgentId ? "bg-primary/5" : ""}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="text-sm font-medium">{a.name}</span>
+                      </div>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${agentBadgeColor[a.expectedOutput] || agentBadgeColor.text}`}>
+                        {OUTPUT_LABELS[a.expectedOutput] ?? a.expectedOutput}
+                      </span>
+                    </div>
+                    {a.description && (
+                      <p className="text-xs text-muted-foreground mt-0.5 pl-5 line-clamp-1">{a.description}</p>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {messages.length > 0 && (
@@ -522,13 +696,17 @@ const ChatDrawer = ({
             <MessageSquareDot className="h-10 w-10 opacity-30" />
             <p className="text-sm">Ask anything about the result data.</p>
             <p className="text-xs opacity-70">
-              {agents.length > 1
-                ? "Type / to switch agents, or click the agent badge above."
-                : "Click the input to see quick prompts."}
+              Type <kbd className="font-mono bg-muted px-1 rounded">/</kbd> to switch agents or use Free Chat mode.
             </p>
           </div>
         )}
-        {messages.map((msg) => <ChatMessageBubble key={msg.id} msg={msg} />)}
+        {messages.map((msg) => (
+          <ChatMessageBubble
+            key={msg.id}
+            msg={msg}
+            outputFormat={msg.streaming ? (activeAgent?.expectedOutput ?? "text") : undefined}
+          />
+        ))}
         <div ref={messagesEndRef} />
       </div>
 
@@ -537,12 +715,12 @@ const ChatDrawer = ({
         <div className="relative">
           {/* Quick prompts popup — one row per agent showing its top prompt */}
           {showPrompts && !showAgentPicker && (
-            <div className="absolute bottom-full left-0 right-0 mb-2 bg-background border border-border rounded-xl shadow-xl overflow-hidden z-10">
-              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border bg-muted/40">
+            <div className="absolute bottom-full left-0 right-0 mb-2 bg-background border border-border rounded-xl shadow-xl overflow-hidden z-10 flex flex-col max-h-[60dvh] lg:max-h-[30vh]">
+              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border bg-muted/40 shrink-0">
                 <Zap className="h-3 w-3 text-primary" />
                 <span className="text-xs font-medium text-muted-foreground">Quick prompts</span>
               </div>
-              <div className="max-h-72 overflow-y-auto">
+              <div className="overflow-y-auto overscroll-contain [scrollbar-width:thin] [scrollbar-color:hsl(var(--border))_transparent]">
                 {/* Per-agent rows: name header + top prompt */}
                 {agentMenuItems.length > 0 ? agentMenuItems.map(({ agent: a, topPrompt }) => (
                   <button
@@ -596,15 +774,30 @@ const ChatDrawer = ({
           )}
 
           {/* Agent picker popup (triggered by '/' from input) */}
-          {showAgentPicker && agents.length > 0 && (
+          {showAgentPicker && (
             <div
-              className="absolute bottom-full left-0 right-0 mb-2 bg-background border border-border rounded-xl shadow-xl overflow-hidden z-10"
+              className="absolute bottom-full left-0 right-0 mb-2 bg-background border border-border rounded-xl shadow-xl overflow-hidden z-10 flex flex-col max-h-[60dvh] lg:max-h-[30vh]"
               onMouseDown={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border bg-muted/40">
+              <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border bg-muted/40 shrink-0">
                 <Bot className="h-3 w-3 text-primary" />
                 <span className="text-xs font-medium text-muted-foreground">Select an agent</span>
               </div>
+              <div className="overflow-y-auto overscroll-contain [scrollbar-width:thin] [scrollbar-color:hsl(var(--border))_transparent]">
+              {/* Free Chat entry */}
+              <button
+                onMouseDown={(e) => { e.preventDefault(); selectAgent("__free__"); }}
+                className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 ${isFreeChatMode ? "bg-primary/5" : ""}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-sm font-medium">Free Chat</span>
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">generic</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5 pl-5">Plain LLM — no data context, no constraints</p>
+              </button>
               {agents.map((a) => (
                 <button
                   key={a.id}
@@ -612,16 +805,20 @@ const ChatDrawer = ({
                   className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 last:border-0 ${a.id === activeAgentId ? "bg-primary/5" : ""}`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium">{a.name}</span>
+                    <div className="flex items-center gap-1.5">
+                      <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-sm font-medium">{a.name}</span>
+                    </div>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${agentBadgeColor[a.expectedOutput] || agentBadgeColor.text}`}>
                       {OUTPUT_LABELS[a.expectedOutput] ?? a.expectedOutput}
                     </span>
                   </div>
                   {a.description && (
-                    <p className="text-xs text-muted-foreground mt-0.5">{a.description}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 pl-5">{a.description}</p>
                   )}
                 </button>
               ))}
+              </div>
             </div>
           )}
 
@@ -630,7 +827,7 @@ const ChatDrawer = ({
               ref={inputRef}
               value={input}
               onChange={handleInputChange}
-              onFocus={() => { if (!input.trim()) setShowPrompts(true); }}
+              onFocus={() => { if (!input.trim() && messages.length === 0) setShowPrompts(true); }}
               onBlur={() => setTimeout(() => { setShowPrompts(false); setShowAgentPicker(false); }, 150)}
               onKeyDown={handleKeyDown}
               placeholder={agents.length > 1 ? "Ask… (Enter to send, / to switch agent)" : "Ask about the result… (Enter to send)"}
@@ -638,6 +835,18 @@ const ChatDrawer = ({
               rows={2}
               disabled={isStreaming}
             />
+            {/* Quick-prompts toggle — only shown when there are already messages */}
+            {messages.length > 0 && !isStreaming && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-10 w-10 shrink-0 ${showPrompts ? "text-primary bg-primary/10" : "text-muted-foreground"}`}
+                title="Quick prompts"
+                onMouseDown={(e) => { e.preventDefault(); setShowPrompts((v) => !v); setShowAgentPicker(false); }}
+              >
+                <Zap className="h-4 w-4" />
+              </Button>
+            )}
             {isStreaming ? (
               <Button variant="destructive" size="icon" className="h-10 w-10 shrink-0" onClick={handleStop}>
                 <X className="h-4 w-4" />
