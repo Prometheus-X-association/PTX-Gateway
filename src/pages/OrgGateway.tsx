@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useRagWorker } from "@/lib/useRagWorker";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { Sparkles, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import StepIndicator from "@/components/StepIndicator";
@@ -11,6 +12,7 @@ import HumanValidationPage from "@/components/HumanValidationPage";
 import { ProcessSessionProvider } from "@/contexts/ProcessSessionContext";
 import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { resolveResultUrl, ResultUrlInfo } from "@/utils/resultUrlResolver";
+import { buildRagDocStorageKey, saveRagDocToStorage } from "@/utils/ragDocStorage";
 import { generatePdcPayload, PdcPayload } from "@/utils/pdcPayloadGenerator";
 import { useAuth } from "@/contexts/AuthContext";
 import UserMenu from "@/components/UserMenu";
@@ -450,6 +452,14 @@ const OrgGatewayContent = ({
 
   const { sessionId, resetSession } = useProcessSession();
 
+  // RAG worker — created once, lives for the lifetime of this gateway session
+  const rag = useRagWorker();
+  // Stores the localStorage key for persisting document content; set in handleDataSelect
+  // so the onExtractedContent PDF callback can reuse it
+  const ragDocKeyRef = useRef<string | null>(null);
+  // Full document text available for the current session (passed to ResultsView → ChatDrawer)
+  const [sessionDocText, setSessionDocText] = useState<string | null>(null);
+
   // Build dynamic steps based on config
   const steps = useMemo(() => {
     const baseSteps = ["Select Type", "Choose Data", "Processing", "Results"];
@@ -555,6 +565,38 @@ const OrgGatewayContent = ({
     setForcedResultData(null);
     setForcedResultNotice(null);
     setSelectedData(data);
+
+    // Compute the result URL from the incoming data so we have a stable storage key
+    // even though selectedData state hasn't propagated yet.
+    const sessionId = data.processSessionId ?? activeProcessSessionId;
+    const resolvedResultUrl = selectedAnalytics
+      ? resolveResultUrl(
+          selectedAnalytics,
+          data.selectedDataResources,
+          data.apiParams,
+          data.uploadResourceParams,
+          sessionId,
+          pdcConfig?.fallback_result_url || undefined,
+          pdcConfig?.fallback_result_authorization || undefined,
+        )
+      : null;
+    const ragDocKey = buildRagDocStorageKey(resolvedResultUrl, organization.id);
+    // Keep the key in a ref so the onExtractedContent callback can use it for PDF uploads
+    ragDocKeyRef.current = ragDocKey;
+
+    // Only index explicit user-provided text/JSON as document context.
+    // selectedDataResources are platform metadata (contracts, API configs) — not user documents.
+    // Actual uploaded file content arrives later via onExtractedContent from DocumentUploadZone.
+    const docParts: string[] = [];
+    if (data.textData?.trim()) docParts.push(data.textData.trim());
+    if (data.manualJsonData?.trim()) docParts.push(data.manualJsonData.trim());
+    if (docParts.length > 0) {
+      const combined = docParts.join("\n\n");
+      rag.indexData(combined, "document");
+      setSessionDocText(combined);
+      if (ragDocKey) saveRagDocToStorage(ragDocKey, combined);
+    }
+
     goToStep(getStepIndex(showHumanValidation ? "Validation" : "Processing"));
   };
 
@@ -682,6 +724,13 @@ const OrgGatewayContent = ({
   }, [organization.name, getStepIndex, goToStep]);
 
   const currentStepName = steps[currentStep];
+
+  // Preload the RAG model as soon as Processing step begins so it's ready by Results
+  useEffect(() => {
+    if (currentStepName === "Processing") {
+      rag.preloadModel();
+    }
+  }, [currentStepName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // PDC config for processing
   const pdcConfigForProcessing = useMemo(() => (
@@ -936,6 +985,11 @@ const OrgGatewayContent = ({
               selectedAnalytics={selectedAnalytics}
               isDebugMode={isDebugMode}
               dataSelectionSettings={dataSelectionSettings}
+              onExtractedContent={(text) => {
+                rag.indexData(text, "document");
+                setSessionDocText(text);
+                if (ragDocKeyRef.current) saveRagDocToStorage(ragDocKeyRef.current, text);
+              }}
             />
           )}
           {currentStepName === "Validation" && selectedData && selectedAnalytics && (
@@ -980,6 +1034,9 @@ const OrgGatewayContent = ({
               selectedAnalyticsTargetId={activeAnalyticsTargetId}
               customVisualizations={customVisualizations}
               showDebugApiExportConfig={isDebugMode}
+              rag={rag}
+              docText={sessionDocText}
+              uploadConfig={selectedData?.uploadConfig}
             />
           )}
           </main>

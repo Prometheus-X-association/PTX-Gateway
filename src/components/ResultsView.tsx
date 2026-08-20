@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { ResultUrlInfo, formatResultUrlWithParams, buildResultRequestBody } from "@/utils/resultUrlResolver";
+import { buildRagDocStorageKey, loadRagDocFromStorage, saveRagDocToStorage } from "@/utils/ragDocStorage";
 import { isDebugMode } from "@/config/global.config";
 import { supabase } from "@/integrations/supabase/client";
 import { AnalyticsOption, CustomVisualizationConfig, DataResource, ExportApiConfig, ExportApiOidcConfig, OidcClientConfig } from "@/types/dataspace";
@@ -29,6 +30,11 @@ interface ResultsViewProps {
   selectedAnalyticsTargetId?: string | null;
   customVisualizations?: CustomVisualizationConfig[];
   showDebugApiExportConfig?: boolean;
+  rag?: import("@/lib/useRagWorker").RagWorkerHandle;
+  /** Full document text passed in-session (takes priority over localStorage restoration) */
+  docText?: string | null;
+  /** Upload config forwarded to the chatbox attachment button */
+  uploadConfig?: import("@/components/DocumentUploadZone").UploadConfig | null;
 }
 
 interface ApiRequestPreview {
@@ -2458,6 +2464,9 @@ const ResultsView = ({
   selectedAnalyticsTargetId,
   customVisualizations = [],
   showDebugApiExportConfig = false,
+  rag,
+  docText: propDocText,
+  uploadConfig,
 }: ResultsViewProps) => {
   const customVisualizationMountRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [activeTab, setActiveTab] = useState<string>("json");
@@ -2560,12 +2569,34 @@ const ResultsView = ({
     }
   }, [resultSnapshotStorageKey, formattedResultSourceUrl, resultUrlInfo?.method, selectedTargetId]);
 
+  // Stable ref to the rag handle — keeps applyResultDataUpdate out of the rag
+  // dependency chain so status updates don't cascade into data re-fetches.
+  const ragRef = useRef(rag);
+  useEffect(() => { ragRef.current = rag; }, [rag]);
+
+  // Document text: prop (in-session) takes priority; fall back to localStorage (direct page load).
+  const [storedDocText, setStoredDocText] = useState<string | null>(null);
+  const docText = propDocText ?? storedDocText;
+  const ragDocLoadedRef = useRef(false);
+  useEffect(() => {
+    if (propDocText) return; // already have it from the session prop
+    if (ragDocLoadedRef.current) return;
+    const key = buildRagDocStorageKey(resultUrlInfo, organizationId);
+    if (!key) return;
+    const saved = loadRagDocFromStorage(key);
+    if (!saved) return;
+    ragDocLoadedRef.current = true;
+    setStoredDocText(saved);
+    // Also index into RAG worker for chunk-mode searches on large documents
+    ragRef.current?.indexData(saved, "document");
+  }, [resultUrlInfo, organizationId, propDocText]);
+
   const applyResultDataUpdate = useCallback((nextData: unknown, options?: { incrementVersion?: boolean }) => {
     setResultData(nextData);
     if (options?.incrementVersion) {
       setResultDataVersion((prev) => prev + 1);
     }
-  }, []);
+  }, []); // result data is sent to LLM in full — no RAG indexing needed here
 
   const fetchResultDataInternal = useCallback(async (): Promise<"ready" | "error"> => {
     if (forcedResultData !== undefined) {
@@ -2687,6 +2718,13 @@ const ResultsView = ({
               defaultPrompts: Array.isArray(a.defaultPrompts)
                 ? (a.defaultPrompts as unknown[]).map(String)
                 : [],
+              ragSources: (["all", "result", "document", "none"].includes(String(a.ragSources ?? ""))
+                ? a.ragSources
+                : "all") as "all" | "result" | "document" | "none",
+              ragMode: (["auto", "chunks", "none"].includes(String(a.ragMode ?? ""))
+                ? a.ragMode
+                : "auto") as "auto" | "chunks" | "none",
+              ragTopK: typeof a.ragTopK === "number" && a.ragTopK > 0 ? a.ragTopK : 20,
             }))
           );
         }
@@ -3846,6 +3884,14 @@ const ResultsView = ({
             enabled={llmInsightsEnabled}
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
+            rag={rag}
+            docText={docText}
+            uploadConfig={uploadConfig}
+            onDocUploaded={(text) => {
+              setStoredDocText(text);
+              const key = buildRagDocStorageKey(resultUrlInfo, organizationId);
+              if (key) saveRagDocToStorage(key, text);
+            }}
           />
         </>,
         document.body

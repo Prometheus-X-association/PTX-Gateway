@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2 } from "lucide-react";
+import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
+import type { RagWorkerHandle } from "@/lib/useRagWorker";
+import type { UploadConfig } from "@/components/DocumentUploadZone";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,6 +40,9 @@ export interface LlmAgentInfo {
   description: string;
   expectedOutput: string;
   defaultPrompts: string[];
+  ragSources?: "all" | "result" | "document" | "none";
+  ragMode?: "auto" | "chunks" | "none";
+  ragTopK?: number;
 }
 
 interface ChatDrawerProps {
@@ -49,6 +54,13 @@ interface ChatDrawerProps {
   enabled?: boolean;
   isOpen: boolean;
   onClose: () => void;
+  rag?: RagWorkerHandle;
+  /** Full raw document text (from upload/selection) for "auto" and full-doc delivery */
+  docText?: string | null;
+  /** Upload config from the selected data resource — enables the paperclip attachment button */
+  uploadConfig?: UploadConfig | null;
+  /** Called after a successful in-chat file upload so the parent can persist the extracted text */
+  onDocUploaded?: (text: string) => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -56,7 +68,7 @@ interface ChatDrawerProps {
 const uid = () => Math.random().toString(36).slice(2);
 
 // Tags that mark the start of an HTML/chart block
-const HTML_START_RE = /<(div|script|svg|canvas|html|body)\b/i;
+const HTML_START_RE = /<(div|script|svg|canvas|html|body|table|thead|tbody|tr|th|td|ul|ol|section|article|figure|form|h[1-6])\b/i;
 
 const extractFencedHtml = (text: string): { prose: string; html: string } | null => {
   // Match ```html ... ``` or ``` ... ``` where content looks like HTML
@@ -386,6 +398,8 @@ const FALLBACK_PROMPTS = [
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
+const DOC_FULL_LIMIT = 30_000; // chars — below this, send full document text
+
 const ChatDrawer = ({
   resultData,
   organizationId,
@@ -395,26 +409,94 @@ const ChatDrawer = ({
   enabled = true,
   isOpen,
   onClose,
+  rag,
+  docText: propDocText,
+  uploadConfig,
+  onDocUploaded,
 }: ChatDrawerProps) => {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
-  const [showAgentPicker, setShowAgentPicker] = useState(false);
-  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [showAgentPicker, setShowAgentPicker] = useState(false);   // bottom picker (/ command)
+  const [showHeaderAgentPicker, setShowHeaderAgentPicker] = useState(false); // top badge picker
+  const [activeAgentId, setActiveAgentId] = useState<string>("__free__");
+  // Local doc text overrides prop when the user uploads a file directly from the chatbox
+  const [localDocText, setLocalDocText] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [showDocPopover, setShowDocPopover] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  // Initialize active agent to first enabled agent
-  useEffect(() => {
-    if (agents.length > 0 && !activeAgentId) {
-      setActiveAgentId(agents[0].id);
-    }
-  }, [agents, activeAgentId]);
+  // Suppresses the onFocus prompt-show when focus is triggered programmatically (e.g. after agent switch)
+  const suppressPromptsOnFocusRef = useRef(false);
 
   const isFreeChatMode = activeAgentId === "__free__";
   const activeAgent = isFreeChatMode ? null : (agents.find((a) => a.id === activeAgentId) ?? agents[0] ?? null);
+
+  // In-chat upload overrides prop doc text
+  const docText = localDocText ?? propDocText ?? null;
+
+  // Stable ref to rag so sendMessage doesn't need rag in its dep array
+  // (rag.status changes frequently; adding it would recreate sendMessage on every tick)
+  const ragRef = useRef(rag);
+  useEffect(() => { ragRef.current = rag; }, [rag]);
+
+  const handleFileAttach = useCallback(async (file: File) => {
+    if (!uploadConfig) return;
+    setIsUploading(true);
+
+    const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-proxy`;
+    const formData = new FormData();
+    formData.append("file", file);
+    Object.entries(uploadConfig.queryParams || {}).forEach(([k, v]) => { if (v) formData.append(k, v); });
+
+    try {
+      const resp = await fetch(proxyUrl, {
+        method: "POST",
+        headers: {
+          "x-upload-url": uploadConfig.uploadUrl,
+          "x-upload-authorization": uploadConfig.authorization || "",
+        },
+        body: formData,
+      });
+      const text = await resp.text();
+      let result: Record<string, unknown> = {};
+      try { result = text ? JSON.parse(text) : {}; } catch { result = { raw: text }; }
+
+      const status = typeof result.status === "number" ? result.status : (resp.ok ? 200 : 500);
+      if (resp.ok && status >= 200 && status < 300) {
+        const extracted = typeof result.body === "string" ? result.body : JSON.stringify(result.body ?? result);
+        if (extracted) {
+          setLocalDocText(extracted);
+          ragRef.current?.indexData(extracted, "document");
+          onDocUploaded?.(extracted);
+          // Post a system-style assistant message confirming the upload
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: uid(),
+              role: "assistant",
+              content: `Document **"${file.name}"** attached (${Math.round(file.size / 1024)} KB). You can now ask questions about it.`,
+            },
+          ]);
+        }
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { id: uid(), role: "assistant", content: `Upload failed: ${result.error ?? result.message ?? "unknown error"}` },
+        ]);
+      }
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        { id: uid(), role: "assistant", content: `Upload error: ${err instanceof Error ? err.message : String(err)}` },
+      ]);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [uploadConfig, onDocUploaded]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -429,16 +511,22 @@ const ChatDrawer = ({
   }, [messages]);
 
   useEffect(() => {
-    if (isOpen) setTimeout(() => inputRef.current?.focus(), 80);
+    if (isOpen) {
+      // Scroll to the latest message instantly (no animation — user is re-opening, not watching a new message arrive)
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+        inputRef.current?.focus();
+      }, 80);
+    }
   }, [isOpen]);
 
-  // Close agent picker when clicking outside
+  // Close both agent pickers when clicking outside
   useEffect(() => {
-    if (!showAgentPicker) return;
-    const close = () => setShowAgentPicker(false);
+    if (!showAgentPicker && !showHeaderAgentPicker) return;
+    const close = () => { setShowAgentPicker(false); setShowHeaderAgentPicker(false); };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
-  }, [showAgentPicker]);
+  }, [showAgentPicker, showHeaderAgentPicker]);
 
   const getAuthHeaders = useCallback((): Record<string, string> => {
     const headers: Record<string, string> = {
@@ -456,6 +544,7 @@ const ChatDrawer = ({
       setInput("");
       setShowPrompts(false);
       setShowAgentPicker(false);
+      setShowHeaderAgentPicker(false);
 
       // "__free__" means no agent — send without agentId so backend uses generic LLM
       const resolvedId = overrideAgentId ?? activeAgentId ?? undefined;
@@ -474,6 +563,41 @@ const ChatDrawer = ({
           .filter((m) => !m.streaming)
           .map((m) => ({ role: m.role, content: m.content }));
 
+        // Result data is always sent in full.
+        // Document context strategy depends on the agent's ragMode setting:
+        //   "auto"   → send full doc text if < 30K chars, otherwise fall back to RAG chunks
+        //   "chunks" → always use RAG semantic search (for very large documents)
+        //   "none"   → no document context
+        const currentRag = ragRef.current;
+        const ragReady = currentRag && (currentRag.status === "ready" || currentRag.status === "syncing");
+        const resolvedAgent = isFreeChatMode ? null : (agents.find((a) => a.id === (overrideAgentId ?? activeAgentId)) ?? agents[0] ?? null);
+        const ragMode = isFreeChatMode ? "auto" : (resolvedAgent?.ragMode ?? "auto");
+
+        let contextPayload: unknown = resultData;
+
+        if (ragMode !== "none" && docText) {
+          const useFullDoc = ragMode === "auto" && docText.length <= DOC_FULL_LIMIT;
+          if (useFullDoc) {
+            // Small doc — send full text directly, most reliable for cross-referencing
+            contextPayload = {
+              __doc_context: true,
+              result: resultData,
+              docText,
+            };
+          } else if (ragReady) {
+            // Large doc or explicit chunks mode — use RAG search
+            const topK = resolvedAgent?.ragTopK ?? 20;
+            const chunks = await currentRag.search(trimmed, topK, ["document"]);
+            if (chunks.length > 0) {
+              contextPayload = {
+                __doc_context: true,
+                result: resultData,
+                docChunks: chunks.map((c) => ({ path: c.path, text: c.text })),
+              };
+            }
+          }
+        }
+
         const { data: sessionData } = await supabase.auth.getSession();
         const token = sessionData?.session?.access_token;
         const baseHeaders = getAuthHeaders();
@@ -487,7 +611,7 @@ const ChatDrawer = ({
             signal: abortRef.current.signal,
             body: JSON.stringify({
               messages: historyForApi,
-              result: resultData,
+              result: contextPayload,
               org_execution_token: orgExecutionToken || undefined,
               agentId,
             }),
@@ -532,7 +656,8 @@ const ChatDrawer = ({
         }
 
         const activeAgent = agents.find((a) => a.id === activeAgentId);
-        const { prose, html, json } = routeResponse(accText, activeAgent?.expectedOutput ?? "text");
+        const isFreeChat = activeAgentId === "__free__";
+        const { prose, html, json } = routeResponse(accText, isFreeChat ? "mixed" : (activeAgent?.expectedOutput ?? "text"));
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -565,8 +690,6 @@ const ChatDrawer = ({
       setShowPrompts(false);
     } else if (val === "") {
       setShowAgentPicker(false);
-      // Only auto-reopen prompts when the chat is still empty
-      if (messages.length === 0) setShowPrompts(true);
     } else {
       setShowAgentPicker(false);
       setShowPrompts(false);
@@ -577,14 +700,44 @@ const ChatDrawer = ({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (input.trim() === "/") {
-        // Just show agent picker, don't send
         setShowAgentPicker(true);
+        return;
+      }
+      if (input.trim().toLowerCase() === "/rag") {
+        e.preventDefault();
+        setInput("");
+        void (async () => {
+          const currentRag = ragRef.current;
+          if (!currentRag || currentRag.status === "idle" || currentRag.status === "loading_model") {
+            setMessages((prev) => [...prev, {
+              id: uid(), role: "assistant",
+              content: "RAG is not ready yet. Model is still loading or no data has been indexed.",
+            }]);
+            return;
+          }
+          const counts = await currentRag.getStatus();
+          const total = Object.values(counts).reduce((s, n) => s + n, 0);
+          const lines = total === 0
+            ? ["No data indexed yet. Upload a document or wait for the result data to be indexed."]
+            : [
+                `**RAG index status** — ${total} chunk${total !== 1 ? "s" : ""} total`,
+                "",
+                ...Object.entries(counts).map(([src, n]) => `- **${src}**: ${n} chunk${n !== 1 ? "s" : ""}`),
+                "",
+                `Model: \`Xenova/all-MiniLM-L6-v2\` · Status: \`${currentRag.status}\``,
+              ];
+          setMessages((prev) => [...prev, {
+            id: uid(), role: "assistant",
+            content: lines.join("\n"),
+          }]);
+        })();
         return;
       }
       void sendMessage(input);
     }
     if (e.key === "Escape") {
       setShowAgentPicker(false);
+      setShowHeaderAgentPicker(false);
       setShowPrompts(false);
     }
   };
@@ -592,8 +745,10 @@ const ChatDrawer = ({
   const selectAgent = (agentId: string) => {
     setActiveAgentId(agentId);
     setShowAgentPicker(false);
+    setShowHeaderAgentPicker(false);
     setInput("");
-    setShowPrompts(true);
+    setShowPrompts(false);
+    suppressPromptsOnFocusRef.current = true;
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
@@ -621,7 +776,7 @@ const ChatDrawer = ({
           <span className="font-semibold text-sm">AI Assistant</span>
           <div className="relative">
             <button
-              onClick={(e) => { e.stopPropagation(); setShowAgentPicker((v) => !v); }}
+              onClick={(e) => { e.stopPropagation(); setShowHeaderAgentPicker((v) => !v); setShowAgentPicker(false); }}
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors hover:opacity-80 ${
                 isFreeChatMode
                   ? agentBadgeColor.__free__
@@ -632,7 +787,7 @@ const ChatDrawer = ({
               {isFreeChatMode ? "Free Chat" : (activeAgent?.name ?? "Agent")}
               <ChevronDown className="h-3 w-3 opacity-60" />
             </button>
-            {showAgentPicker && (
+            {showHeaderAgentPicker && (
               <div
                 className="absolute left-0 top-full mt-1 w-64 bg-background border border-border rounded-xl shadow-xl overflow-hidden z-50"
                 onMouseDown={(e) => e.stopPropagation()}
@@ -822,13 +977,89 @@ const ChatDrawer = ({
             </div>
           )}
 
+          {/* Hidden file input for document attachment */}
+          {uploadConfig && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept=".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleFileAttach(file);
+                e.target.value = "";
+              }}
+            />
+          )}
           <div className="flex gap-2 items-end">
+            {/* Show paperclip when a doc is attached OR when upload is available */}
+            {(docText || uploadConfig) && (
+              <div className="relative shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={`h-10 w-10 ${
+                    isUploading ? "text-primary"
+                    : docText ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-muted-foreground"
+                  }`}
+                  title={docText ? "Document attached" : "Attach document"}
+                  disabled={isUploading || isStreaming}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    if (docText) {
+                      // Toggle info popover when a doc is already attached
+                      setShowDocPopover((v) => !v);
+                    } else {
+                      // No doc yet — open the file picker
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                >
+                  {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+                </Button>
+
+                {/* Doc-info popover */}
+                {showDocPopover && docText && (
+                  <div className="absolute bottom-12 left-0 z-50 w-64 rounded-lg border border-border bg-popover shadow-lg p-3 text-xs">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="font-semibold text-foreground">Document attached</span>
+                      <button
+                        className="text-muted-foreground hover:text-foreground"
+                        onMouseDown={(e) => { e.preventDefault(); setShowDocPopover(false); }}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <p className="text-muted-foreground mb-2">
+                      {localDocText ? "Uploaded in this session" : "Loaded from selection"}
+                      {" · "}{Math.round(docText.length / 1024)} KB
+                    </p>
+                    {uploadConfig && (
+                      <button
+                        className="text-primary hover:underline text-xs"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setShowDocPopover(false);
+                          fileInputRef.current?.click();
+                        }}
+                      >
+                        Replace with a different file
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <Textarea
               ref={inputRef}
               value={input}
               onChange={handleInputChange}
-              onFocus={() => { if (!input.trim() && messages.length === 0) setShowPrompts(true); }}
-              onBlur={() => setTimeout(() => { setShowPrompts(false); setShowAgentPicker(false); }, 150)}
+              onFocus={() => {
+                if (suppressPromptsOnFocusRef.current) { suppressPromptsOnFocusRef.current = false; return; }
+                if (!input.trim() && messages.length === 0) setShowPrompts(true);
+              }}
+              onBlur={() => setTimeout(() => { setShowPrompts(false); setShowAgentPicker(false); setShowHeaderAgentPicker(false); setShowDocPopover(false); }, 150)}
               onKeyDown={handleKeyDown}
               placeholder={agents.length > 1 ? "Ask… (Enter to send, / to switch agent)" : "Ask about the result… (Enter to send)"}
               className="resize-none text-sm min-h-[56px] max-h-[120px]"
@@ -858,9 +1089,30 @@ const ChatDrawer = ({
             )}
           </div>
         </div>
-        <p className="text-[10px] text-muted-foreground mt-1.5">
-          Powered by org LLM settings · MCP tools available if configured
-        </p>
+        <div className="flex items-center justify-between mt-1.5">
+          <p className="text-[10px] text-muted-foreground">
+            Powered by org LLM settings · MCP tools available if configured
+          </p>
+          {rag && (
+            <span className={`flex items-center gap-1 text-[10px] ${
+              rag.status === "ready" ? "text-emerald-600 dark:text-emerald-400"
+              : rag.status === "error" ? "text-destructive"
+              : "text-muted-foreground"
+            }`}>
+              {rag.status === "loading_model" || rag.status === "indexing" || rag.status === "syncing"
+                ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                : rag.status === "ready"
+                  ? <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 inline-block" />
+                  : null}
+              {rag.status === "loading_model" ? "Loading AI model…"
+                : rag.status === "indexing" ? "Indexing context…"
+                : rag.status === "syncing" ? "Syncing…"
+                : rag.status === "ready" ? `${rag.chunkCount} chunks indexed`
+                : rag.status === "error" ? "RAG unavailable"
+                : null}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );

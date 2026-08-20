@@ -29,9 +29,9 @@ interface ManualJsonResource {
 }
 
 interface DataSelectionProps {
-  onNext: (data: { 
-    files: File[]; 
-    apis: string[]; 
+  onNext: (data: {
+    files: File[];
+    apis: string[];
     textData: string;
     customApiUrl: string;
     apiParams: Record<string, Record<string, string>>;
@@ -47,6 +47,7 @@ interface DataSelectionProps {
   selectedAnalytics?: AnalyticsOption | null;
   isDebugMode?: boolean;
   dataSelectionSettings?: DataSelectionSettings | null;
+  onExtractedContent?: (text: string) => void;
 }
 
 // File upload resource (upload_file: true)
@@ -76,6 +77,7 @@ const DataSelection = ({
   selectedAnalytics,
   isDebugMode = false,
   dataSelectionSettings = null,
+  onExtractedContent,
 }: DataSelectionProps) => {
   const { sessionId, resetSession } = useProcessSession();
 
@@ -868,6 +870,7 @@ const DataSelection = ({
                           paramValues={uploadResourceParams}
                           onParamValuesChange={setUploadResourceParams}
                           onUploadSuccess={() => setUploadSuccessful(true)}
+                          onExtractedContent={onExtractedContent}
                           onUploadReset={() => setUploadSuccessful(false)}
                           onUploadAttempt={handleUploadAttempt}
                           onUploadSessionResolved={handleUploadSessionResolved}

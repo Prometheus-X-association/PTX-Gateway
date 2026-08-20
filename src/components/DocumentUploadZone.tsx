@@ -32,6 +32,7 @@ interface DocumentUploadZoneProps {
   onParamValuesChange: (params: Record<string, string>) => void;
   // Callbacks for upload status
   onUploadSuccess?: () => void;
+  onExtractedContent?: (text: string) => void;
   onUploadReset?: () => void;
   onUploadAttempt?: (attemptCount: number) => void;
   onUploadSessionResolved?: (sessionId: string, params: Record<string, string>, regenerated: boolean) => void;
@@ -84,6 +85,7 @@ const DocumentUploadZone = ({
   paramValues,
   onParamValuesChange,
   onUploadSuccess,
+  onExtractedContent,
   onUploadReset,
   onUploadAttempt,
   onUploadSessionResolved,
@@ -261,11 +263,12 @@ const DocumentUploadZone = ({
       if (response.ok && upstreamStatus !== undefined && upstreamStatus >= 200 && upstreamStatus < 300) {
         setUploadProgress(100);
         setUploadStatus("success");
-        setUploadResponse(
-          typeof result.body === "string" ? result.body : JSON.stringify(result.body ?? result)
-        );
+        const extractedText =
+          typeof result.body === "string" ? result.body : JSON.stringify(result.body ?? result);
+        setUploadResponse(extractedText);
         console.log("Upload successful:", result);
         onUploadSuccess?.();
+        if (extractedText) onExtractedContent?.(extractedText);
         if (isDebugMode) {
           toast({
             title: "Upload Successful",

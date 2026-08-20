@@ -485,17 +485,57 @@ serve(async (req: Request) => {
     llmConfig.chatSystemPrompt?.trim() ||
     defaultChatPrompt;
 
-  // Inject result context
-  const resultJson = body.result !== undefined ? JSON.stringify(body.result, null, 2) : null;
-  const clippedResult = resultJson && resultJson.length > 40000
-    ? `${resultJson.slice(0, 40000)}\n...<truncated>`
-    : resultJson;
+  // Inject result context.
+  // Two modes:
+  //   1. Hybrid mode: { __doc_context: true, result: unknown, docChunks: [...] }
+  //      Full result JSON + relevant document passages from the RAG worker
+  //   2. Full mode: raw resultData — clip at 40K chars
+  type DocContextPayload = {
+    __doc_context: true;
+    result: unknown;
+    docText?: string;                              // full document (small docs)
+    docChunks?: Array<{ path: string; text: string }>; // RAG chunks (large docs)
+  };
+  const isDocContextPayload = (x: unknown): x is DocContextPayload =>
+    typeof x === "object" && x !== null && (x as Record<string, unknown>).__doc_context === true;
+
+  const clipJson = (v: unknown, limit = 40000): string => {
+    const s = JSON.stringify(v, null, 2);
+    return s.length > limit ? `${s.slice(0, limit)}\n...<truncated>` : s;
+  };
+
+  let contextBlock: string | null = null;
+  if (body.result !== undefined) {
+    if (isDocContextPayload(body.result)) {
+      const resultStr = clipJson(body.result.result);
+      const parts: string[] = [`\n---\nResult dataset (JSON):\n${resultStr}`];
+
+      if (body.result.docText) {
+        // Full document text — no chunking needed
+        const clipped = body.result.docText.length > 30000
+          ? `${body.result.docText.slice(0, 30000)}\n...<truncated>`
+          : body.result.docText;
+        parts.push(`\n---\nUploaded document:\n${clipped}`);
+      } else if (body.result.docChunks && body.result.docChunks.length > 0) {
+        // RAG chunks for large documents
+        const chunkStr = body.result.docChunks
+          .map((c) => `[${c.path}]\n${c.text}`)
+          .join("\n\n");
+        parts.push(`\n---\nDocument context (relevant passages):\n${chunkStr}`);
+      }
+
+      contextBlock = parts.join("");
+    } else {
+      // No document context — full result JSON only
+      contextBlock = `\n---\nResult dataset (JSON):\n${clipJson(body.result)}`;
+    }
+  }
 
   // Append output instructions as a dedicated section
   const outputInstructions = activeAgent?.outputInstructions?.trim();
   const systemContent = [
     systemPromptBase,
-    clippedResult ? `\n---\nResult dataset (JSON):\n${clippedResult}` : null,
+    contextBlock,
     outputInstructions ? `\n## Output Format\n${outputInstructions}` : null,
   ].filter(Boolean).join("\n");
 

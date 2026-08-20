@@ -45,13 +45,16 @@ interface LlmAgent {
   description: string;
   systemPrompt: string;
   expectedOutput: "text" | "json" | "html" | "mixed";
-  outputInstructions: string; // injected into system prompt as "## Output Format" section
+  outputInstructions: string;
   mcpServerIds: string[];
   mcpToolFilter: Record<string, string[]>;
   providerIds: string[];
   agentProviders: LlmProvider[];
   defaultPrompts: string[];
   enabled: boolean;
+  ragSources: "all" | "result" | "document" | "none";
+  ragMode: "auto" | "chunks" | "none"; // auto = full doc if small, chunks if large
+  ragTopK: number;
 }
 
 interface LlmInsightsConfig {
@@ -156,7 +159,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       "Are there any outliers or anomalies in this data?",
       "What trends do you see?",
     ],
-    enabled: true,
+    enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
   },
   {
     id: "chart-builder",
@@ -172,7 +175,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       "Show a line chart of values over time",
       "Visualize the top 5 items as a horizontal bar chart",
     ],
-    enabled: true,
+    enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
   },
   {
     id: "ai-insight",
@@ -187,7 +190,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       "Give me a business summary with a supporting chart",
       "Analyze this data and show me the most important visualization",
     ],
-    enabled: true,
+    enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
   },
   {
     id: "switchable-chart",
@@ -203,7 +206,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       "Generate a summary with insights and a switchable visualization",
       "What is the best chart type for this data? Show me the result",
     ],
-    enabled: true,
+    enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
   },
 ];
 
@@ -249,6 +252,7 @@ const emptyAgent = (): LlmAgent => ({
   expectedOutput: "text",
   outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
   mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], defaultPrompts: [], enabled: true,
+  ragSources: "all", ragMode: "auto", ragTopK: 20,
 });
 
 const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
@@ -313,6 +317,9 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         : [],
       defaultPrompts: Array.isArray(a.defaultPrompts) ? (a.defaultPrompts as unknown[]).map(String).filter(Boolean) : [],
       enabled: a.enabled !== false,
+      ragSources: (["all", "result", "document", "none"].includes(String(a.ragSources ?? "")) ? a.ragSources : "all") as LlmAgent["ragSources"],
+      ragMode: (["auto", "chunks", "none"].includes(String(a.ragMode ?? "")) ? a.ragMode : "auto") as LlmAgent["ragMode"],
+      ragTopK: typeof a.ragTopK === "number" && a.ragTopK > 0 ? a.ragTopK : 20,
     }));
   } else {
     // Legacy: if there's a chatSystemPrompt, create a single agent from it
@@ -995,6 +1002,48 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
               ].join("\n")}
             </pre>
           </details>
+        )}
+      </div>
+
+      {/* Document Context */}
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs">Document Context</Label>
+          <span className="text-[10px] text-muted-foreground">How uploaded documents are included alongside the result data</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              { value: "auto", label: "Auto", desc: "Full doc if small (< 30K chars), chunks if large" },
+              { value: "chunks", label: "Chunks (RAG)", desc: "Always retrieve top-N semantically similar passages" },
+              { value: "none", label: "Disabled", desc: "No document context — result data only" },
+            ] as Array<{ value: LlmAgent["ragMode"]; label: string; desc: string }>
+          ).map((opt) => (
+            <button key={opt.value} type="button"
+              onClick={() => onChange({ ...agent, ragMode: opt.value })}
+              className={`inline-flex flex-col items-start px-3 py-2 rounded-lg border text-xs transition-all ${
+                (agent.ragMode ?? "auto") === opt.value
+                  ? "bg-primary/10 text-primary border-primary/40 ring-1 ring-primary/20 font-medium"
+                  : "bg-background border-border text-muted-foreground hover:border-primary"
+              }`}>
+              <span className="font-semibold">{opt.label}</span>
+              <span className="text-[10px] opacity-75 leading-tight mt-0.5">{opt.desc}</span>
+            </button>
+          ))}
+        </div>
+        {(agent.ragMode ?? "auto") === "chunks" && (
+          <div className="flex items-center gap-3">
+            <Label className="text-xs text-muted-foreground shrink-0">Max chunks per query</Label>
+            <Input
+              type="number" min={1} max={100} className="h-7 w-20 text-xs"
+              value={agent.ragTopK ?? 20}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v) && v > 0) onChange({ ...agent, ragTopK: v });
+              }}
+            />
+            <span className="text-[10px] text-muted-foreground">20 covers ~5 job profiles</span>
+          </div>
         )}
       </div>
 
