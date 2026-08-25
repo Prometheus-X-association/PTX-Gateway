@@ -14,8 +14,10 @@ import {
   Loader2, Brain, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Eye, EyeOff, Server, Zap, RotateCcw, Bot, MessageSquarePlus,
   Pencil, X, ChevronsUpDown, Info, Link2, FlaskConical,
-  CheckCircle2, XCircle, ChevronRight, Wrench,
+  CheckCircle2, XCircle, ChevronRight, Wrench, Workflow,
 } from "lucide-react";
+import { WorkflowsManagement } from "@/components/admin/WorkflowsManagement";
+import type { WorkflowConfig } from "@/types/workflow";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -63,6 +65,7 @@ interface LlmInsightsConfig {
   mcpServers: McpServer[];
   agents: LlmAgent[];
   predefinedPrompts: string[];
+  workflows: WorkflowConfig[];
 }
 
 interface GlobalConfigSnapshot {
@@ -349,7 +352,33 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
     ? (raw.predefinedPrompts as unknown[]).map(String).filter(Boolean)
     : [];
 
-  return { enabled: Boolean(raw.enabled ?? false), providers, mcpServers, agents, predefinedPrompts };
+  // Workflows — migrate from old single `workflow` field if present, then use array
+  let workflows: WorkflowConfig[] = [];
+  if (Array.isArray(raw.workflows)) {
+    workflows = (raw.workflows as WorkflowConfig[]).map((w) => ({
+      id: String(w.id || uid()),
+      name: String(w.name || "Workflow"),
+      description: String(w.description || ""),
+      enabled: w.enabled !== false,
+      graph: (w.graph && typeof w.graph === "object") ? w.graph : { nodes: [], edges: [] },
+      createdAt: String(w.createdAt || new Date().toISOString()),
+    }));
+  } else if (raw.workflow && typeof raw.workflow === "object") {
+    // Migrate legacy single workflow
+    const legacyGraph = raw.workflow as { nodes?: unknown[]; edges?: unknown[] };
+    if (Array.isArray(legacyGraph.nodes) && legacyGraph.nodes.length > 0) {
+      workflows = [{
+        id: uid(),
+        name: "Workflow",
+        description: "",
+        enabled: true,
+        graph: legacyGraph as WorkflowConfig["graph"],
+        createdAt: new Date().toISOString(),
+      }];
+    }
+  }
+
+  return { enabled: Boolean(raw.enabled ?? false), providers, mcpServers, agents, predefinedPrompts, workflows };
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -1638,6 +1667,32 @@ const LlmSettingsSection = () => {
             onClick={() => patchLlm({ predefinedPrompts: [...llm.predefinedPrompts, ""] })}>
             <Plus className="h-4 w-4" /> Add General Prompt
           </Button>
+        </div>
+
+        <Separator />
+
+        {/* Agentic Workflows */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Workflow className="h-4 w-4 text-muted-foreground" />
+            <h3 className="font-semibold text-sm">Agentic Workflows</h3>
+            <Badge variant="outline" className="text-[10px]">beta</Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Build node graphs that chain agents, run JavaScript transforms, and branch on conditions.
+            Each workflow can be activated independently and triggered from the chat panel.
+            Open the canvas editor to drag nodes, connect them, and load built-in examples.
+          </p>
+          <WorkflowsManagement
+            workflows={llm.workflows ?? []}
+            agents={llm.agents.filter((a) => a.enabled).map((a) => ({
+              id: a.id,
+              name: a.name,
+              description: a.description,
+              expectedOutput: a.expectedOutput,
+            }))}
+            onChange={(workflows) => patchLlm({ workflows })}
+          />
         </div>
 
         <Separator />

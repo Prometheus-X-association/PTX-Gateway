@@ -2494,6 +2494,7 @@ const ResultsView = ({
     expectedOutput: string; defaultPrompts: string[];
   }>>([]);
   const [llmGlobalPrompts, setLlmGlobalPrompts] = useState<string[]>([]);
+  const [llmWorkflows, setLlmWorkflows] = useState<import("@/types/workflow").WorkflowConfig[]>([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const selectedTargetId = useMemo(() => {
     if (selectedAnalytics) {
@@ -2730,6 +2731,9 @@ const ResultsView = ({
         }
         if (Array.isArray(data?.predefinedPrompts)) {
           setLlmGlobalPrompts((data.predefinedPrompts as unknown[]).map(String).filter(Boolean));
+        }
+        if (Array.isArray(data?.workflows)) {
+          setLlmWorkflows(data.workflows as import("@/types/workflow").WorkflowConfig[]);
         }
       } catch {
         if (isMounted) {
@@ -3887,6 +3891,7 @@ const ResultsView = ({
             rag={rag}
             docText={docText}
             uploadConfig={uploadConfig}
+            workflows={llmWorkflows}
             onDocUploaded={(text) => {
               setStoredDocText(text);
               const key = buildRagDocStorageKey(resultUrlInfo, organizationId);

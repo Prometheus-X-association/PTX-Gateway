@@ -479,6 +479,7 @@ serve(async (req) => {
           predefinedPrompts: Array.isArray(llmConfig.predefinedPrompts)
             ? llmConfig.predefinedPrompts.map(String).filter(Boolean)
             : [],
+          workflows: Array.isArray(llmConfig.workflows) ? llmConfig.workflows : [],
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

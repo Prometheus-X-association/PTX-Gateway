@@ -89,6 +89,10 @@ interface ChatRequest {
   result?: unknown;
   org_execution_token?: string;
   agentId?: string;
+  /** Inline agent: system prompt provided directly, bypassing agent lookup */
+  systemPrompt?: string;
+  /** Inline agent: expected output format */
+  outputType?: "text" | "json" | "html" | "mixed";
 }
 
 interface ExecutionTokenPayload {
@@ -481,6 +485,7 @@ serve(async (req: Request) => {
   const defaultChatPrompt =
     "You are a data analyst assistant. The user is viewing a result dataset. Answer questions clearly and concisely.";
   const systemPromptBase =
+    body.systemPrompt?.trim() ||          // inline agent override
     activeAgent?.systemPrompt?.trim() ||
     llmConfig.chatSystemPrompt?.trim() ||
     defaultChatPrompt;

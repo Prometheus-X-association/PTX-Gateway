@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip } from "lucide-react";
+import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import type { RagWorkerHandle } from "@/lib/useRagWorker";
 import type { UploadConfig } from "@/components/DocumentUploadZone";
+import type { AgentWorkflow, WorkflowConfig } from "@/types/workflow";
+import { executeWorkflow, getWorkflowFinalOutput } from "@/lib/workflowExecutor";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +63,8 @@ interface ChatDrawerProps {
   uploadConfig?: UploadConfig | null;
   /** Called after a successful in-chat file upload so the parent can persist the extracted text */
   onDocUploaded?: (text: string) => void;
+  /** Named workflow configs — active ones can be selected and run from the chat */
+  workflows?: WorkflowConfig[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -413,6 +417,7 @@ const ChatDrawer = ({
   docText: propDocText,
   uploadConfig,
   onDocUploaded,
+  workflows = [],
 }: ChatDrawerProps) => {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [input, setInput] = useState("");
@@ -425,6 +430,21 @@ const ChatDrawer = ({
   const [localDocText, setLocalDocText] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [showDocPopover, setShowDocPopover] = useState(false);
+  const [isWorkflowRunning, setIsWorkflowRunning] = useState(false);
+  // Compact progress summary updated in chatbox text only
+  const [workflowProgress, setWorkflowProgress] = useState<{
+    total: number;       // steps completed so far
+    current: string;     // label of the last completed step
+    iteration: number;   // loop counter (condition node visits)
+    knownTotal: number;  // total items in loop (0 = unknown)
+    errors: number;
+  } | null>(null);
+  // Collects full step results so we can extract partial output on Stop
+  const partialResultsRef = useRef<import("@/types/workflow").WorkflowStepResult[]>([]);
+  const activeWorkflows = workflows.filter((w) => w.enabled);
+  const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
+  const selectedWorkflow: WorkflowConfig | null =
+    (activeWorkflowId ? activeWorkflows.find((w) => w.id === activeWorkflowId) : activeWorkflows[0]) ?? null;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -498,6 +518,192 @@ const ChatDrawer = ({
     }
   }, [uploadConfig, onDocUploaded]);
 
+  const runWorkflow = useCallback(async (userMsg: string) => {
+    if (!selectedWorkflow || selectedWorkflow.graph.nodes.length === 0) return;
+    if (isWorkflowRunning) return;
+
+    const workflow: AgentWorkflow = selectedWorkflow.graph;
+
+    setIsWorkflowRunning(true);
+    setWorkflowProgress(null);
+    partialResultsRef.current = [];
+
+    const progressMap = new Map<string, string>(
+      workflow.nodes.map((n) => [n.id, (n.data as { label?: string }).label ?? n.type])
+    );
+
+    // Add user message to chat
+    const userMsgId = uid();
+    setMessages((prev) => [...prev, { id: userMsgId, role: "user", content: userMsg }]);
+
+    // Status message that updates as nodes complete
+    const statusId = uid();
+    setMessages((prev) => [...prev, {
+      id: statusId, role: "assistant",
+      content: "⚡ Running workflow…", streaming: true,
+    }]);
+
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+
+    abortRef.current = new AbortController();
+
+    try {
+      const { results, aborted, error: workflowError } = await executeWorkflow(workflow, {
+        resultData,
+        docText,
+        userMessage: userMsg,
+        organizationId: organizationId ?? null,
+        orgExecutionToken: orgExecutionToken ?? null,
+        supabaseUrl,
+        signal: abortRef.current.signal,
+
+        onAgentStep: async (nodeId, agentConfig, prompt, prevOutput) => {
+          // Build context: inject prevOutput + docText alongside result data
+          const contextPayload = (prevOutput !== null || docText)
+            ? { __doc_context: true, result: resultData, prevOutput, docText }
+            : resultData;
+
+          const { data: sessionData } = await supabase.auth.getSession();
+          const token = sessionData?.session?.access_token;
+
+          // Resolve inline vs existing agent
+          const isInline = !!agentConfig.inline;
+          const agentId = isInline ? undefined : agentConfig.agentId;
+          const systemPromptOverride = isInline ? agentConfig.inline!.systemPrompt : undefined;
+          const outputType = isInline ? agentConfig.inline!.outputType : undefined;
+
+          const resp = await fetch(`${supabaseUrl}/functions/v1/chat-with-result`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({
+              messages: [{ role: "user", content: prompt }],
+              result: contextPayload,
+              organizationId,
+              org_execution_token: orgExecutionToken,
+              agentId,
+              systemPrompt: systemPromptOverride,
+              outputType,
+            }),
+          });
+
+          if (!resp.ok || !resp.body) throw new Error(`Agent step failed: ${resp.status}`);
+
+          let text = "";
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split("\n");
+            buf = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              try {
+                const ev = JSON.parse(line.slice(6)) as { type: string; content?: string };
+                if (ev.type === "token" && ev.content) text += ev.content;
+              } catch { /* skip */ }
+            }
+          }
+          return text;
+        },
+
+        onStepDone: (step) => {
+          const label = progressMap.get(step.nodeId) ?? step.nodeType;
+          partialResultsRef.current = [...partialResultsRef.current, step];
+          setWorkflowProgress((prev) => {
+            // Detect total items from the FIRST plugin that outputs { items: [], _loopRange }
+            // Lock once found — never let later plugins overwrite with full-list counts.
+            let newKnownTotal = prev?.knownTotal ?? 0;
+            if (newKnownTotal === 0 && step.nodeType === "plugin" && step.output && typeof step.output === "object") {
+              const out = step.output as Record<string, unknown>;
+              // Prefer _loopRange "start:total" encoded by n-init
+              if (typeof out._loopRange === "string") {
+                const parts = out._loopRange.split(":");
+                newKnownTotal = Number(parts[1]) || 0;
+              } else if (Array.isArray(out.items)) {
+                newKnownTotal = out.items.length;
+              }
+            }
+            const isCondition = step.nodeType === "condition";
+            const newIteration = (prev?.iteration ?? 0) + (isCondition ? 1 : 0);
+            const next = {
+              total: (prev?.total ?? 0) + 1,
+              current: label,
+              iteration: newIteration,
+              knownTotal: newKnownTotal,
+              errors: (prev?.errors ?? 0) + (step.error ? 1 : 0),
+            };
+            // Build compact status line shown inside the chatbox message
+            const loopText = next.knownTotal > 0 && next.iteration > 0
+              ? `Skill ${next.iteration}/${next.knownTotal} · `
+              : next.iteration > 1 ? `Iter ${next.iteration} · ` : "";
+            setMessages((msgs) => msgs.map((m) => m.id === statusId
+              ? { ...m, content: `⚡ ${loopText}${label}${step.error ? " ❌" : "…"}` }
+              : m
+            ));
+            return next;
+          });
+        },
+      });
+
+      if (aborted) {
+        // Extract partial accumulated results from collected steps
+        const partialSteps = partialResultsRef.current;
+        // Find last plugin step whose output has an `accumulated` array
+        let partialOutput: unknown = null;
+        for (let i = partialSteps.length - 1; i >= 0; i--) {
+          const s = partialSteps[i];
+          if (s.nodeType === "plugin" && s.output && typeof s.output === "object" && Array.isArray((s.output as Record<string, unknown>).accumulated)) {
+            partialOutput = s.output;
+            break;
+          }
+        }
+        if (!partialOutput) {
+          // Fallback: last agent or output step
+          for (let i = partialSteps.length - 1; i >= 0; i--) {
+            const s = partialSteps[i];
+            if (s.nodeType === "agent" || s.nodeType === "output") { partialOutput = s.output; break; }
+          }
+        }
+        const partialText = partialOutput
+          ? (typeof partialOutput === "string" ? partialOutput : `**Partial results (stopped early):**\n\`\`\`json\n${JSON.stringify(partialOutput, null, 2)}\n\`\`\``)
+          : "*Workflow stopped — no partial results yet.*";
+        setMessages((prev) => prev.map((m) => m.id === statusId
+          ? { ...m, content: partialText, streaming: false }
+          : m
+        ));
+      } else if (workflowError) {
+        setMessages((prev) => prev.map((m) => m.id === statusId
+          ? { ...m, content: `*Workflow error: ${workflowError}*`, streaming: false }
+          : m
+        ));
+      } else {
+        const { text: finalText, renderAs } = getWorkflowFinalOutput(results);
+        const outputFormat = renderAs === "update_result" ? "json"
+          : renderAs === "auto" ? "mixed"
+          : renderAs;
+        const { prose, html, json } = routeResponse(finalText, outputFormat);
+        setMessages((prev) => prev.map((m) => m.id === statusId
+          ? { ...m, content: prose, htmlViz: html ?? undefined, jsonData: json ?? undefined, streaming: false }
+          : m
+        ));
+      }
+    } catch (e) {
+      setMessages((prev) => prev.map((m) => m.id === statusId
+        ? { ...m, content: `*Workflow failed: ${String(e)}*`, streaming: false }
+        : m
+      ));
+    } finally {
+      setIsWorkflowRunning(false);
+      setWorkflowProgress(null);
+    }
+  }, [selectedWorkflow, isWorkflowRunning, resultData, docText, organizationId, orgExecutionToken, agents, activeAgent]);
+
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
     .filter((a) => a.defaultPrompts.length > 0)
@@ -512,13 +718,28 @@ const ChatDrawer = ({
 
   useEffect(() => {
     if (isOpen) {
-      // Scroll to the latest message instantly (no animation — user is re-opening, not watching a new message arrive)
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
         inputRef.current?.focus();
       }, 80);
     }
   }, [isOpen]);
+
+  // Auto-run on_load workflows when chat first opens (only once per session)
+  const autoFiredRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isOpen) return;
+    for (const wf of activeWorkflows) {
+      if (autoFiredRef.current.has(wf.id)) continue;
+      const trigger = wf.graph.nodes.find((n) => n.type === "trigger");
+      if ((trigger?.data as { triggerType?: string } | undefined)?.triggerType !== "on_load") continue;
+      autoFiredRef.current.add(wf.id);
+      const prompt = (trigger?.data as { defaultPrompt?: string } | undefined)?.defaultPrompt || "Run workflow";
+      setTimeout(() => void runWorkflow(prompt), 400);
+    }
+  // Only fire when isOpen changes or activeWorkflows list changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, activeWorkflows.map((w) => w.id).join(",")]);
 
   // Close both agent pickers when clicking outside
   useEffect(() => {
@@ -906,6 +1127,41 @@ const ChatDrawer = ({
                   </button>
                 ))}
 
+                {/* Workflow prompts section */}
+                {activeWorkflows.length > 0 && (
+                  <>
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/40 border-t border-border">
+                      <Zap className="h-3 w-3 text-violet-500" />
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Workflows</span>
+                    </div>
+                    {activeWorkflows.map((wf) => {
+                      const trigger = wf.graph.nodes.find((n) => n.type === "trigger");
+                      const defaultPrompt = (trigger?.data as { defaultPrompt?: string } | undefined)?.defaultPrompt;
+                      return (
+                        <button
+                          key={wf.id}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setShowPrompts(false);
+                            setActiveWorkflowId(wf.id);
+                            void runWorkflow(defaultPrompt ?? "Run workflow");
+                          }}
+                          className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 last:border-0 ${wf.id === selectedWorkflow?.id ? "bg-primary/5" : ""}`}
+                        >
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <Zap className="h-3 w-3 text-violet-500 shrink-0" />
+                            <span className="text-[10px] font-semibold text-violet-600 dark:text-violet-400 uppercase tracking-wide">
+                              {wf.name}
+                            </span>
+                            <span className="text-[9px] px-1 py-0.5 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400 ml-auto">workflow</span>
+                          </div>
+                          <p className="text-sm leading-snug pl-[18px] text-muted-foreground">{defaultPrompt ?? wf.description ?? "Run this workflow"}</p>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+
                 {/* General prompts section — not tied to any agent */}
                 {globalPrompts.length > 0 && (
                   <>
@@ -1078,12 +1334,26 @@ const ChatDrawer = ({
                 <Zap className="h-4 w-4" />
               </Button>
             )}
-            {isStreaming ? (
+            {isWorkflowRunning ? (
+              <Button variant="destructive" size="icon" className="h-10 w-10 shrink-0" onClick={() => abortRef.current?.abort()}>
+                <Square className="h-4 w-4" />
+              </Button>
+            ) : isStreaming ? (
               <Button variant="destructive" size="icon" className="h-10 w-10 shrink-0" onClick={handleStop}>
                 <X className="h-4 w-4" />
               </Button>
             ) : (
-              <Button size="icon" className="h-10 w-10 shrink-0" onClick={() => void sendMessage(input)} disabled={!input.trim() || input === "/"}>
+              <Button
+                size="icon" className="h-10 w-10 shrink-0"
+                disabled={!input.trim() || input === "/"}
+                onClick={() => {
+                  if (selectedWorkflow && activeWorkflowId) {
+                    void runWorkflow(input.trim());
+                  } else {
+                    void sendMessage(input);
+                  }
+                }}
+              >
                 <Send className="h-4 w-4" />
               </Button>
             )}
