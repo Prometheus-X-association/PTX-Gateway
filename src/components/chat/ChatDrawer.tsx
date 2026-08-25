@@ -629,8 +629,14 @@ const ChatDrawer = ({
                 newKnownTotal = out.items.length;
               }
             }
+            // Read the actual loop index from condition output (which is prevOutput pass-through)
+            // so iteration tracks the item being processed, not raw condition visits.
             const isCondition = step.nodeType === "condition";
-            const newIteration = (prev?.iteration ?? 0) + (isCondition ? 1 : 0);
+            let newIteration = prev?.iteration ?? 0;
+            if (isCondition && step.output && typeof step.output === "object") {
+              const idx = (step.output as Record<string, unknown>).index;
+              if (typeof idx === "number") newIteration = idx + 1; // 1-based, capped below
+            }
             const next = {
               total: (prev?.total ?? 0) + 1,
               current: label,
@@ -638,10 +644,11 @@ const ChatDrawer = ({
               knownTotal: newKnownTotal,
               errors: (prev?.errors ?? 0) + (step.error ? 1 : 0),
             };
-            // Build compact status line shown inside the chatbox message
-            const loopText = next.knownTotal > 0 && next.iteration > 0
-              ? `Skill ${next.iteration}/${next.knownTotal} · `
-              : next.iteration > 1 ? `Iter ${next.iteration} · ` : "";
+            // Build compact status line — cap iteration at knownTotal so it never shows 5/4
+            const displayIter = next.knownTotal > 0 ? Math.min(next.iteration, next.knownTotal) : next.iteration;
+            const loopText = next.knownTotal > 0 && displayIter > 0
+              ? `Skill ${displayIter}/${next.knownTotal} · `
+              : displayIter > 1 ? `Iter ${displayIter} · ` : "";
             setMessages((msgs) => msgs.map((m) => m.id === statusId
               ? { ...m, content: `⚡ ${loopText}${label}${step.error ? " ❌" : "…"}` }
               : m

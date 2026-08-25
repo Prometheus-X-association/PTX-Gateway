@@ -192,36 +192,6 @@ const TriggerPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: Tr
           placeholder="e.g. Analyse the skill levels based on the uploaded document"
           onChange={(e) => onChange({ ...d, defaultPrompt: e.target.value || undefined })} />
       </div>
-      {/* Loop range — optional; if set, n-init should slice items accordingly */}
-      <div className="space-y-1">
-        <Label className="text-xs">
-          Loop range <span className="text-muted-foreground">(0-based indices, optional)</span>
-        </Label>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 space-y-0.5">
-            <span className="text-[10px] text-muted-foreground">Start (inclusive)</span>
-            <Input
-              type="number" min={0} className="h-6 text-[10px]"
-              placeholder="0"
-              value={d.loopStart ?? ""}
-              onChange={(e) => onChange({ ...d, loopStart: e.target.value === "" ? undefined : Number(e.target.value) })}
-            />
-          </div>
-          <span className="text-muted-foreground text-xs mt-4">–</span>
-          <div className="flex-1 space-y-0.5">
-            <span className="text-[10px] text-muted-foreground">End (inclusive, empty = all)</span>
-            <Input
-              type="number" min={0} className="h-6 text-[10px]"
-              placeholder="all"
-              value={d.loopEnd ?? ""}
-              onChange={(e) => onChange({ ...d, loopEnd: e.target.value === "" ? undefined : Number(e.target.value) })}
-            />
-          </div>
-        </div>
-        <p className="text-[10px] text-muted-foreground">
-          e.g. 0–2 = first 3 items · 3–8 = items 3 to 8 · 5–5 = item 5 only
-        </p>
-      </div>
       <SchemaRow
         outputSchema={d.outputSchema}
         onInputChange={() => {}}
@@ -388,6 +358,36 @@ const ConditionPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: 
           <ChevronRight className="h-3 w-3" /> <strong>False</strong> — right (red) handle
         </div>
       </div>
+      {/* Loop range — enforced by executor on every condition visit, no agent cooperation needed */}
+      <div className="space-y-1">
+        <Label className="text-xs">
+          Loop range <span className="text-muted-foreground">(0-based indices, optional)</span>
+        </Label>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 space-y-0.5">
+            <span className="text-[10px] text-muted-foreground">Start (inclusive)</span>
+            <Input
+              type="number" min={0} className="h-6 text-[10px]"
+              placeholder="0"
+              value={d.loopStart ?? ""}
+              onChange={(e) => onChange({ ...d, loopStart: e.target.value === "" ? undefined : Number(e.target.value) })}
+            />
+          </div>
+          <span className="text-muted-foreground text-xs mt-4">–</span>
+          <div className="flex-1 space-y-0.5">
+            <span className="text-[10px] text-muted-foreground">End (inclusive, empty = all)</span>
+            <Input
+              type="number" min={0} className="h-6 text-[10px]"
+              placeholder="all"
+              value={d.loopEnd ?? ""}
+              onChange={(e) => onChange({ ...d, loopEnd: e.target.value === "" ? undefined : Number(e.target.value) })}
+            />
+          </div>
+        </div>
+        <p className="text-[10px] text-muted-foreground">
+          e.g. 0–2 = first 3 items · 3–8 = items 3 to 8 · 5–5 = item 5 only
+        </p>
+      </div>
       <SchemaRow
         inputSchema={d.inputSchema}
         onInputChange={(v) => onChange({ ...d, inputSchema: v || undefined })}
@@ -512,18 +512,12 @@ const EXAMPLE_WORKFLOWS: ExampleWorkflow[] = [
             label: "Init Loop",
             description: "Read result nodes (handles data.nodes nesting), set index=0",
             inputSchema: "result: { nodes? } | { data: { nodes? } }",
-            outputSchema: "{ items: Array<{id,skill}>, index: 0, accumulated: [], _loopRange: 'start:total' }",
+            outputSchema: "{ items: Array<{id,skill}>, index: 0, accumulated: [] }",
             code: `${READ_ITEMS_CODE}
-const allItems = readItems(input.result);
-if (allItems.length === 0) throw new Error('No nodes found in result data. Check that result.nodes or result.data.nodes exists.');
-// Apply optional loop range from trigger config (passed via prevOutput from trigger node)
-const trigger = input.prevOutput ?? {};
-const start = typeof trigger.loopStart === 'number' ? trigger.loopStart : 0;
-const end   = typeof trigger.loopEnd   === 'number' ? trigger.loopEnd + 1 : allItems.length;
-const items = allItems.slice(start, end);
-if (items.length === 0) throw new Error('Loop range [' + start + ', ' + (end-1) + '] produced no items (total: ' + allItems.length + ').');
-// Encode range as "start:total" — single string that agents can copy unchanged
-return { items, index: 0, accumulated: [], _loopRange: start + ':' + items.length };`,
+const items = readItems(input.result);
+if (items.length === 0) throw new Error('No nodes found in result data. Check that result.nodes or result.data.nodes exists.');
+// Loop range is NOT applied here — the condition node enforces it on every visit.
+return { items, index: 0, accumulated: [] };`,
           } satisfies PluginNodeData,
         },
 
@@ -534,10 +528,12 @@ return { items, index: 0, accumulated: [], _loopRange: start + ':' + items.lengt
           position: { x: 240, y: 290 },
           data: {
             label: "More skills?",
-            // Condition node outputs prevOutput pass-through (executor behaviour),
-            // so loop state flows to both true and false branches.
             expression: `Array.isArray(prevOutput?.items) && typeof prevOutput.index === 'number' && prevOutput.index < prevOutput.items.length`,
             inputSchema: "{ items, index, accumulated }",
+            // loopStart / loopEnd: set these to limit the loop range.
+            // The executor re-slices items on every condition visit — no agent cooperation needed.
+            // loopStart: 0,
+            // loopEnd: 2,   ← example: process items 0, 1, 2 only
           } satisfies ConditionNodeData,
         },
 

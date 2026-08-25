@@ -103,12 +103,7 @@ export async function executeWorkflow(
     try {
       if (node.type === "trigger") {
         const d = node.data as TriggerNodeData;
-        output = {
-          triggerType: d.triggerType,
-          userMessage: ctx.userMessage,
-          ...(d.loopStart !== undefined ? { loopStart: d.loopStart } : {}),
-          ...(d.loopEnd   !== undefined ? { loopEnd:   d.loopEnd   } : {}),
-        };
+        output = { triggerType: d.triggerType, userMessage: ctx.userMessage };
 
       } else if (node.type === "agent") {
         const d = node.data as AgentNodeData;
@@ -127,11 +122,20 @@ export async function executeWorkflow(
 
       } else if (node.type === "condition") {
         const d = node.data as ConditionNodeData;
-        const result = evalCondition(d.expression, prevOutput);
+        // If loop range is configured on this node, enforce it by re-slicing items
+        // on every visit. This is the authoritative enforcer — no agent cooperation needed.
+        if ((d.loopStart !== undefined || d.loopEnd !== undefined) && prevOutput && typeof prevOutput === "object") {
+          const state = prevOutput as Record<string, unknown>;
+          const allItems = Array.isArray(state.items) ? state.items : [];
+          const start = d.loopStart ?? 0;
+          const end = d.loopEnd !== undefined ? d.loopEnd + 1 : allItems.length;
+          const sliced = allItems.slice(start, end);
+          output = { ...state, items: sliced, _loopRange: `${start}:${sliced.length}` };
+        } else {
+          output = prevOutput;
+        }
+        const result = evalCondition(d.expression, output);
         conditionResults.set(node.id, result);
-        // Pass-through: downstream nodes receive the loop state, not the boolean.
-        // The boolean is only used for edge routing (sourceHandle "true"/"false").
-        output = prevOutput;
 
       } else if (node.type === "output") {
         const d = node.data as OutputNodeData;

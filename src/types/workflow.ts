@@ -11,10 +11,6 @@ export interface TriggerNodeData {
   defaultPrompt?: string;
   /** What this node produces — shown in the canvas as documentation */
   outputSchema?: string;
-  /** 0-based start index for loop — items before this are skipped (default 0) */
-  loopStart?: number;
-  /** 0-based inclusive end index for loop — items after this are skipped (default: last item) */
-  loopEnd?: number;
 }
 
 export interface AgentNodeData {
@@ -50,6 +46,10 @@ export interface ConditionNodeData {
   /** JS expression evaluated on prevOutput; truthy → "true" handle */
   expression: string;
   inputSchema?: string;
+  /** 0-based start index for loop slicing — enforced by executor on every condition visit */
+  loopStart?: number;
+  /** 0-based inclusive end index for loop slicing — empty means last item */
+  loopEnd?: number;
 }
 
 export interface OutputNodeData {
