@@ -549,16 +549,15 @@ return { items, index: 0, accumulated: [] };`,
             label: "Get Current Skill",
             description: "Extract current skill for agents — strips items[] to keep prompts lean",
             inputSchema: "{ items, index, accumulated }",
-            outputSchema: "{ skill, skillId, _idx, _acc, _loopRange }",
+            outputSchema: "{ skill, skillId, _idx, _loopRange }",
             code: `const state = input.prevOutput;
 const cur = state.items[state.index];
-// Pass only what agents need — NOT the full items array.
+// _acc is NOT sent to agents — n-accumulate reads it directly via input.getNodeOutput.
 // _loopRange is a "start:total" string agents copy unchanged so n-accumulate can re-slice.
 return {
   skill:      cur.skill,
   skillId:    cur.id,
   _idx:       state.index,
-  _acc:       state.accumulated,
   _loopRange: state._loopRange,
 };`,
           } satisfies PluginNodeData,
@@ -574,31 +573,24 @@ return {
             mode: "inline",
             inlineName: "Sentence Finder",
             inlineOutputType: "json",
-            inlineSystemPrompt: `You are a precise document analyst. You receive a JSON object describing ONE skill to assess.
-The uploaded reference document is available in your context.
+            inlineSystemPrompt: `You are a document analyst. The uploaded document is in your context under "Uploaded document:".
 
-Fields in the input JSON:
-- "skill": the name of the skill to find evidence for
-- "_idx": integer loop counter — copy unchanged
-- "_acc": array of previous results — copy unchanged
-- "_loopRange": loop range string — copy unchanged exactly as-is
+Task: read the uploaded document and collect every sentence that mentions, demonstrates, or relates to the skill given by the user. Include sentences that use synonyms or closely related concepts — do not require exact keyword matches. Copy each sentence exactly as it appears in the document (no paraphrasing).
 
-Your task: search the uploaded document for ALL sentences that directly mention or strongly imply the skill.
+If no relevant sentence is found, return an empty array for sentence_sources.
+Copy _idx and _loopRange from the input JSON unchanged.
 
-Return ONLY valid JSON — no prose, no markdown fences — exactly this shape:
+Return ONLY valid JSON — no prose, no markdown fences:
 {
-  "skill": "<value of skill field>",
-  "sentence_sources": ["<verbatim or near-verbatim sentence>", "..."],
-  "_idx": <copy _idx unchanged>,
-  "_acc": <copy _acc unchanged>,
-  "_loopRange": "<copy _loopRange string unchanged>"
-}
-
-If no sentences found, return an empty sentence_sources array. Do not invent sentences.`,
+  "skill": "<skill name>",
+  "sentence_sources": ["<sentence from document>", "..."],
+  "_idx": <copy unchanged>,
+  "_loopRange": "<copy unchanged>"
+}`,
             passPrevOutput: true,
-            promptOverride: `Assess this skill: {{prevOutput}}`,
-            inputSchema: "{ skill, skillId, _idx, _acc } + docText in context",
-            outputSchema: "{ skill, sentence_sources: string[], _idx, _acc }",
+            promptOverride: `Find sentences related to skill: "{{prevOutput.skill}}"`,
+            inputSchema: "{ skill, skillId, _idx, _loopRange } + docText in context",
+            outputSchema: "{ skill, sentence_sources: string[], _idx, _loopRange }",
           } satisfies AgentNodeData,
         },
 
@@ -614,12 +606,11 @@ If no sentences found, return an empty sentence_sources array. Do not invent sen
             inlineOutputType: "json",
             inlineSystemPrompt: `You receive a JSON object with:
 - "skill": the skill name
-- "sentence_sources": sentences found in the document
+- "sentence_sources": sentences from the uploaded document
 - "_idx": loop counter — copy unchanged
-- "_acc": previous results — copy unchanged
-- "_loopRange": loop range string — copy unchanged exactly as-is
+- "_loopRange": loop range string — copy unchanged
 
-Write a single concise sentence describing how this skill is demonstrated, based ONLY on the sentence_sources.
+Write a single concise sentence describing how this skill is demonstrated, based ONLY on sentence_sources.
 If sentence_sources is empty, write "No evidence found in the uploaded document."
 
 Return ONLY valid JSON — no prose, no markdown fences:
@@ -628,13 +619,12 @@ Return ONLY valid JSON — no prose, no markdown fences:
   "description": "<one sentence>",
   "sentence_sources": <copy unchanged>,
   "_idx": <copy unchanged>,
-  "_acc": <copy unchanged>,
-  "_loopRange": "<copy _loopRange string unchanged>"
+  "_loopRange": "<copy _loopRange unchanged>"
 }`,
             passPrevOutput: true,
-            promptOverride: `Write description for: {{prevOutput}}`,
-            inputSchema: "{ skill, sentence_sources, _idx, _acc }",
-            outputSchema: "{ skill, description, sentence_sources, _idx, _acc }",
+            promptOverride: `Write description for skill "{{prevOutput.skill}}": {{prevOutput}}`,
+            inputSchema: "{ skill, sentence_sources, _idx, _loopRange }",
+            outputSchema: "{ skill, description, sentence_sources, _idx, _loopRange }",
           } satisfies AgentNodeData,
         },
 
@@ -653,8 +643,7 @@ Return ONLY valid JSON — no prose, no markdown fences:
 - "description": one-sentence description
 - "sentence_sources": evidence sentences from the document
 - "_idx": loop counter — copy unchanged
-- "_acc": previous results — copy unchanged
-- "_loopRange": loop range string — copy unchanged exactly as-is
+- "_loopRange": loop range string — copy unchanged
 
 Assign ONE expertise level based on the evidence:
 - beginner: recall/understand concepts (no hands-on evidence)
@@ -672,13 +661,12 @@ Return ONLY valid JSON — no prose, no markdown fences:
   },
   "sentence_sources": <copy unchanged>,
   "_idx": <copy unchanged>,
-  "_acc": <copy unchanged>,
-  "_loopRange": "<copy _loopRange string unchanged>"
+  "_loopRange": "<copy _loopRange unchanged>"
 }`,
             passPrevOutput: true,
-            promptOverride: `Assign Bloom's level for: {{prevOutput}}`,
-            inputSchema: "{ skill, description, sentence_sources, _idx, _acc }",
-            outputSchema: "{ skill, description, expected_level: {level,reason}, sentence_sources, _idx, _acc }",
+            promptOverride: `Assign Bloom's level for skill "{{prevOutput.skill}}": {{prevOutput}}`,
+            inputSchema: "{ skill, description, sentence_sources, _idx, _loopRange }",
+            outputSchema: "{ skill, description, expected_level: {level,reason}, sentence_sources, _idx, _loopRange }",
           } satisfies AgentNodeData,
         },
 
@@ -692,8 +680,8 @@ Return ONLY valid JSON — no prose, no markdown fences:
           data: {
             label: "Accumulate & Advance",
             description: "Push result, increment index, rebuild items from source data (no token bloat)",
-            inputSchema: "{ skill, description, expected_level, sentence_sources, _idx, _acc }",
-            outputSchema: "{ items, index: _idx+1, accumulated: [..._acc, newEntry] }",
+            inputSchema: "{ skill, description, expected_level, sentence_sources, _idx, _loopRange }",
+            outputSchema: "{ items, index: _idx+1, accumulated: [...prevAcc, newEntry] }",
             code: `${PARSE_AGENT_JSON}
 ${READ_ITEMS_CODE}
 
@@ -707,6 +695,11 @@ const loopStart = rangeParts[0] >= 0 ? rangeParts[0] : 0;
 const loopTotal = rangeParts[1] > 0  ? rangeParts[1] : allItems.length;
 const items = allItems.slice(loopStart, loopStart + loopTotal);
 
+// Read accumulated from the condition node's previous output — _acc no longer travels
+// through agents (it grows with every iteration, bloating every LLM call).
+const conditionState = input.getNodeOutput('n-condition');
+const prevAcc = Array.isArray(conditionState?.accumulated) ? conditionState.accumulated : [];
+
 // Build this iteration's result entry (guard against missing fields)
 const entry = {
   skill:          r.skill || '',
@@ -715,11 +708,9 @@ const entry = {
   sentence_sources: Array.isArray(r.sentence_sources) ? r.sentence_sources : [],
 };
 
-const prevAcc = Array.isArray(r._acc) ? r._acc : [];
-
 return {
   items,
-  index:      (typeof r._idx === 'number' ? r._idx : 0) + 1,
+  index:       (typeof r._idx === 'number' ? r._idx : 0) + 1,
   accumulated: [...prevAcc, entry],
   _loopRange:  r._loopRange || (loopStart + ':' + loopTotal),
 };`,

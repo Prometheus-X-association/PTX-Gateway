@@ -25,7 +25,10 @@ export interface ExecutorContext {
 
 // ─── Sandboxed JS eval ────────────────────────────────────────────────────────
 
-function runPlugin(code: string, input: { result: unknown; docText: string | null; prevOutput: unknown }): unknown {
+function runPlugin(
+  code: string,
+  input: { result: unknown; docText: string | null; prevOutput: unknown; getNodeOutput: (id: string) => unknown },
+): unknown {
   try {
     // eslint-disable-next-line no-new-func
     return new Function("input", `"use strict";\n${code}`)(input);
@@ -109,7 +112,16 @@ export async function executeWorkflow(
         const d = node.data as AgentNodeData;
         const prevStr = prevOutput === null ? "" : typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput, null, 2);
         const rawPrompt = d.promptOverride?.trim() || ctx.userMessage;
-        const prompt = rawPrompt.replace(/\{\{prevOutput\}\}/g, prevStr);
+        const prompt = rawPrompt
+          .replace(/\{\{prevOutput\}\}/g, prevStr)
+          // {{prevOutput.fieldName}} — inject a single field from the prevOutput object
+          .replace(/\{\{prevOutput\.([^}]+)\}\}/g, (_m, key) => {
+            if (prevOutput && typeof prevOutput === "object") {
+              const val = (prevOutput as Record<string, unknown>)[key as string];
+              return val !== undefined ? String(val) : "";
+            }
+            return "";
+          });
         const agentConfig =
           d.mode === "inline"
             ? { inline: { systemPrompt: d.inlineSystemPrompt ?? "", outputType: d.inlineOutputType ?? "text" } }
@@ -118,12 +130,15 @@ export async function executeWorkflow(
 
       } else if (node.type === "plugin") {
         const d = node.data as PluginNodeData;
-        output = runPlugin(d.code, { result: ctx.resultData, docText: ctx.docText, prevOutput });
+        output = runPlugin(d.code, {
+          result: ctx.resultData,
+          docText: ctx.docText,
+          prevOutput,
+          getNodeOutput: (id: string) => outputByNodeId.get(id) ?? null,
+        });
 
       } else if (node.type === "condition") {
         const d = node.data as ConditionNodeData;
-        // If loop range is configured on this node, enforce it by re-slicing items
-        // on every visit. This is the authoritative enforcer — no agent cooperation needed.
         if ((d.loopStart !== undefined || d.loopEnd !== undefined) && prevOutput && typeof prevOutput === "object") {
           const state = prevOutput as Record<string, unknown>;
           const allItems = Array.isArray(state.items) ? state.items : [];
@@ -134,7 +149,14 @@ export async function executeWorkflow(
         } else {
           output = prevOutput;
         }
-        const result = evalCondition(d.expression, output);
+        let result = evalCondition(d.expression, output);
+        // Belt-and-suspenders: enforce loop limit via index even if items weren't re-sliced.
+        // maxLoopIndex = number of iterations allowed - 1 (relative to slice start).
+        if (result && d.loopEnd !== undefined && output && typeof output === "object") {
+          const idx = (output as Record<string, unknown>).index;
+          const maxIdx = d.loopEnd - (d.loopStart ?? 0);
+          if (typeof idx === "number" && idx > maxIdx) result = false;
+        }
         conditionResults.set(node.id, result);
 
       } else if (node.type === "output") {

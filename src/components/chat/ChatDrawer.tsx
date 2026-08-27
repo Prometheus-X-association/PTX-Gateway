@@ -522,7 +522,29 @@ const ChatDrawer = ({
     if (!selectedWorkflow || selectedWorkflow.graph.nodes.length === 0) return;
     if (isWorkflowRunning) return;
 
+    // Pre-flight checks before running the workflow.
     const workflow: AgentWorkflow = selectedWorkflow.graph;
+    const hasResult = resultData !== null && resultData !== undefined;
+    const hasDoc = !!docText?.trim();
+    const needsDoc = workflow.nodes.some(
+      (n) => n.type === "agent" && (n.data as import("@/types/workflow").AgentNodeData).mode === "inline"
+    );
+
+    const preflight: string[] = [];
+    if (!hasResult) preflight.push("result data (load a dataset first)");
+    if (!hasDoc && needsDoc) preflight.push("an uploaded document (attach one via the paperclip button)");
+
+    if (preflight.length > 0) {
+      setMessages((prev) => [
+        ...prev,
+        { id: uid(), role: "user" as MessageRole, content: userMsg },
+        {
+          id: uid(), role: "assistant" as MessageRole, streaming: false,
+          content: `⚠️ This workflow needs: ${preflight.join(" and ")}. Please provide the missing data and try again.`,
+        },
+      ]);
+      return;
+    }
 
     setIsWorkflowRunning(true);
     setWorkflowProgress(null);
@@ -558,16 +580,27 @@ const ChatDrawer = ({
         signal: abortRef.current.signal,
 
         onAgentStep: async (nodeId, agentConfig, prompt, prevOutput) => {
-          // Build context: inject prevOutput + docText alongside result data
-          const contextPayload = (prevOutput !== null || docText)
-            ? { __doc_context: true, result: resultData, prevOutput, docText }
-            : resultData;
-
           const { data: sessionData } = await supabase.auth.getSession();
           const token = sessionData?.session?.access_token;
 
           // Resolve inline vs existing agent
           const isInline = !!agentConfig.inline;
+
+          // Inline agents receive only the fields they actually need — not the full analytics
+          // JSON (which causes LLMs to extract sentences from node labels) and not _acc
+          // (the growing accumulated array — n-accumulate now reads it directly via getNodeOutput).
+          const inlineResult = (() => {
+            if (!prevOutput || typeof prevOutput !== "object") return prevOutput;
+            // Strip _acc so it never reaches the LLM context
+            const { _acc: _dropped, ...rest } = prevOutput as Record<string, unknown>;
+            void _dropped;
+            return rest;
+          })();
+          const contextPayload = isInline
+            ? { __doc_context: true, result: inlineResult, docText }
+            : (prevOutput !== null || docText)
+              ? { __doc_context: true, result: resultData, prevOutput, docText }
+              : resultData;
           const agentId = isInline ? undefined : agentConfig.agentId;
           const systemPromptOverride = isInline ? agentConfig.inline!.systemPrompt : undefined;
           const outputType = isInline ? agentConfig.inline!.outputType : undefined;
@@ -616,17 +649,21 @@ const ChatDrawer = ({
           const label = progressMap.get(step.nodeId) ?? step.nodeType;
           partialResultsRef.current = [...partialResultsRef.current, step];
           setWorkflowProgress((prev) => {
-            // Detect total items from the FIRST plugin that outputs { items: [], _loopRange }
-            // Lock once found — never let later plugins overwrite with full-list counts.
             let newKnownTotal = prev?.knownTotal ?? 0;
-            if (newKnownTotal === 0 && step.nodeType === "plugin" && step.output && typeof step.output === "object") {
+            if (step.output && typeof step.output === "object") {
               const out = step.output as Record<string, unknown>;
-              // Prefer _loopRange "start:total" encoded by n-init
-              if (typeof out._loopRange === "string") {
+              if (step.nodeType === "condition" && typeof out._loopRange === "string") {
+                // Condition _loopRange reflects the user-configured loop limit — always prefer it.
                 const parts = out._loopRange.split(":");
-                newKnownTotal = Number(parts[1]) || 0;
-              } else if (Array.isArray(out.items)) {
-                newKnownTotal = out.items.length;
+                const t = Number(parts[1]);
+                if (t > 0) newKnownTotal = t;
+              } else if (newKnownTotal === 0 && step.nodeType === "plugin") {
+                // Plugin fallback: use _loopRange or items count, but only when total is still unknown.
+                if (typeof out._loopRange === "string") {
+                  newKnownTotal = Number(out._loopRange.split(":")[1]) || 0;
+                } else if (Array.isArray(out.items)) {
+                  newKnownTotal = out.items.length;
+                }
               }
             }
             // Read the actual loop index from condition output (which is prevOutput pass-through)
