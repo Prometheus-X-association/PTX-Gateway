@@ -275,6 +275,7 @@ const callLlmOnce = async (
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(90_000),
       });
       const raw = await resp.text();
       if (!resp.ok) {
@@ -313,6 +314,7 @@ async function* streamLlm(
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ model, temperature: 0.7, messages, stream: true }),
+        signal: AbortSignal.timeout(90_000),
       });
       if (!resp.ok || !resp.body) {
         const raw = await resp.text().catch(() => "");
@@ -373,6 +375,7 @@ const mcpPost = async (
     method: "POST",
     headers,
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+    signal: AbortSignal.timeout(30_000),
   });
 
   const responseSessionId = resp.headers.get("mcp-session-id") || session?.sessionId;
@@ -427,6 +430,7 @@ const mcpNotifyInitialized = async (
     method: "POST",
     headers,
     body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
@@ -467,7 +471,8 @@ const discoverMcpTools = async (
       })),
       session,
     };
-  } catch {
+  } catch (error) {
+    console.warn(`MCP discovery failed for ${server.name || server.url}:`, String(error));
     return { tools: [], session: { protocolVersion: "2024-11-05" } };
   }
 };
@@ -508,16 +513,22 @@ const callMcpTool = async (
       binding.session,
     );
     const content = (response.json.result as Record<string, unknown>)?.content;
+    let result: string;
     if (Array.isArray(content)) {
-      return content
+      result = content
         .map((c) =>
           typeof c === "object" && c !== null && (c as Record<string, unknown>).type === "text"
             ? String((c as Record<string, unknown>).text || "")
             : JSON.stringify(c)
         )
         .join("\n");
+    } else {
+      result = JSON.stringify(response.json.result ?? response.json);
     }
-    return JSON.stringify(response.json.result ?? response.json);
+    const maxResultChars = 60_000;
+    return result.length > maxResultChars
+      ? `${result.slice(0, maxResultChars)}\n...[MCP result truncated]`
+      : result;
   } catch (e) {
     return `Tool call failed: ${String(e)}`;
   }
@@ -682,13 +693,15 @@ serve(async (req: Request) => {
   const allTools: OpenAITool[] = [];
   const mcpToolBindings = new Map<string, McpToolBinding>();
   const usedToolNames = new Set<string>();
-  for (const [serverIndex, server] of mcpServers.entries()) {
+  serverLoop: for (const [serverIndex, server] of mcpServers.entries()) {
     const discovery = await discoverMcpTools(server);
     const allowedNames = activeAgent?.mcpToolFilter?.[server.id ?? ""];
     const filtered = allowedNames && allowedNames.length > 0
       ? discovery.tools.filter((tool) => allowedNames.includes(tool.rawName))
       : discovery.tools;
     for (const tool of filtered) {
+      // OpenAI-compatible Chat Completions accepts at most 128 tools.
+      if (allTools.length >= 128) break serverLoop;
       const name = providerToolName(serverIndex, tool.rawName, usedToolNames);
       allTools.push({
         type: "function",
@@ -710,42 +723,40 @@ serve(async (req: Request) => {
       };
 
       try {
-        // Tool-use loop (non-streaming) — max 5 iterations
+        const sendText = (text: string) => {
+          const chunkSize = 24;
+          for (let offset = 0; offset < text.length; offset += chunkSize) {
+            send({ type: "token", content: text.slice(offset, offset + chunkSize) });
+          }
+        };
+
         const loopMessages = [...history];
         const MAX_ITERATIONS = 5;
-
         const isJsonAgent = activeAgent?.expectedOutput === "json";
-        for (let i = 0; i < MAX_ITERATIONS; i++) {
-          const hasTools = allTools.length > 0;
+        let completed = false;
+
+        // Without MCP tools, stream once. The previous implementation first made
+        // a discarded non-streaming call and then repeated it as a stream.
+        if (allTools.length === 0) {
+          for await (const token of streamLlm(providers, loopMessages)) {
+            send({ type: "token", content: token });
+          }
+          completed = true;
+        }
+
+        // Tool-use loop. Each turn either calls MCP or produces the final answer.
+        for (let i = 0; !completed && i < MAX_ITERATIONS; i++) {
           const { message } = await callLlmOnce(
             providers,
             loopMessages,
-            hasTools ? allTools : undefined,
-            isJsonAgent && !hasTools
+            allTools,
+            false,
           );
 
           // No tool calls — final text response, stream it
           if (!message.tool_calls || message.tool_calls.length === 0) {
-            // Append assistant placeholder, stream final response
-            loopMessages.push({
-              role: "assistant",
-              content: message.content || "",
-            });
-
-            // If we got here from a tool loop, re-request with stream
-            if (i > 0) {
-              // Already have a final message content — send it token-by-token
-              const text = message.content || "";
-              const chunkSize = 4;
-              for (let j = 0; j < text.length; j += chunkSize) {
-                send({ type: "token", content: text.slice(j, j + chunkSize) });
-              }
-            } else {
-              // First turn, no tools used — stream directly from LLM
-              for await (const token of streamLlm(providers, loopMessages.slice(0, -1))) {
-                send({ type: "token", content: token });
-              }
-            }
+            sendText(message.content || "");
+            completed = true;
             break;
           }
 
@@ -768,6 +779,18 @@ serve(async (req: Request) => {
               content: result,
             });
           }
+        }
+
+        if (!completed) {
+          // Do not silently end after the last MCP turn. Ask for a final response
+          // with tools disabled so the model cannot start another tool cycle.
+          const { message } = await callLlmOnce(
+            providers,
+            loopMessages,
+            undefined,
+            isJsonAgent,
+          );
+          sendText(message.content || "MCP processing completed without a final response.");
         }
 
         send({ type: "done" });

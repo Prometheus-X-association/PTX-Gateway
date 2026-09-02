@@ -78,13 +78,48 @@ const HTML_START_RE = /<!doctype\s+html\b|<(html|head|body|title|meta|link|style
 const looksLikeHtml = (value: string): boolean => HTML_START_RE.test(value);
 
 const extractFencedHtml = (text: string): { prose: string; html: string } | null => {
-  // Match ```html ... ``` or ``` ... ``` where content looks like HTML
-  const m = text.match(/```(html)?\s*\r?\n?([\s\S]*?)```/i);
-  if (!m) return null;
-  const inner = m[2].trim();
-  if (!m[1] && !looksLikeHtml(inner)) return null;
-  const fenceStart = text.indexOf(m[0]);
-  return { prose: text.slice(0, fenceStart).trim(), html: inner };
+  const fencePattern = /```([A-Za-z0-9_-]*)\s*\r?\n?([\s\S]*?)```/g;
+  const blocks = [...text.matchAll(fencePattern)];
+  const htmlBlocks = blocks.filter((match) => {
+    const language = match[1].toLowerCase();
+    return language === "html" || language === "htm" || (!language && looksLikeHtml(match[2]));
+  });
+  if (htmlBlocks.length === 0) return null;
+
+  // Models commonly return separate ```html```, ```css```, and ```js``` blocks.
+  // Combine them into one executable iframe document instead of dropping all
+  // but the first block.
+  const consumed = new Set<RegExpMatchArray>(htmlBlocks);
+  const html = htmlBlocks.map((match) => match[2].trim()).join("\n");
+  const styles: string[] = [];
+  const scripts: string[] = [];
+  blocks.forEach((match) => {
+    const language = match[1].toLowerCase();
+    if (language === "css") {
+      styles.push(match[2].trim());
+      consumed.add(match);
+    } else if (language === "js" || language === "javascript") {
+      scripts.push(match[2].trim());
+      consumed.add(match);
+    }
+  });
+
+  let prose = text;
+  consumed.forEach((match) => { prose = prose.replace(match[0], ""); });
+  let assembled = html;
+  if (styles.length > 0) {
+    const styleTag = `<style>${styles.join("\n")}</style>`;
+    assembled = /<\/head>/i.test(assembled)
+      ? assembled.replace(/<\/head>/i, `${styleTag}\n</head>`)
+      : `${styleTag}\n${assembled}`;
+  }
+  if (scripts.length > 0) {
+    const scriptTag = `<script>${scripts.join("\n")}</script>`;
+    assembled = /<\/body>/i.test(assembled)
+      ? assembled.replace(/<\/body>/i, `${scriptTag}\n</body>`)
+      : `${assembled}\n${scriptTag}`;
+  }
+  return { prose: prose.trim(), html: assembled };
 };
 
 const splitHtmlViz = (text: string): { prose: string; html: string | null } => {
@@ -238,9 +273,13 @@ const OUTPUT_LABELS: Record<string, string> = {
 // ─── VizBubble ────────────────────────────────────────────────────────────────
 
 const buildSrcdoc = (innerHtml: string) => {
+  const needsEcharts = !/(?:src\s*=\s*["'][^"']*echarts|\becharts\s*=)/i.test(innerHtml);
+  const echartsScript = needsEcharts
+    ? `<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>`
+    : "";
   const supportMarkup = `<base target="_blank">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+${echartsScript}
 <style>*{box-sizing:border-box} body{margin:0;padding:4px;background:transparent;overflow:auto} img{max-width:100%;height:auto} #chart,#visualization,#main{min-height:380px}</style>`;
 
   // Preserve complete pages instead of nesting a second <html> document inside
@@ -258,7 +297,7 @@ const buildSrcdoc = (innerHtml: string) => {
 <meta charset="utf-8">
 <base target="_blank">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+${echartsScript}
 <style>
   *{box-sizing:border-box}
   body{margin:0;padding:4px;background:transparent;overflow:auto}
@@ -507,6 +546,7 @@ const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; output
   const isUser = msg.role === "user";
   const isVisualAgent = outputFormat === "html" || outputFormat === "mixed" || outputFormat === "json";
   const extracted = extractImages(msg.content);
+  const hasRichContent = Boolean(msg.htmlViz || msg.jsonData || extracted.images.length > 0);
 
   // During streaming for visual agents, don't dump raw HTML/JSON as text —
   // show a spinner with a label instead and let the final routeResponse handle rendering
@@ -517,7 +557,7 @@ const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; output
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
       <div
-        className={`max-w-[88%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+        className={`${hasRichContent && !isUser ? "w-full max-w-full" : "max-w-[88%]"} rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
           isUser
             ? "bg-primary text-primary-foreground rounded-tr-sm"
             : "bg-muted text-foreground rounded-tl-sm"
