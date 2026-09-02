@@ -144,7 +144,8 @@ cd <YOUR_PROJECT_NAME>
 npm install
 
 # Run full local stack (frontend + Supabase + local email inbox)
-# This now applies pending local Supabase migrations automatically.
+# This applies pending local Supabase migrations and serves Edge Functions
+# directly from supabase/functions with hot reload.
 npm run stack
 ```
 
@@ -967,6 +968,8 @@ npm run ngrok:sync
 
 # Local: frontend + backend + local Supabase + local email inbox (Mailpit)
 # same as `npm run stack`
+# waits for the Supabase CLI Edge Functions runtime before starting the frontend;
+# changes under supabase/functions are picked up automatically
 npm run stack:local
 
 # AWS server with local Supabase on the same server:
@@ -1160,7 +1163,10 @@ verify_jwt = false
 # Run frontend in dev mode
 bun dev
 
-# Edge functions run automatically with `supabase start`
+# `npm run stack:local` also starts `supabase functions serve` with hot reload.
+# To run only the Edge Functions runtime against an existing local stack:
+npm run functions
+
 # Test edge functions directly:
 curl -X POST http://127.0.0.1:54321/functions/v1/pdc-execute \
   -H "Content-Type: application/json" \

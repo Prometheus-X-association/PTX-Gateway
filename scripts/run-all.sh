@@ -126,6 +126,7 @@ fi
 
 SUPABASE_STARTED="false"
 SUPABASE_DB_PORT="54322"
+FUNCTIONS_LOG="/tmp/ptx-gateway-supabase-functions.log"
 
 detect_supabase_db_port() {
   local config_file="supabase/config.toml"
@@ -229,6 +230,55 @@ start_supabase_with_recovery() {
   npx supabase start
 }
 
+start_edge_functions() {
+  local -a serve_args=(functions serve)
+  if [[ -f "supabase/functions/.env" ]]; then
+    serve_args+=(--env-file "supabase/functions/.env")
+  fi
+
+  echo "Starting Edge Functions from the local working tree (hot-reload)..."
+  : > "$FUNCTIONS_LOG"
+  npx supabase "${serve_args[@]}" > "$FUNCTIONS_LOG" 2>&1 &
+  FUNCTIONS_PID=$!
+
+  # Do not report the stack as ready if the background Supabase CLI process
+  # failed immediately (for example because Docker or Kong is unavailable).
+  local attempts=0
+  while (( attempts < 30 )); do
+    if ! kill -0 "$FUNCTIONS_PID" 2>/dev/null; then
+      echo "Edge Functions runtime failed to start. Recent log output:"
+      tail -40 "$FUNCTIONS_LOG" 2>/dev/null || true
+      return 1
+    fi
+    if grep -q "Serving functions on" "$FUNCTIONS_LOG" 2>/dev/null; then
+      echo "Edge Functions ready (PID: ${FUNCTIONS_PID}, logs: ${FUNCTIONS_LOG})"
+      echo "Changes under supabase/functions are applied automatically by hot reload."
+      return 0
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+
+  echo "Timed out waiting for the Edge Functions runtime. Recent log output:"
+  tail -40 "$FUNCTIONS_LOG" 2>/dev/null || true
+  return 1
+}
+
+cleanup() {
+  if [[ -n "${FUNCTIONS_PID:-}" ]]; then
+    kill "$FUNCTIONS_PID" 2>/dev/null || true
+  fi
+  if [[ "$SUPABASE_STARTED" == "true" && "$STOP_ON_EXIT" == "true" ]]; then
+    echo
+    echo "Stopping local Supabase services..."
+    npx supabase stop || true
+  fi
+}
+
+# Install cleanup before starting Docker services so a later migration or Edge
+# Functions startup failure does not leave a partially started local stack.
+trap cleanup EXIT INT TERM
+
 if [[ "$WITH_SUPABASE" == "true" ]]; then
   if ! command -v npx >/dev/null 2>&1; then
     echo "npx is required to run Supabase CLI."
@@ -271,24 +321,8 @@ if [[ "$WITH_SUPABASE" == "true" ]]; then
     npx supabase db push --local
   fi
 
-  echo "Starting Edge Functions runtime (hot-reload)..."
-  npx supabase functions serve > /tmp/supabase-functions.log 2>&1 &
-  FUNCTIONS_PID=$!
-  echo "Edge Functions PID: ${FUNCTIONS_PID} (logs: /tmp/supabase-functions.log)"
+  start_edge_functions
 fi
-
-cleanup() {
-  if [[ -n "${FUNCTIONS_PID:-}" ]]; then
-    kill "$FUNCTIONS_PID" 2>/dev/null || true
-  fi
-  if [[ "$SUPABASE_STARTED" == "true" && "$STOP_ON_EXIT" == "true" ]]; then
-    echo
-    echo "Stopping local Supabase services..."
-    npx supabase stop || true
-  fi
-}
-
-trap cleanup EXIT INT TERM
 
 echo "Starting frontend on http://${HOST}:${FRONTEND_PORT} ..."
 echo "Press Ctrl+C to stop."

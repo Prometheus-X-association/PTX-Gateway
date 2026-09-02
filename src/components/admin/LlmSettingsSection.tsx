@@ -878,7 +878,7 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
       [server.id]: {
         loading: false,
         tools: result.tools ?? [],
-        error: result.ok ? undefined : (result.error ?? "Failed to load tools"),
+        error: result.error ?? (result.ok ? undefined : "Failed to load tools"),
       },
     }));
   };

@@ -34,18 +34,26 @@ function jsonResponse(body: McpTestResponse, status = 200): Response {
   });
 }
 
-async function readFirstSseEvent(body: ReadableStream<Uint8Array>): Promise<unknown> {
+async function readSseResponse(
+  body: ReadableStream<Uint8Array>,
+  expectedId: string | number | null,
+): Promise<unknown> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let raw = "";
   try {
-    for (let i = 0; i < 50; i++) {
+    while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       raw += decoder.decode(value, { stream: true });
-      const match = raw.match(/^data:\s*(.+)$/m);
-      if (match) {
-        try { return JSON.parse(match[1]); } catch { return null; }
+      const lines = raw.split("\n");
+      raw = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        try {
+          const parsed = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
+          if (expectedId === null || parsed.id === expectedId) return parsed;
+        } catch { /* wait for the next valid data event */ }
       }
     }
   } finally {
@@ -54,11 +62,29 @@ async function readFirstSseEvent(body: ReadableStream<Uint8Array>): Promise<unkn
   return null;
 }
 
+function requestId(body: unknown): string | number | null {
+  if (!body || typeof body !== "object") return null;
+  const id = (body as Record<string, unknown>).id;
+  return typeof id === "string" || typeof id === "number" ? id : null;
+}
+
+function jsonRpcError(json: unknown): string | undefined {
+  if (!json || typeof json !== "object") return undefined;
+  const error = (json as Record<string, unknown>).error;
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as Record<string, unknown>;
+  const code = typeof value.code === "number" || typeof value.code === "string"
+    ? String(value.code)
+    : "";
+  const message = typeof value.message === "string" ? value.message : "Unknown JSON-RPC error";
+  return [code, message].filter(Boolean).join(": ");
+}
+
 async function callMcp(
   url: string,
   headers: Record<string, string>,
   body: unknown,
-): Promise<{ json: unknown; error?: string }> {
+): Promise<{ json: unknown; sessionId?: string; error?: string }> {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -79,16 +105,50 @@ async function callMcp(
     };
   }
 
+  const sessionId = res.headers.get("mcp-session-id") || undefined;
+
   const ct = res.headers.get("content-type") ?? "";
   if (ct.includes("event-stream")) {
-    const parsed = await readFirstSseEvent(res.body!);
-    return { json: parsed };
+    const parsed = await readSseResponse(res.body!, requestId(body));
+    if (parsed === null) {
+      return { json: null, sessionId, error: "SSE stream ended without a matching JSON-RPC response" };
+    }
+    const rpcError = jsonRpcError(parsed);
+    if (rpcError) return { json: parsed, sessionId, error: `JSON-RPC ${rpcError}` };
+    return { json: parsed, sessionId };
   }
 
   try {
-    return { json: await res.json() };
+    const json = await res.json();
+    const rpcError = jsonRpcError(json);
+    if (rpcError) return { json, sessionId, error: `JSON-RPC ${rpcError}` };
+    return { json, sessionId };
   } catch {
     return { json: null, error: "Invalid JSON in response" };
+  }
+}
+
+async function sendMcpNotification(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+): Promise<string | undefined> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return `HTTP ${res.status} ${res.statusText}${text ? `: ${text.slice(0, 200)}` : ""}`;
+    }
+    // Notifications commonly return 202 with no response body.
+    await res.body?.cancel().catch(() => {/* ignore */});
+    return undefined;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
   }
 }
 
@@ -178,19 +238,63 @@ serve(async (req) => {
   const initJson = initResult.json as { result?: { serverInfo?: { name?: string; version?: string } } } | null;
   const serverInfo = initJson?.result?.serverInfo;
 
-  // Step 2: tools/list
-  const toolsResult = await callMcp(body.url, mcpHeaders, {
-    jsonrpc: "2.0", id: 2, method: "tools/list", params: {},
+  // Streamable HTTP servers bind subsequent requests to the session created by
+  // initialize. They may also require the negotiated protocol version header.
+  const protocolVersion = (initResult.json as { result?: { protocolVersion?: string } } | null)
+    ?.result?.protocolVersion || "2024-11-05";
+  const sessionHeaders = { ...mcpHeaders, "MCP-Protocol-Version": protocolVersion };
+  if (initResult.sessionId) sessionHeaders["Mcp-Session-Id"] = initResult.sessionId;
+
+  const notificationError = await sendMcpNotification(body.url, sessionHeaders, {
+    jsonrpc: "2.0", method: "notifications/initialized", params: {},
   });
+  if (notificationError) {
+    return jsonResponse({
+      ok: false,
+      latencyMs: Math.round(performance.now() - t0),
+      serverInfo,
+      error: `initialize succeeded but notifications/initialized failed: ${notificationError}`,
+    });
+  }
 
-  let tools: McpTool[] = [];
-  let toolsError: string | undefined;
+  // Step 2: tools/list. Follow cursors so the admin sees the complete catalog.
+  const tools: McpTool[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < 50; page++) {
+    const toolsResult = await callMcp(body.url, sessionHeaders, {
+      jsonrpc: "2.0",
+      id: 2 + page,
+      method: "tools/list",
+      params: cursor ? { cursor } : {},
+    });
 
-  if (toolsResult.error) {
-    toolsError = `initialize succeeded but tools/list failed: ${toolsResult.error}`;
-  } else {
-    const toolsJson = toolsResult.json as { result?: { tools?: McpTool[] } } | null;
-    tools = toolsJson?.result?.tools ?? [];
+    if (toolsResult.error) {
+      return jsonResponse({
+        ok: false,
+        latencyMs: Math.round(performance.now() - t0),
+        serverInfo,
+        tools,
+        error: `initialize succeeded but tools/list failed: ${toolsResult.error}`,
+      });
+    }
+
+    const toolsJson = toolsResult.json as {
+      result?: { tools?: McpTool[]; nextCursor?: string };
+    } | null;
+    if (!Array.isArray(toolsJson?.result?.tools)) {
+      return jsonResponse({
+        ok: false,
+        latencyMs: Math.round(performance.now() - t0),
+        serverInfo,
+        tools,
+        error: "initialize succeeded but tools/list returned no tools array",
+      });
+    }
+    tools.push(...toolsJson.result.tools);
+    cursor = typeof toolsJson.result.nextCursor === "string" && toolsJson.result.nextCursor
+      ? toolsJson.result.nextCursor
+      : undefined;
+    if (!cursor) break;
   }
 
   return jsonResponse({
@@ -198,6 +302,5 @@ serve(async (req) => {
     latencyMs: Math.round(performance.now() - t0),
     serverInfo,
     tools,
-    ...(toolsError ? { error: toolsError } : {}),
   });
 });

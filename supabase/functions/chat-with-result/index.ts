@@ -57,6 +57,28 @@ interface McpServerConfig {
   enabled?: boolean;
 }
 
+interface McpSession {
+  sessionId?: string;
+  protocolVersion: string;
+}
+
+interface McpResponse {
+  json: Record<string, unknown>;
+  sessionId?: string;
+}
+
+interface DiscoveredMcpTool {
+  rawName: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+interface McpToolBinding {
+  server: McpServerConfig;
+  session: McpSession;
+  rawName: string;
+}
+
 interface LlmAgent {
   id?: string;
   name?: string;
@@ -215,6 +237,20 @@ const resolveAgentProviders = (agent: LlmAgent, cfg: LlmInsightsConfig): LlmProv
   return [...agentSpecific, ...globalSelected];
 };
 
+const providerErrorDetail = (raw: string): string => {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const error = parsed.error;
+    if (error && typeof error === "object") {
+      const value = error as Record<string, unknown>;
+      const message = typeof value.message === "string" ? value.message : "";
+      const code = typeof value.code === "string" ? value.code : "";
+      return [code, message].filter(Boolean).join(": ").slice(0, 600);
+    }
+  } catch { /* use plain-text response below */ }
+  return raw.replace(/\s+/g, " ").trim().slice(0, 600);
+};
+
 // Non-streaming LLM call — returns full message (used in tool-use loop)
 const callLlmOnce = async (
   providers: LlmProvider[],
@@ -241,7 +277,11 @@ const callLlmOnce = async (
         body: JSON.stringify(body),
       });
       const raw = await resp.text();
-      if (!resp.ok) { errors.push(`${p.name || model}: ${resp.status}`); continue; }
+      if (!resp.ok) {
+        const detail = providerErrorDetail(raw);
+        errors.push(`${p.name || model}: ${resp.status}${detail ? ` — ${detail}` : ""}`);
+        continue;
+      }
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const choice = (parsed.choices as Array<Record<string, unknown>> | undefined)?.[0];
       const msg = choice?.message as ChatMessage | undefined;
@@ -275,7 +315,9 @@ async function* streamLlm(
         body: JSON.stringify({ model, temperature: 0.7, messages, stream: true }),
       });
       if (!resp.ok || !resp.body) {
-        errors.push(`${p.name || model}: ${resp.status}`);
+        const raw = await resp.text().catch(() => "");
+        const detail = providerErrorDetail(raw);
+        errors.push(`${p.name || model}: ${resp.status}${detail ? ` — ${detail}` : ""}`);
         continue;
       }
       const reader = resp.body.getReader();
@@ -316,19 +358,28 @@ const mcpPost = async (
   server: McpServerConfig,
   method: string,
   params: Record<string, unknown> = {},
-  id: number = 1
-): Promise<Record<string, unknown>> => {
+  id: number = 1,
+  session?: McpSession,
+): Promise<McpResponse> => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
   };
   if (server.apiKey?.trim()) headers.Authorization = `Bearer ${server.apiKey}`;
+  if (session?.sessionId) headers["Mcp-Session-Id"] = session.sessionId;
+  if (session?.protocolVersion) headers["MCP-Protocol-Version"] = session.protocolVersion;
 
   const resp = await fetch(server.url!, {
     method: "POST",
     headers,
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
   });
+
+  const responseSessionId = resp.headers.get("mcp-session-id") || session?.sessionId;
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`MCP ${server.name}: HTTP ${resp.status}${text ? `: ${text.slice(0, 300)}` : ""}`);
+  }
 
   const contentType = resp.headers.get("content-type") || "";
 
@@ -347,54 +398,116 @@ const mcpPost = async (
         if (!line.startsWith("data:")) continue;
         try {
           const parsed = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
-          if (parsed.id === id) return parsed;
+          if (parsed.id === id) return { json: parsed, sessionId: responseSessionId };
         } catch { /* skip */ }
       }
     }
     throw new Error(`MCP ${server.name}: no result received`);
   }
 
-  return (await resp.json()) as Record<string, unknown>;
+  return {
+    json: (await resp.json()) as Record<string, unknown>,
+    sessionId: responseSessionId,
+  };
 };
 
-const discoverMcpTools = async (server: McpServerConfig): Promise<OpenAITool[]> => {
+const mcpNotifyInitialized = async (
+  server: McpServerConfig,
+  session: McpSession,
+): Promise<void> => {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+    "MCP-Protocol-Version": session.protocolVersion,
+  };
+  if (server.apiKey?.trim()) headers.Authorization = `Bearer ${server.apiKey}`;
+  if (session.sessionId) headers["Mcp-Session-Id"] = session.sessionId;
+
+  const resp = await fetch(server.url!, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`MCP ${server.name}: initialized notification failed (${resp.status})${text ? `: ${text.slice(0, 300)}` : ""}`);
+  }
+  await resp.body?.cancel().catch(() => {/* ignore */});
+};
+
+const discoverMcpTools = async (
+  server: McpServerConfig,
+): Promise<{ tools: DiscoveredMcpTool[]; session: McpSession }> => {
   try {
     // Initialize session
-    await mcpPost(server, "initialize", {
+    const initialized = await mcpPost(server, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: { name: "ptx-gateway", version: "1.0" },
     }, 0);
 
-    const result = await mcpPost(server, "tools/list", {}, 1);
-    const tools = (result.result as Record<string, unknown>)?.tools as Array<Record<string, unknown>> | undefined;
-    if (!Array.isArray(tools)) return [];
+    const initResult = initialized.json.result as Record<string, unknown> | undefined;
+    const session: McpSession = {
+      sessionId: initialized.sessionId,
+      protocolVersion: typeof initResult?.protocolVersion === "string"
+        ? initResult.protocolVersion
+        : "2024-11-05",
+    };
+    await mcpNotifyInitialized(server, session);
 
-    return tools.map((t) => ({
-      type: "function" as const,
-      function: {
-        name: `${server.id || "mcp"}__${String(t.name || "")}`,
+    const response = await mcpPost(server, "tools/list", {}, 1, session);
+    const tools = (response.json.result as Record<string, unknown>)?.tools as Array<Record<string, unknown>> | undefined;
+    if (!Array.isArray(tools)) return { tools: [], session };
+
+    return {
+      tools: tools.map((t) => ({
+        rawName: String(t.name || ""),
         description: String(t.description || ""),
         parameters: (t.inputSchema as Record<string, unknown>) || { type: "object", properties: {} },
-      },
-    }));
+      })),
+      session,
+    };
   } catch {
-    return [];
+    return { tools: [], session: { protocolVersion: "2024-11-05" } };
   }
 };
 
+const providerToolName = (
+  serverIndex: number,
+  rawName: string,
+  usedNames: Set<string>,
+): string => {
+  // OpenAI-compatible APIs require function names to match [A-Za-z0-9_-]
+  // and be at most 64 characters. MCP itself permits broader names.
+  const safeRawName = rawName.replace(/[^A-Za-z0-9_-]/g, "_") || "tool";
+  const prefix = `mcp${serverIndex + 1}__`;
+  const base = `${prefix}${safeRawName}`.slice(0, 64);
+  let candidate = base;
+  let suffix = 2;
+  while (usedNames.has(candidate)) {
+    const marker = `_${suffix++}`;
+    candidate = `${base.slice(0, 64 - marker.length)}${marker}`;
+  }
+  usedNames.add(candidate);
+  return candidate;
+};
+
 const callMcpTool = async (
-  servers: McpServerConfig[],
-  qualifiedName: string,
+  bindings: Map<string, McpToolBinding>,
+  providerName: string,
   args: unknown
 ): Promise<string> => {
-  const [serverId, ...nameParts] = qualifiedName.split("__");
-  const toolName = nameParts.join("__");
-  const server = servers.find((s) => (s.id || "mcp") === serverId);
-  if (!server) return `Tool server "${serverId}" not found`;
+  const binding = bindings.get(providerName);
+  if (!binding) return `Tool binding "${providerName}" not found`;
   try {
-    const result = await mcpPost(server, "tools/call", { name: toolName, arguments: args }, 2);
-    const content = (result.result as Record<string, unknown>)?.content;
+    const response = await mcpPost(
+      binding.server,
+      "tools/call",
+      { name: binding.rawName, arguments: args },
+      2,
+      binding.session,
+    );
+    const content = (response.json.result as Record<string, unknown>)?.content;
     if (Array.isArray(content)) {
       return content
         .map((c) =>
@@ -404,7 +517,7 @@ const callMcpTool = async (
         )
         .join("\n");
     }
-    return JSON.stringify(result.result ?? result);
+    return JSON.stringify(response.json.result ?? response.json);
   } catch (e) {
     return `Tool call failed: ${String(e)}`;
   }
@@ -566,18 +679,27 @@ serve(async (req: Request) => {
     if (agentMcpIds && agentMcpIds.length > 0) return agentMcpIds.includes(s.id || "");
     return true;
   });
-  let allTools: OpenAITool[] = [];
-  for (const server of mcpServers) {
-    const tools = await discoverMcpTools(server);
+  const allTools: OpenAITool[] = [];
+  const mcpToolBindings = new Map<string, McpToolBinding>();
+  const usedToolNames = new Set<string>();
+  for (const [serverIndex, server] of mcpServers.entries()) {
+    const discovery = await discoverMcpTools(server);
     const allowedNames = activeAgent?.mcpToolFilter?.[server.id ?? ""];
     const filtered = allowedNames && allowedNames.length > 0
-      ? tools.filter((t) => {
-          // qualified name is `${serverId}__${toolName}`
-          const rawName = t.function.name.replace(/^[^_]+__/, "");
-          return allowedNames.includes(rawName);
-        })
-      : tools;
-    allTools = [...allTools, ...filtered];
+      ? discovery.tools.filter((tool) => allowedNames.includes(tool.rawName))
+      : discovery.tools;
+    for (const tool of filtered) {
+      const name = providerToolName(serverIndex, tool.rawName, usedToolNames);
+      allTools.push({
+        type: "function",
+        function: { name, description: tool.description, parameters: tool.parameters },
+      });
+      mcpToolBindings.set(name, {
+        server,
+        session: discovery.session,
+        rawName: tool.rawName,
+      });
+    }
   }
 
   // SSE stream
@@ -589,7 +711,7 @@ serve(async (req: Request) => {
 
       try {
         // Tool-use loop (non-streaming) — max 5 iterations
-        let loopMessages = [...history];
+        const loopMessages = [...history];
         const MAX_ITERATIONS = 5;
 
         const isJsonAgent = activeAgent?.expectedOutput === "json";
@@ -636,7 +758,7 @@ serve(async (req: Request) => {
             let args: unknown;
             try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
 
-            const result = await callMcpTool(mcpServers, toolName, args);
+            const result = await callMcpTool(mcpToolBindings, toolName, args);
             send({ type: "tool_result", name: toolName, result: result.slice(0, 500) });
 
             loopMessages.push({

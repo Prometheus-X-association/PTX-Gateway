@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square } from "lucide-react";
+import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -71,15 +71,18 @@ interface ChatDrawerProps {
 
 const uid = () => Math.random().toString(36).slice(2);
 
-// Tags that mark the start of an HTML/chart block
-const HTML_START_RE = /<(div|script|svg|canvas|html|body|table|thead|tbody|tr|th|td|ul|ol|section|article|figure|form|h[1-6])\b/i;
+// Tags that indicate an HTML document or renderable fragment. Keep this explicit
+// so prose containing comparisons such as "x < y" is not treated as a page.
+const HTML_START_RE = /<!doctype\s+html\b|<(html|head|body|title|meta|link|style|script|div|span|p|a|img|picture|source|svg|canvas|table|thead|tbody|tfoot|tr|th|td|ul|ol|li|section|article|main|header|footer|nav|aside|figure|figcaption|form|label|input|select|option|textarea|button|details|summary|pre|code|blockquote|hr|br|h[1-6])\b/i;
+
+const looksLikeHtml = (value: string): boolean => HTML_START_RE.test(value);
 
 const extractFencedHtml = (text: string): { prose: string; html: string } | null => {
   // Match ```html ... ``` or ``` ... ``` where content looks like HTML
-  const m = text.match(/```(?:html)?\s*\r?\n?([\s\S]*?)```/i);
+  const m = text.match(/```(html)?\s*\r?\n?([\s\S]*?)```/i);
   if (!m) return null;
-  const inner = m[1].trim();
-  if (!HTML_START_RE.test(inner)) return null;
+  const inner = m[2].trim();
+  if (!m[1] && !looksLikeHtml(inner)) return null;
   const fenceStart = text.indexOf(m[0]);
   return { prose: text.slice(0, fenceStart).trim(), html: inner };
 };
@@ -132,8 +135,34 @@ const routeResponse = (
   return { prose, html, json: null };
 };
 
-const renderMarkdown = (md: string): string =>
-  md
+const safeWebUrl = (value: string): string | null => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+  } catch {
+    return null;
+  }
+};
+
+const renderMarkdown = (md: string): string => {
+  const links: Array<{ href: string; label: string }> = [];
+  const stashLink = (href: string, label: string): string => {
+    const safeHref = safeWebUrl(href);
+    if (!safeHref) return label;
+    const index = links.push({ href: safeHref, label }) - 1;
+    return `CHATLINKTOKEN${index}END`;
+  };
+
+  let source = md.replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/gi, (_match, label: string, href: string) =>
+    stashLink(href, label)
+  );
+  source = source.replace(/https?:\/\/[^\s<>()]+/gi, (raw) => {
+    const trailing = raw.match(/[.,;:!?]+$/)?.[0] ?? "";
+    const href = trailing ? raw.slice(0, -trailing.length) : raw;
+    return `${stashLink(href, href)}${trailing}`;
+  });
+
+  let html = source
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
@@ -148,6 +177,57 @@ const renderMarkdown = (md: string): string =>
     .replace(/^/, "<p style='margin:0'>")
     .replace(/$/, "</p>");
 
+  links.forEach(({ href, label }, index) => {
+    const safeLabel = label.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const anchor = `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:hsl(var(--primary));text-decoration:underline;overflow-wrap:anywhere">${safeLabel} ↗</a>`;
+    html = html.replace(`CHATLINKTOKEN${index}END`, anchor);
+  });
+  return html;
+};
+
+interface ChatImageRef {
+  url: string;
+  alt: string;
+}
+
+const isImageUrl = (value: string): boolean =>
+  /^data:image\//i.test(value) ||
+  (/^https?:\/\//i.test(value) && /\.(png|jpe?g|gif|webp|bmp|svg|avif)(?:[?#].*)?$/i.test(value));
+
+const extractImages = (text: string): { text: string; images: ChatImageRef[] } => {
+  const images: ChatImageRef[] = [];
+  const seen = new Set<string>();
+  const add = (url: string, alt: string) => {
+    if (!isImageUrl(url) || seen.has(url)) return;
+    seen.add(url);
+    images.push({ url, alt: alt.trim() || "Generated image" });
+  };
+
+  let remaining = text.replace(/!\[([^\]]*)]\((https?:\/\/[^\s)]+|data:image\/[^)]+)\)/gi, (_match, alt: string, url: string) => {
+    add(url, alt);
+    return "";
+  });
+  remaining = remaining.replace(/(^|\s)(https?:\/\/[^\s<>()]+\.(?:png|jpe?g|gif|webp|bmp|svg|avif)(?:[?#][^\s<>()]*)?)(?=\s|$)/gim,
+    (_match, prefix: string, url: string) => {
+      add(url, "Generated image");
+      return prefix;
+    });
+  return { text: remaining.trim(), images };
+};
+
+const collectJsonImages = (value: unknown, found: ChatImageRef[] = [], seen = new Set<string>()): ChatImageRef[] => {
+  if (found.length >= 20) return found;
+  if (typeof value === "string" && isImageUrl(value) && !seen.has(value)) {
+    seen.add(value);
+    found.push({ url: value, alt: "Generated image" });
+  } else if (Array.isArray(value)) {
+    value.forEach((item) => collectJsonImages(item, found, seen));
+  } else if (value && typeof value === "object") {
+    Object.values(value as Record<string, unknown>).forEach((item) => collectJsonImages(item, found, seen));
+  }
+  return found;
+};
+
 const OUTPUT_LABELS: Record<string, string> = {
   text: "Text",
   echarts: "Chart",
@@ -157,20 +237,102 @@ const OUTPUT_LABELS: Record<string, string> = {
 
 // ─── VizBubble ────────────────────────────────────────────────────────────────
 
-const buildSrcdoc = (innerHtml: string) => `<!DOCTYPE html>
+const buildSrcdoc = (innerHtml: string) => {
+  const supportMarkup = `<base target="_blank">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>*{box-sizing:border-box} body{margin:0;padding:4px;background:transparent;overflow:auto} img{max-width:100%;height:auto} #chart,#visualization,#main{min-height:380px}</style>`;
+
+  // Preserve complete pages instead of nesting a second <html> document inside
+  // the iframe body. Inject common chart support into their existing head.
+  if (/<!doctype\s+html\b|<html\b/i.test(innerHtml)) {
+    if (/<head\b[^>]*>/i.test(innerHtml)) {
+      return innerHtml.replace(/<head\b[^>]*>/i, (head) => `${head}\n${supportMarkup}`);
+    }
+    return innerHtml.replace(/<html\b[^>]*>/i, (html) => `${html}\n<head>${supportMarkup}</head>`);
+  }
+
+  return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<base target="_blank">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
   *{box-sizing:border-box}
-  body{margin:0;padding:4px;background:transparent;overflow:hidden}
-  div[id]{width:100%!important;height:380px!important}
+  body{margin:0;padding:4px;background:transparent;overflow:auto}
+  img{max-width:100%;height:auto}
+  #chart,#visualization,#main{width:100%;min-height:380px}
 </style>
 </head>
 <body>${innerHtml}</body>
 </html>`;
+};
+
+const suggestedImageName = (url: string, index: number): string => {
+  if (url.startsWith("data:image/")) {
+    const extension = url.slice(11, url.indexOf(";")) || "png";
+    return `chat-image-${index + 1}.${extension === "jpeg" ? "jpg" : extension}`;
+  }
+  try {
+    const name = new URL(url).pathname.split("/").filter(Boolean).pop();
+    return name || `chat-image-${index + 1}`;
+  } catch {
+    return `chat-image-${index + 1}`;
+  }
+};
+
+const downloadImage = async (image: ChatImageRef, index: number) => {
+  const fileName = suggestedImageName(image.url, index);
+  try {
+    const response = await fetch(image.url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+  } catch {
+    // Cross-origin image servers may disallow browser fetches. The download
+    // attribute is still useful for same-origin URLs; a new tab is the fallback.
+    const anchor = document.createElement("a");
+    anchor.href = image.url;
+    anchor.download = fileName;
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    anchor.click();
+  }
+};
+
+const ImageGallery = ({ images }: { images: ChatImageRef[] }) => {
+  if (images.length === 0) return null;
+  return (
+    <div className="mt-2 grid grid-cols-1 gap-2">
+      {images.map((image, index) => (
+        <figure key={`${image.url}-${index}`} className="overflow-hidden rounded-xl border border-border bg-background/50">
+          <img src={image.url} alt={image.alt} loading="lazy" className="block max-h-96 w-full object-contain" />
+          <figcaption className="flex items-center justify-between gap-2 border-t border-border px-2 py-1.5">
+            <span className="truncate text-[10px] text-muted-foreground">{image.alt}</span>
+            <div className="flex shrink-0 items-center gap-1">
+              {!image.url.startsWith("data:") && (
+                <a href={image.url} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground">
+                  <ExternalLink className="h-3 w-3" /> Open
+                </a>
+              )}
+              <button type="button" onClick={() => void downloadImage(image, index)}
+                className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground">
+                <Download className="h-3 w-3" /> Download
+              </button>
+            </div>
+          </figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+};
 
 const VizBubble = ({ html }: { html: string }) => {
   const [expanded, setExpanded] = useState(false);
@@ -217,7 +379,7 @@ const VizBubble = ({ html }: { html: string }) => {
       <div className="relative mt-2 rounded-xl overflow-hidden border border-border group">
         <iframe
           srcDoc={buildSrcdoc(html)}
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-popups"
           style={{ width: "100%", height: 380, border: "none", display: "block" }}
           title="AI Visualization"
         />
@@ -278,7 +440,7 @@ const VizBubble = ({ html }: { html: string }) => {
           <div className="flex-1 overflow-auto min-h-0 bg-background">
             <iframe
               srcDoc={buildSrcdoc(html)}
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-popups"
               style={{ width: "100%", height: "100%", border: "none", display: "block" }}
               title="AI Visualization (Expanded)"
             />
@@ -302,6 +464,7 @@ const JsonBubble = ({ data }: { data: Record<string, unknown> }) => {
     ? (data.insights as unknown[]).filter((x): x is string => typeof x === "string")
     : null;
   const hasKnownKeys = summary || insights;
+  const images = collectJsonImages(data);
 
   return (
     <div className="mt-2 space-y-2 text-sm">
@@ -333,6 +496,7 @@ const JsonBubble = ({ data }: { data: Record<string, unknown> }) => {
           </pre>
         </details>
       )}
+      <ImageGallery images={images} />
     </div>
   );
 };
@@ -342,10 +506,13 @@ const JsonBubble = ({ data }: { data: Record<string, unknown> }) => {
 const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; outputFormat?: string }) => {
   const isUser = msg.role === "user";
   const isVisualAgent = outputFormat === "html" || outputFormat === "mixed" || outputFormat === "json";
+  const extracted = extractImages(msg.content);
 
   // During streaming for visual agents, don't dump raw HTML/JSON as text —
   // show a spinner with a label instead and let the final routeResponse handle rendering
-  const streamingVisual = msg.streaming && isVisualAgent;
+  const streamingVisual = msg.streaming && (
+    isVisualAgent || /```html\b/i.test(msg.content) || looksLikeHtml(msg.content)
+  );
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
@@ -379,10 +546,11 @@ const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; output
           )
           : msg.jsonData
             ? <JsonBubble data={msg.jsonData} />
-            : msg.content
-              ? <div className="prose-sm break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }} />
+            : extracted.text
+              ? <div className="prose-sm break-words" dangerouslySetInnerHTML={{ __html: renderMarkdown(extracted.text) }} />
               : null
         }
+        {!msg.streaming && !msg.jsonData && <ImageGallery images={extracted.images} />}
         {msg.htmlViz && <VizBubble html={msg.htmlViz} />}
       </div>
     </div>
