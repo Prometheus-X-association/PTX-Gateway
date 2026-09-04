@@ -105,7 +105,10 @@ export interface CredentialPluginConfig {
   name: string;
   description?: string;
   is_active: boolean;
+  /** Template used by the admin preview and as the gateway fallback. */
   html_content: string;
+  /** Optional client-facing template used by gateway and embed pages. */
+  gateway_html_content?: string;
   credentials: CredentialEntry[];
 }
 

@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Assessment — Verified Checks</title>
+  <meta name="description" content="A focused presentation of checks recorded as successful in a CARiSMA assessment." />
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #10231b;
+      --muted: #5f7068;
+      --line: #dbe8e1;
+      --surface: rgba(255,255,255,.92);
+      --green: #117a4b;
+      --green-dark: #075f3a;
+      --green-soft: #e7f7ee;
+      --mint: #b9efd2;
+      --blue: #155e75;
+      --shadow: 0 22px 60px rgba(21, 94, 71, .12);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(185,239,210,.72), transparent 31rem),
+        radial-gradient(circle at 100% 8%, rgba(186,230,253,.58), transparent 28rem),
+        linear-gradient(180deg, #f9fffb 0%, #f1f8f4 55%, #f8fbfa 100%);
+    }
+
+    button, input { font: inherit; }
+    .page { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 22px 0 60px; }
+    .topbar {
+      position: sticky; top: 12px; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between; gap: 18px;
+      padding: 11px 14px; border: 1px solid rgba(219,232,225,.92); border-radius: 999px;
+      background: rgba(255,255,255,.86); backdrop-filter: blur(16px); box-shadow: 0 10px 32px rgba(16,35,27,.08);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .mark {
+      width: 40px; height: 40px; flex: 0 0 40px; display: grid; place-items: center;
+      border-radius: 50%; color: #fff; font-weight: 900; letter-spacing: -.05em;
+      background: linear-gradient(135deg, var(--green-dark), #1d9b61);
+    }
+    .brand strong, .brand span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .brand strong { font-size: .94rem; }
+    .brand span { color: var(--muted); font-size: .76rem; }
+    .print-button {
+      border: 0; border-radius: 999px; padding: 9px 14px; cursor: pointer;
+      color: #fff; background: var(--green-dark); font-weight: 750;
+    }
+
+    .hero {
+      position: relative; overflow: hidden; margin-top: 22px; padding: clamp(28px, 5vw, 58px);
+      border: 1px solid rgba(185,239,210,.85); border-radius: 30px;
+      background: linear-gradient(135deg, rgba(255,255,255,.98), rgba(232,249,239,.92)); box-shadow: var(--shadow);
+    }
+    .hero::after {
+      content: ""; position: absolute; width: 320px; height: 320px; right: -110px; top: -130px;
+      border-radius: 50%; background: radial-gradient(circle, rgba(29,155,97,.18), transparent 68%);
+    }
+    .hero > * { position: relative; z-index: 1; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px; padding: 7px 11px;
+      border-radius: 999px; color: var(--green-dark); background: var(--green-soft);
+      font-size: .76rem; font-weight: 850; letter-spacing: .06em; text-transform: uppercase;
+    }
+    .eyebrow::before { content: "✓"; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: #fff; background: var(--green); }
+    h1 { max-width: 790px; margin: 18px 0 13px; font-size: clamp(2.1rem, 6vw, 4.7rem); line-height: .98; letter-spacing: -.055em; }
+    .lead { max-width: 720px; margin: 0; color: #486158; font-size: clamp(1rem, 2vw, 1.25rem); line-height: 1.7; }
+    .trust-summary { margin-top: 32px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 10px; }
+    .meta-item { padding: 10px 13px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.8); }
+    .meta-item span { display: block; color: var(--muted); font-size: .68rem; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
+    .meta-item strong { display: block; margin-top: 3px; font-size: .9rem; }
+    .story-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 28px; }
+    .highlight {
+      padding: 25px; border: 1px solid var(--line); border-radius: 22px; background: var(--surface); box-shadow: 0 12px 36px rgba(16,35,27,.06);
+    }
+    .highlight-icon { width: 43px; height: 43px; display: grid; place-items: center; border-radius: 14px; color: var(--green-dark); background: var(--green-soft); font-size: 1.3rem; }
+    .highlight h2 { margin: 16px 0 8px; font-size: 1.14rem; }
+    .highlight p { margin: 0; color: var(--muted); line-height: 1.65; }
+
+    .controls-panel { margin-top: 28px; padding-top: 28px; border-top: 1px solid rgba(17,122,75,.18); }
+    .controls-panel h2 { margin: 0; font-size: clamp(1.45rem, 3vw, 2rem); letter-spacing: -.035em; }
+    .section { margin-top: 22px; padding: clamp(22px, 4vw, 38px); border: 1px solid var(--line); border-radius: 26px; background: var(--surface); box-shadow: 0 14px 42px rgba(16,35,27,.06); }
+    .section-head { display: flex; justify-content: space-between; align-items: end; gap: 20px; margin-bottom: 22px; }
+    .section h2 { margin: 0; font-size: clamp(1.45rem, 3vw, 2rem); letter-spacing: -.035em; }
+    .section-copy { max-width: 650px; margin: 7px 0 0; color: var(--muted); line-height: 1.6; }
+    .search { width: min(300px, 100%); padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); background: #fff; outline: none; }
+    .search:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(17,122,75,.12); }
+
+    .checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .check {
+      display: flex; flex-direction: column; align-items: stretch; text-align: left; width: 100%;
+      padding: 19px; border: 1px solid var(--line); border-radius: 18px; color: inherit;
+      background: linear-gradient(145deg, #fff, #f7fcf9); cursor: pointer; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+    }
+    .check:hover { transform: translateY(-2px); border-color: #9dd8b9; box-shadow: 0 13px 30px rgba(17,122,75,.1); }
+    .check-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
+    .check h3 { margin: 0; font-size: 1rem; line-height: 1.4; }
+    .tick { flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--green); font-weight: 900; }
+    .control { margin-top: 9px; color: var(--muted); font-size: .84rem; line-height: 1.5; }
+    .tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
+    .tag { padding: 5px 8px; border-radius: 999px; color: var(--green-dark); background: var(--green-soft); font-size: .7rem; font-weight: 750; }
+    .empty { grid-column: 1 / -1; padding: 28px; border: 1px dashed var(--line); border-radius: 16px; color: var(--muted); text-align: center; }
+
+    .transparency { display: flex; gap: 12px; align-items: flex-start; margin-top: 18px; padding: 15px 17px; border-radius: 15px; color: #486158; background: #f4f8f6; font-size: .83rem; line-height: 1.55; }
+    .transparency strong { color: var(--ink); }
+
+    .diagram-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: #fff; }
+    .diagram-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 11px; border-bottom: 1px solid var(--line); background: #f7fbf9; }
+    .diagram-button { border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; color: var(--ink); background: #fff; cursor: pointer; font-weight: 700; }
+    .diagram-button:hover { border-color: #9dd8b9; background: var(--green-soft); }
+    .diagram-viewport { position: relative; overflow: hidden; height: min(68vh, 680px); min-height: 340px; cursor: grab; touch-action: none; background: #fff; }
+    .diagram-viewport.dragging { cursor: grabbing; }
+    .diagram-stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+    .diagram-stage img { display: block; max-width: none; user-select: none; pointer-events: none; }
+
+    .backdrop { position: fixed; inset: 0; z-index: 50; visibility: hidden; opacity: 0; background: rgba(5,24,15,.5); backdrop-filter: blur(4px); transition: .2s ease; }
+    .backdrop.show { visibility: visible; opacity: 1; }
+    .drawer {
+      position: fixed; right: 0; top: 0; z-index: 60; width: min(520px, 100%); height: 100%; overflow-y: auto;
+      padding: 25px; background: #fff; box-shadow: -20px 0 60px rgba(16,35,27,.2); transform: translateX(105%); transition: transform .24s ease;
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-head { display: flex; justify-content: space-between; gap: 15px; align-items: flex-start; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+    .drawer h2 { margin: 10px 0 0; font-size: 1.45rem; }
+    .close { border: 1px solid var(--line); border-radius: 999px; padding: 8px 11px; background: #fff; cursor: pointer; }
+    .evidence { margin-top: 20px; }
+    .evidence h3 { margin: 0 0 10px; font-size: 1rem; }
+    .evidence-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+    .evidence-list li { padding: 12px 13px; border-left: 4px solid var(--green); border-radius: 10px; color: #40584e; background: #f3faf6; line-height: 1.55; }
+
+    @media (max-width: 760px) {
+      .page { width: min(100% - 20px, 1120px); padding-top: 10px; }
+      .topbar { top: 6px; }
+      .brand span { display: none; }
+      .hero { border-radius: 22px; }
+      .story-grid, .checks { grid-template-columns: 1fr; }
+      .section-head { align-items: stretch; flex-direction: column; }
+      .search { width: 100%; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; padding: 0; }
+      .topbar, .search, .backdrop, .drawer { display: none !important; }
+      .hero, .section, .highlight, .check { box-shadow: none; break-inside: avoid; }
+      .diagram-toolbar { display: none; }
+      .diagram-viewport { height: auto; min-height: 0; overflow: visible; }
+      .diagram-stage { position: relative; transform: none !important; }
+      .diagram-stage img { width: 100%; height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">AI</div>
+        <div>
+          <strong>AI Assessment Summary</strong>
+          <span>Checks recorded as successful by CARiSMA</span>
+        </div>
+      </div>
+      <button class="print-button" type="button" onclick="window.print()">Print / Save PDF</button>
+    </header>
+
+    <section class="hero">
+      <div class="eyebrow">Assessment summary</div>
+      <h1 id="heroTitle">Successfully verified checks</h1>
+      <p class="lead" id="heroSubtitle">This page presents the checks recorded as successful in the CARiSMA assessment and the evidence available for each result.</p>
+      <div class="trust-summary">
+        <div class="meta">
+          <div class="meta-item"><span>Service</span><strong id="metaService">—</strong></div>
+          <div class="meta-item"><span>Model</span><strong id="metaModel">—</strong></div>
+          <div class="meta-item"><span>Assessed</span><strong id="metaDate">—</strong></div>
+          <div class="meta-item"><span>Evidence source</span><strong>CARiSMA</strong></div>
+        </div>
+      </div>
+
+      <div class="story-grid" aria-label="Assessment highlights">
+        <article class="highlight">
+          <div class="highlight-icon">✓</div>
+          <h2>Recorded results</h2>
+          <p>The checks listed on this page are recorded as successful in the supplied assessment result.</p>
+        </article>
+        <article class="highlight">
+          <div class="highlight-icon">◎</div>
+          <h2>Available evidence</h2>
+          <p>Select a check to view the evidence messages included in the CARiSMA result.</p>
+        </article>
+      </div>
+
+      <div class="controls-panel" id="verified-controls">
+        <div class="section-head">
+          <div>
+            <h2>Successful checks</h2>
+            <p class="section-copy">The list includes only checks marked as successful in the supplied assessment data.</p>
+          </div>
+          <input class="search" id="searchInput" type="search" placeholder="Search successful checks" aria-label="Search successful checks" />
+        </div>
+        <div class="checks" id="checkGrid"></div>
+        <div class="transparency">
+          <span aria-hidden="true">ⓘ</span>
+          <div><strong>Scope of this page:</strong> This page presents successful checks only. Refer to the complete CARiSMA report for the full assessment result.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="system-diagram">
+      <div class="section-head">
+        <div>
+          <h2 id="diagramTitle">System and process diagram</h2>
+          <p class="section-copy" id="diagramDescription">Diagram supplied with the CARiSMA assessment.</p>
+        </div>
+      </div>
+      <div class="diagram-shell">
+        <div class="diagram-toolbar" aria-label="Diagram controls">
+          <button class="diagram-button" type="button" id="zoomOut">− Zoom out</button>
+          <button class="diagram-button" type="button" id="zoomIn">＋ Zoom in</button>
+          <button class="diagram-button" type="button" id="zoomReset">Reset</button>
+        </div>
+        <div class="diagram-viewport" id="diagramViewport" aria-label="System and process diagram">
+          <div class="diagram-stage" id="diagramStage">
+            <img id="diagramImage" alt="System and process diagram" src="" />
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="backdrop" id="backdrop"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="drawerTitle">
+    <div class="drawer-head">
+      <div>
+        <span class="tag">Successful check</span>
+        <h2 id="drawerTitle">Check details</h2>
+      </div>
+      <button class="close" id="closeDrawer" type="button">Close</button>
+    </div>
+    <div class="evidence">
+      <h3>Check scope</h3>
+      <p class="control" id="drawerControl">—</p>
+    </div>
+    <div class="evidence">
+      <h3>Evidence messages</h3>
+      <ul class="evidence-list" id="drawerMessages"></ul>
+    </div>
+  </aside>
+
+  <script>
+    const state = {
+      data: null,
+      successfulChecks: [],
+      search: '',
+      defaultDiagramPath: '',
+      zoom: 1,
+      panX: 0,
+      panY: 0,
+      minZoom: 0.6,
+      maxZoom: 3,
+      dragging: false
+    };
+    const $ = (selector) => document.querySelector(selector);
+
+    function decodeXmlEntities(value = '') {
+      return String(value)
+        .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"').replaceAll('&apos;', "'").trim();
+    }
+
+    function extractTag(xml = '', tagName) {
+      const expression = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'i');
+      const match = String(xml).match(expression);
+      return match ? decodeXmlEntities(match[1]) : '';
+    }
+
+    function parseXmlCheckResults(xml = '') {
+      const results = [];
+      const checkExpression = /<CheckResult>([\s\S]*?)<\/CheckResult>/gi;
+      let checkMatch;
+      while ((checkMatch = checkExpression.exec(String(xml)))) {
+        const block = checkMatch[1];
+        const messages = [];
+        const resultExpression = /<results>([\s\S]*?)<\/results>/gi;
+        let resultMatch;
+        while ((resultMatch = resultExpression.exec(block))) {
+          const resultBlock = resultMatch[1];
+          messages.push({
+            type: (extractTag(resultBlock, 'status') || 'INFO').toUpperCase(),
+            text: extractTag(resultBlock, 'text')
+          });
+        }
+        const name = extractTag(block, 'name');
+        if (name) results.push({ name, messages });
+      }
+      return results;
+    }
+
+    function cleanShortName(name = '') {
+      return String(name).replace(/^MLTop10\s+/i, '').replace(/\s+Check$/i, '').trim();
+    }
+
+    function inferCategory(name = '') {
+      const value = name.toLowerCase();
+      if (value.includes('supply chain')) return 'Supply-chain integrity';
+      if (value.includes('data poisoning')) return 'Training-data integrity';
+      if (value.includes('input')) return 'Input robustness';
+      if (value.includes('membership')) return 'Privacy protection';
+      if (value.includes('inversion')) return 'Model privacy';
+      if (value.includes('model poisoning')) return 'Model integrity';
+      if (value.includes('skewing')) return 'Feedback integrity';
+      if (value.includes('theft')) return 'Asset protection';
+      if (value.includes('output')) return 'Output integrity';
+      if (value.includes('transfer')) return 'Transfer-learning controls';
+      return 'AI risk control';
+    }
+
+    function inferControlArea(name = '') {
+      const value = name.toLowerCase();
+      if (value.includes('supply chain')) return 'Dependencies and package-maintenance controls were examined.';
+      if (value.includes('data poisoning')) return 'Controls protecting training data and its integrity were examined.';
+      if (value.includes('input')) return 'The service input path was assessed for robustness controls.';
+      if (value.includes('membership')) return 'Controls reducing exposure of training membership were examined.';
+      if (value.includes('inversion')) return 'Controls protecting model and output privacy were examined.';
+      if (value.includes('model poisoning')) return 'Controls preserving model and algorithm integrity were examined.';
+      if (value.includes('skewing')) return 'Controls protecting feedback-data integrity were examined.';
+      if (value.includes('theft')) return 'Controls protecting valuable model and data assets were examined.';
+      if (value.includes('output')) return 'Controls supporting output integrity and traceability were examined.';
+      if (value.includes('transfer')) return 'Controls around transfer-learning activity were examined.';
+      return 'The available evidence for this AI risk control was examined.';
+    }
+
+    function formatTimestamp(timestamp = '') {
+      const match = String(timestamp).match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+      if (!match) return timestamp || 'Date recorded in the assessment';
+      const [, year, month, day, hour, minute, second] = match;
+      return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+    }
+
+    function normalizeRawCarisma(raw, options = {}) {
+      const xml = raw?.reports?.XML || '';
+      const xmlChecks = parseXmlCheckResults(xml);
+      const sourceChecks = Array.isArray(raw?.checks) ? raw.checks : [];
+      const modelName = raw?.name || extractTag(xml, 'AnalyzedModel') || options.service || 'AI service';
+      const timestamp = extractTag(xml, 'Timestamp') || '';
+      const checks = sourceChecks.map((check) => {
+        const xmlMatch = xmlChecks.find((candidate) => candidate.name === check.name);
+        const fallbackMessages = Array.isArray(check.messages)
+          ? check.messages.map((message) => ({ type: 'INFO', text: String(message) }))
+          : [];
+        return {
+          name: check.name || 'Successful check',
+          shortName: cleanShortName(check.name || 'Successful check'),
+          success: Boolean(check.success),
+          status: check.success ? 'passed' : 'failed',
+          category: inferCategory(check.name || ''),
+          controlArea: inferControlArea(check.name || ''),
+          messages: xmlMatch?.messages?.length ? xmlMatch.messages : fallbackMessages
+        };
+      });
+      return {
+        credential: {
+          subjectService: options.service || raw?.service?.name || modelName,
+          modelName,
+          analysisDateDisplay: formatTimestamp(timestamp)
+        },
+        checks
+      };
+    }
+
+    function isRawCarismaReport(data) {
+      return Boolean(data && !data.credential && (data.reports || data.checks));
+    }
+
+    function isSuccessful(check) {
+      return check?.success === true || check?.status === 'passed' || check?.status === 'success';
+    }
+
+    function safeText(value, fallback = '—') {
+      const text = String(value ?? '').trim();
+      return text || fallback;
+    }
+
+    function renderHeader(data) {
+      $('#metaService').textContent = safeText(data.credential?.subjectService, 'AI service');
+      $('#metaModel').textContent = safeText(data.credential?.modelName, 'Assessed model');
+      $('#metaDate').textContent = safeText(data.credential?.analysisDateDisplay || data.credential?.analysisTimestamp, 'Assessment recorded');
+    }
+
+    function renderChecks() {
+      const query = state.search.trim().toLowerCase();
+      const checks = state.successfulChecks.filter((check) => {
+        const searchable = `${check.name || ''} ${check.shortName || ''} ${check.category || ''} ${check.controlArea || ''}`.toLowerCase();
+        return !query || searchable.includes(query);
+      });
+      const grid = $('#checkGrid');
+      grid.replaceChildren();
+
+      checks.forEach((check) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'check';
+
+        const top = document.createElement('div');
+        top.className = 'check-top';
+        const title = document.createElement('h3');
+        title.textContent = safeText(check.shortName || check.name, 'Successful check');
+        const tick = document.createElement('span');
+        tick.className = 'tick';
+        tick.textContent = '✓';
+        top.append(title, tick);
+
+        const description = document.createElement('p');
+        description.className = 'control';
+        description.textContent = safeText(check.controlArea, inferControlArea(check.name || ''));
+
+        const tags = document.createElement('div');
+        tags.className = 'tags';
+        [safeText(check.category, 'Assessment check'), 'Successful'].forEach((text) => {
+          const tag = document.createElement('span');
+          tag.className = 'tag';
+          tag.textContent = text;
+          tags.appendChild(tag);
+        });
+
+        card.append(top, description, tags);
+        card.addEventListener('click', () => openDrawer(check));
+        grid.appendChild(card);
+      });
+
+      if (!checks.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = state.successfulChecks.length
+          ? 'No successful checks match this search.'
+          : 'No successful checks are available in this assessment.';
+        grid.appendChild(empty);
+      }
+    }
+
+    function openDrawer(check) {
+      $('#drawerTitle').textContent = safeText(check.shortName || check.name, 'Successful check');
+      $('#drawerControl').textContent = safeText(check.controlArea, inferControlArea(check.name || ''));
+      const list = $('#drawerMessages');
+      list.replaceChildren();
+      const messages = Array.isArray(check.messages) ? check.messages.filter((message) => String(message?.text || '').trim()) : [];
+      if (messages.length) {
+        messages.forEach((message) => {
+          const item = document.createElement('li');
+          item.textContent = String(message.text);
+          list.appendChild(item);
+        });
+      } else {
+        const item = document.createElement('li');
+        item.textContent = 'No additional evidence message is included for this successful check.';
+        list.appendChild(item);
+      }
+      $('#drawer').classList.add('open');
+      $('#backdrop').classList.add('show');
+      $('#drawer').setAttribute('aria-hidden', 'false');
+    }
+
+    function closeDrawer() {
+      $('#drawer').classList.remove('open');
+      $('#backdrop').classList.remove('show');
+      $('#drawer').setAttribute('aria-hidden', 'true');
+    }
+
+    function renderDiagram(data) {
+      const diagram = data.diagram || {};
+      const imagePath = diagram.image || state.defaultDiagramPath || '';
+      $('#diagramTitle').textContent = safeText(diagram.title, 'System and process diagram');
+      $('#diagramDescription').textContent = safeText(diagram.description, 'Diagram supplied with the CARiSMA assessment.');
+      if (!imagePath) {
+        $('#diagramDescription').textContent = 'No diagram is included in the supplied assessment data.';
+        return;
+      }
+      const image = $('#diagramImage');
+      image.src = imagePath;
+      setupPanZoom(data, image);
+    }
+
+    function setupPanZoom(data, image) {
+      const viewport = $('#diagramViewport');
+      const stage = $('#diagramStage');
+
+      function applyTransform() {
+        stage.style.width = `${data.diagram?.width || image.naturalWidth || viewport.clientWidth}px`;
+        stage.style.height = `${data.diagram?.height || image.naturalHeight || viewport.clientHeight}px`;
+        stage.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+      }
+
+      function fitDiagram() {
+        const naturalWidth = data.diagram?.width || image.naturalWidth || viewport.clientWidth;
+        state.zoom = Math.max(state.minZoom, Math.min(1, viewport.clientWidth / naturalWidth));
+        state.panX = 0;
+        state.panY = 0;
+        applyTransform();
+      }
+
+      function zoomBy(factor) {
+        state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom, state.zoom * factor));
+        applyTransform();
+      }
+
+      image.onload = fitDiagram;
+      if (image.complete) fitDiagram();
+      $('#zoomIn').onclick = () => zoomBy(1.2);
+      $('#zoomOut').onclick = () => zoomBy(1 / 1.2);
+      $('#zoomReset').onclick = fitDiagram;
+      viewport.onwheel = (event) => {
+        event.preventDefault();
+        zoomBy(event.deltaY < 0 ? 1.08 : 1 / 1.08);
+      };
+      viewport.onpointerdown = (event) => {
+        state.dragging = true;
+        state.dragStartX = event.clientX;
+        state.dragStartY = event.clientY;
+        state.startPanX = state.panX;
+        state.startPanY = state.panY;
+        viewport.classList.add('dragging');
+        viewport.setPointerCapture(event.pointerId);
+      };
+      viewport.onpointermove = (event) => {
+        if (!state.dragging) return;
+        state.panX = state.startPanX + event.clientX - state.dragStartX;
+        state.panY = state.startPanY + event.clientY - state.dragStartY;
+        applyTransform();
+      };
+      const stopDragging = () => {
+        state.dragging = false;
+        viewport.classList.remove('dragging');
+      };
+      viewport.onpointerup = stopDragging;
+      viewport.onpointercancel = stopDragging;
+      window.addEventListener('resize', fitDiagram, { passive: true });
+    }
+
+    function renderAll(data) {
+      state.data = data;
+      state.successfulChecks = (Array.isArray(data.checks) ? data.checks : []).filter(isSuccessful);
+      renderHeader(data);
+      renderChecks();
+      renderDiagram(data);
+    }
+
+    async function resolveInputPaths() {
+      const params = new URLSearchParams(window.location.search);
+      const explicitJson = (params.get('data') || '').trim();
+      const explicitDiagram = (params.get('diagram') || '').trim();
+      const defaultJson = 'carisma-raw-data.json';
+      const defaultDiagram = 'system-process-diagram.png';
+      if (explicitJson) return { jsonPath: explicitJson, diagramPath: explicitDiagram || defaultDiagram };
+      try {
+        const response = await fetch(defaultJson, { method: 'HEAD', cache: 'no-store' });
+        if (response.ok) return { jsonPath: defaultJson, diagramPath: explicitDiagram || defaultDiagram };
+      } catch (_) {
+        // The clear error below is shown if automatic loading is unavailable.
+      }
+      return { jsonPath: defaultJson, diagramPath: explicitDiagram || defaultDiagram };
+    }
+
+    async function loadData(jsonPath, serviceName) {
+      const response = await fetch(jsonPath);
+      if (!response.ok) throw new Error('The assessment data could not be loaded.');
+      const loaded = await response.json();
+      return isRawCarismaReport(loaded)
+        ? normalizeRawCarisma(loaded, { sourceReport: jsonPath, service: serviceName || undefined })
+        : loaded;
+    }
+
+    function showLoadError(error) {
+      const grid = $('#checkGrid');
+      grid.replaceChildren();
+      const message = document.createElement('div');
+      message.className = 'empty';
+      message.textContent = error?.message || 'The assessment summary could not be loaded.';
+      grid.appendChild(message);
+    }
+
+    $('#searchInput').addEventListener('input', (event) => {
+      state.search = event.target.value || '';
+      renderChecks();
+    });
+    $('#closeDrawer').addEventListener('click', closeDrawer);
+    $('#backdrop').addEventListener('click', closeDrawer);
+    window.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeDrawer(); });
+
+    async function init() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const paths = await resolveInputPaths();
+        state.defaultDiagramPath = paths.diagramPath;
+        const loadedData = await loadData(paths.jsonPath, params.get('service') || undefined);
+        renderAll(loadedData);
+      } catch (error) {
+        showLoadError(error);
+        console.error(error);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

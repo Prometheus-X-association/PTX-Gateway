@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trustworthy AI Analysis Credential</title>
+  <meta name="description" content="Responsive single-page credential for Trustworthy AI compliance, risk, and security analysis evidence." />
+  <style>
+    :root {
+      --bg: #eef3f8;
+      --surface: #ffffff;
+      --surface-2: #f8fafc;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --line: #d8e2ee;
+      --brand: #0f2744;
+      --brand-2: #1b3d6d;
+      --accent: #2563eb;
+      --good: #15803d;
+      --good-soft: #dcfce7;
+      --bad: #b91c1c;
+      --bad-soft: #fee2e2;
+      --warn: #b45309;
+      --warn-soft: #ffedd5;
+      --neutral: #334155;
+      --neutral-soft: #e2e8f0;
+      --purple: #7c3aed;
+      --shadow: 0 18px 50px rgba(15, 23, 42, 0.10);
+      --radius-lg: 28px;
+      --radius-md: 18px;
+      --radius-sm: 12px;
+      --pass-rate: 50%;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(37, 99, 235, .12), transparent 28rem),
+        radial-gradient(circle at 100% 10%, rgba(21, 128, 61, .12), transparent 26rem),
+        linear-gradient(180deg, #f8fbff 0%, var(--bg) 46%, #f4f7fb 100%);
+      min-height: 100vh;
+    }
+
+    .page { width: min(1220px, calc(100% - 28px)); margin: 0 auto; padding: 24px 0 56px; }
+    .muted { color: var(--muted); }
+    .hide { display: none !important; }
+    a { color: var(--accent); }
+    button, input, select { font: inherit; }
+
+    .topbar {
+      position: sticky; top: 10px; z-index: 40;
+      display: flex; justify-content: space-between; gap: 16px; align-items: center;
+      padding: 12px 14px; margin-bottom: 22px;
+      background: rgba(255,255,255,.9); backdrop-filter: blur(14px);
+      border: 1px solid rgba(216,226,238,.95); border-radius: 999px; box-shadow: 0 12px 30px rgba(15,23,42,.08);
+    }
+    .brandlock { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .mark {
+      width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+      background: linear-gradient(135deg, var(--brand), #305f96); color: white; font-weight: 900; letter-spacing: -.06em;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+    }
+    .brandlock strong { display: block; font-size: .96rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .brandlock span { display: block; font-size: .78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .navactions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .btn {
+      border: 1px solid var(--line); background: white; color: var(--ink);
+      padding: 10px 14px; border-radius: 999px; font-weight: 700; cursor: pointer; text-decoration: none;
+      display: inline-flex; gap: 8px; align-items: center;
+      transition: transform .16s ease, border-color .16s ease, background .16s ease;
+    }
+    .btn:hover { transform: translateY(-1px); border-color: #a3b6cc; }
+    .btn.primary { background: var(--brand); color: white; border-color: var(--brand); }
+
+    .hero {
+      background: linear-gradient(135deg, #ffffff, #f5f9ff 55%, #eef5ff);
+      border: 1px solid rgba(206,217,230,.95); border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden;
+      margin-bottom: 18px;
+      position: relative;
+    }
+    .hero::before {
+      content: ""; position: absolute; inset: 16px; border: 1px solid rgba(15,39,68,.10); border-radius: calc(var(--radius-lg) - 8px); pointer-events: none;
+    }
+    .hero-grid {
+      position: relative;
+      display: grid; grid-template-columns: minmax(0,1.5fr) 360px; gap: 24px; align-items: center;
+      padding: clamp(24px, 4vw, 42px);
+    }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px;
+      border: 1px solid #ccdae9; background: rgba(255,255,255,.78); color: var(--brand-2); font-weight: 800;
+      text-transform: uppercase; letter-spacing: .08em; font-size: .78rem;
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 5px rgba(180,83,9,.14); }
+    h1 { margin: 16px 0 10px; font-size: clamp(2.2rem, 5vw, 4.2rem); line-height: .95; letter-spacing: -.07em; color: var(--brand); }
+    .lead { margin: 0; color: #41566d; font-size: clamp(1rem, 2.1vw, 1.14rem); line-height: 1.65; max-width: 760px; }
+    .metadata { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; margin-top: 22px; }
+    .meta-card { border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.78); padding: 14px 15px; }
+    .meta-card span { display: block; margin-bottom: 5px; color: var(--muted); font-size: .74rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .meta-card strong { display: block; word-break: break-word; font-size: .95rem; }
+
+    .seal-card {
+      padding: 22px; border-radius: 24px; border: 1px solid rgba(15,39,68,.14);
+      background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,255,255,.82));
+      box-shadow: 0 16px 40px rgba(15, 23, 42, .10);
+    }
+    .ring-wrap { display: grid; place-items: center; margin: 2px 0 16px; }
+    .ring {
+      width: 185px; height: 185px; border-radius: 50%; display: grid; place-items: center;
+      background:
+        radial-gradient(circle at center, #fff 0 57%, transparent 58%),
+        conic-gradient(var(--good) 0 var(--pass-rate), var(--bad) var(--pass-rate) 100%);
+      box-shadow: inset 0 0 0 10px rgba(255,255,255,.75), 0 14px 30px rgba(15,23,42,.12);
+      border: 1px solid rgba(15,23,42,.08);
+    }
+    .ring strong { font-size: 2.2rem; letter-spacing: -.06em; color: var(--brand); }
+    .ring span { display: block; text-align: center; color: var(--muted); font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+    .verdict { text-align: center; padding: 12px 14px; border-radius: 16px; background: var(--warn-soft); color: #7c3b08; border: 1px solid #f4c48f; font-weight: 900; line-height: 1.35; }
+    .certificate-id { margin-top: 16px; padding-top: 14px; border-top: 1px dashed #c6d2e0; display: grid; gap: 8px; color: var(--muted); font-size: .88rem; }
+    .certificate-id code { color: var(--brand); font-weight: 800; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 14px; margin: 18px 0 22px; }
+    .stat-card { background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 20px; padding: 18px; box-shadow: 0 14px 28px rgba(15,23,42,.06); }
+    .stat-card .label { color: var(--muted); font-weight: 800; font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; }
+    .stat-card .value { margin-top: 8px; font-size: 2rem; font-weight: 900; letter-spacing: -.06em; color: var(--brand); }
+    .stat-card.good .value { color: var(--good); }
+    .stat-card.bad .value { color: var(--bad); }
+    .stat-card.warn .value { color: var(--warn); }
+
+    .section-card {
+      background: rgba(255,255,255,.92);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: 0 14px 34px rgba(15,23,42,.06);
+      padding: 24px;
+      margin-bottom: 18px;
+    }
+    input[type="file"] {
+      border: 1px solid var(--line);
+      background: white;
+      border-radius: 10px;
+      padding: 8px 10px;
+      color: var(--ink);
+    }
+    .section-head { display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+    .section-title { margin: 0; font-size: 1.55rem; letter-spacing: -.04em; color: var(--brand); }
+    .section-copy { margin: 0; color: var(--muted); max-width: 780px; line-height: 1.6; }
+
+    .dimensions { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
+    .dimension-card { border: 1px solid var(--line); border-radius: 18px; padding: 18px; background: var(--surface-2); }
+    .pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 999px; font-size: .76rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .pill.good { background: var(--good-soft); color: var(--good); }
+    .pill.warn { background: var(--warn-soft); color: var(--warn); }
+    .pill.bad { background: var(--bad-soft); color: var(--bad); }
+    .pill.neutral { background: var(--neutral-soft); color: var(--neutral); }
+    .dimension-card h3 { margin: 14px 0 8px; font-size: 1.05rem; }
+    .dimension-card p { margin: 0; color: #44576d; line-height: 1.6; }
+
+    .tool-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 16px; }
+    .tool-card, .sub-card { border: 1px solid var(--line); border-radius: 18px; background: var(--surface-2); padding: 18px; }
+    .list-clean { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+    .list-clean li { padding: 11px 12px; background: white; border: 1px solid var(--line); border-radius: 14px; }
+
+    .steps { display: grid; gap: 12px; }
+    .step { display: grid; grid-template-columns: 44px minmax(0,1fr); gap: 14px; border: 1px solid var(--line); border-radius: 18px; padding: 14px; background: var(--surface-2); }
+    .step-index { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--brand); color: white; font-weight: 900; }
+    .step h3 { margin: 2px 0 6px; font-size: 1rem; }
+    .step p { margin: 0; color: #45586e; line-height: 1.6; }
+
+    .diagram-layout { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    .diagram-panel { border: 1px solid var(--line); border-radius: 20px; background: #f8fbff; overflow: hidden; }
+    .diagram-toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.88); }
+    .diagram-toolbar .left { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+    .diagram-viewport { position: relative; overflow: hidden; height: min(72vh, 760px); background: #ffffff; cursor: grab; touch-action: none; }
+    .diagram-viewport.dragging { cursor: grabbing; }
+    .diagram-stage { position: absolute; inset: 0; transform-origin: 0 0; user-select: none; }
+    .diagram-stage img { display: block; width: 100%; height: auto; pointer-events: none; }
+
+    .toolbar-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .filters { display: flex; gap: 10px; flex-wrap: wrap; }
+    input[type="search"], select {
+      border: 1px solid var(--line); background: white; border-radius: 999px; padding: 10px 14px; min-width: 190px; color: var(--ink);
+    }
+    .check-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
+    .check-card {
+      text-align: left; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-2); padding: 16px; cursor: pointer;
+      transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
+    }
+    .check-card:hover { transform: translateY(-1px); border-color: #adc2d9; box-shadow: 0 12px 28px rgba(15,23,42,.07); }
+    .check-card .head { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 10px; }
+    .check-card h3 { margin: 0; font-size: 1rem; }
+    .check-meta { color: var(--muted); font-size: .84rem; }
+    .check-stats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .tag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; font-size: .75rem; font-weight: 800; letter-spacing: .04em; }
+    .tag.good { background: var(--good-soft); color: var(--good); }
+    .tag.bad { background: var(--bad-soft); color: var(--bad); }
+    .tag.warn { background: var(--warn-soft); color: var(--warn); }
+    .tag.neutral { background: var(--neutral-soft); color: var(--neutral); }
+
+    .drawer {
+      position: fixed; top: 0; right: 0; width: min(560px, 100vw); height: 100vh; background: white; border-left: 1px solid var(--line);
+      box-shadow: -20px 0 40px rgba(15,23,42,.16); z-index: 90; transform: translateX(102%); transition: transform .22s ease;
+      display: flex; flex-direction: column;
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-head { padding: 18px 20px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+    .drawer-body { padding: 18px 20px 28px; overflow: auto; display: grid; gap: 18px; }
+    .backdrop {
+      position: fixed; inset: 0; background: rgba(15,23,42,.34); z-index: 80; opacity: 0; pointer-events: none; transition: opacity .2s ease;
+    }
+    .backdrop.show { opacity: 1; pointer-events: auto; }
+    .message-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+    .message-item { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--surface-2); }
+    .message-item.info { border-left: 5px solid var(--accent); }
+    .message-item.warning { border-left: 5px solid var(--warn); }
+    .message-item.error { border-left: 5px solid var(--bad); }
+    .message-item strong { display: block; margin-bottom: 4px; font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; }
+    .message-item p { margin: 0; color: #44576d; line-height: 1.58; }
+
+    @media (max-width: 1050px) {
+      .hero-grid, .tool-grid, .diagram-layout { grid-template-columns: 1fr; }
+      .grid-4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .dimensions, .check-grid, .flow-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+      .page { width: min(100%, calc(100% - 18px)); }
+      .topbar { border-radius: 20px; position: static; }
+      .metadata, .grid-4 { grid-template-columns: 1fr; }
+      .hero-grid { padding: 22px; }
+      .section-card { padding: 18px; border-radius: 20px; }
+      .diagram-viewport { height: 58vh; }
+      .toolbar-row { align-items: stretch; }
+      .filters { width: 100%; }
+      input[type="search"], select { width: 100%; min-width: 0; }
+    }
+    @media print {
+      .topbar, .navactions, .diagram-toolbar, .filters, .drawer, .backdrop { display: none !important; }
+      body { background: white; }
+      .page { width: 100%; }
+      .section-card, .hero, .stat-card { box-shadow: none; }
+      .diagram-viewport { height: auto; overflow: visible; }
+      .diagram-stage { position: relative; transform: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="brandlock">
+        <div class="mark">AI</div>
+        <div>
+          <strong id="brandTitle">Trustworthy AI Credential</strong>
+          <span id="brandSubtitle">Interactive analysis evidence view</span>
+        </div>
+      </div>
+      <div class="navactions">
+        <a class="btn" href="#tooling">Tooling</a>
+        <a class="btn" href="#checks">Checks</a>
+        <button class="btn primary" type="button" onclick="window.print()">Print / Save PDF</button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <div class="eyebrow"><span class="status-dot"></span><span id="heroStatusLabel">Analysis completed — remediation required</span></div>
+          <h1 id="heroTitle">Trustworthy AI Analysis Credential</h1>
+          <p class="lead" id="heroSubtitle">Automated evidence view for compliance, risk, and security analysis.</p>
+
+          <div class="metadata">
+            <div class="meta-card"><span>Subject Service</span><strong id="metaService">—</strong></div>
+            <div class="meta-card"><span>Analysis Date</span><strong id="metaDate">—</strong></div>
+            <div class="meta-card"><span>Source Model</span><strong id="metaModel">—</strong></div>
+            <div class="meta-card"><span>Issuer</span><strong id="metaIssuer">—</strong></div>
+          </div>
+        </div>
+        <aside class="seal-card">
+          <div class="ring-wrap">
+            <div class="ring" id="ring">
+              <div>
+                <strong id="passRateValue">0%</strong>
+                <span>Checks passed</span>
+              </div>
+            </div>
+          </div>
+          <div class="verdict" id="heroVerdict">Assessment completed — open findings remain and remediation is required.</div>
+          <div class="certificate-id">
+            <div><strong>Credential ID</strong><br /><code id="credentialId">—</code></div>
+            <div><strong>Original Report Status</strong><br /><span id="originalStatus">—</span></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="grid-4" aria-label="Summary stats">
+      <article class="stat-card"><div class="label">Total checks</div><div class="value" id="statTotal">0</div></article>
+      <article class="stat-card good"><div class="label">Passed</div><div class="value" id="statPassed">0</div></article>
+      <article class="stat-card bad"><div class="label">Not passed</div><div class="value" id="statFailed">0</div></article>
+      <article class="stat-card warn"><div class="label">Warnings</div><div class="value" id="statWarnings">0</div></article>
+    </section>
+
+    <section class="section-card" id="checks">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Detailed findings</h2>
+          <p class="section-copy">Each card is clickable. The details panel shows evidence messages and remediation actions. Use filters to focus on open findings or specific categories.</p>
+        </div>
+      </div>
+      <div class="toolbar-row">
+        <div class="filters">
+          <input id="searchInput" type="search" placeholder="Search checks, categories, or control areas" />
+          <select id="statusFilter">
+            <option value="all">All statuses</option>
+            <option value="failed">Not passed</option>
+            <option value="passed">Passed</option>
+          </select>
+          <select id="categoryFilter">
+            <option value="all">All categories</option>
+          </select>
+        </div>
+      </div>
+      <div class="check-grid" id="checkGrid"></div>
+    </section>
+    <section class="section-card">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title" id="diagramTitle">Interactive diagram</h2>
+          <p class="section-copy" id="diagramDescription">—</p>
+        </div>
+      </div>
+      <div class="diagram-layout">
+        <div class="diagram-panel">
+          <div class="diagram-toolbar">
+            <div class="left">
+              <button class="btn" type="button" id="zoomOut">− Zoom out</button>
+              <button class="btn" type="button" id="zoomIn">＋ Zoom in</button>
+              <button class="btn" type="button" id="zoomReset">Reset</button>
+            </div>
+          </div>
+          <div class="diagram-viewport" id="diagramViewport" aria-label="Interactive system diagram">
+            <div class="diagram-stage" id="diagramStage">
+              <img id="diagramImage" alt="System and process diagram" src="" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Assessment coverage</h2>
+          <p class="section-copy">This credential presents the analysis result across the main dimensions of a trustworthy AI assessment and highlights both verified areas and open findings.</p>
+        </div>
+      </div>
+      <div class="dimensions" id="dimensions"></div>
+    </section>
+
+    <section class="section-card" id="tooling">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Analysis tooling</h2>
+          <p class="section-copy">This section makes the testing tool explicit, so the credential is transparent about where the underlying evidence comes from.</p>
+        </div>
+      </div>
+      <div class="tool-grid">
+        <div class="tool-card">
+          <span class="pill neutral">Tool used for the assessment</span>
+          <h3 id="toolName" style="margin:14px 0 8px;font-size:1.2rem;">—</h3>
+          <p id="toolDescription" class="detail-copy">—</p>
+          <div class="detail-badges" style="margin-top:12px;">
+            <a id="toolLink" class="btn" target="_blank" rel="noopener noreferrer" href="#">Open repository</a>
+          </div>
+          <p class="muted" id="toolEvidenceNote" style="margin-top:12px;">—</p>
+        </div>
+        <div class="sub-card">
+          <h3 style="margin-top:0;">Capabilities</h3>
+          <ul class="list-clean" id="toolCapabilities"></ul>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="backdrop" id="backdrop"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <span class="pill neutral" id="drawerStatus">Check detail</span>
+        <h2 id="drawerTitle" style="margin:10px 0 0;font-size:1.4rem;letter-spacing:-.03em;color:var(--brand);">—</h2>
+      </div>
+      <button class="btn" id="closeDrawer" type="button">Close</button>
+    </div>
+    <div class="drawer-body">
+      <div>
+        <div class="detail-badges" id="drawerBadges"></div>
+        <p class="detail-copy" id="drawerSummary">—</p>
+      </div>
+      <div>
+        <h3 style="margin:0 0 10px;">Evidence messages</h3>
+        <ul class="message-list" id="drawerMessages"></ul>
+      </div>
+      <div>
+        <h3 style="margin:0 0 10px;">Suggested remediation actions</h3>
+        <ul class="list-clean" id="drawerActions"></ul>
+      </div>
+    </div>
+  </aside>
+
+  <script>
+/* Browser normalizer for raw CARiSMA JSON reports. Exposes window.normalizeRawCarisma(raw, options). */
+(function () {
+  function decodeXmlEntities(value = '') {
+    return String(value)
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&apos;', "'")
+      .trim();
+  }
+
+  function extractTag(xml = '', tagName) {
+    const re = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'i');
+    const match = String(xml).match(re);
+    return match ? decodeXmlEntities(match[1]) : '';
+  }
+
+  function parseXmlCheckResults(xml = '') {
+    const results = [];
+    const checkRe = /<CheckResult>([\s\S]*?)<\/CheckResult>/gi;
+    let checkMatch;
+    while ((checkMatch = checkRe.exec(String(xml)))) {
+      const block = checkMatch[1];
+      const name = extractTag(block, 'name');
+      const messages = [];
+      const resultRe = /<results>([\s\S]*?)<\/results>/gi;
+      let resultMatch;
+      while ((resultMatch = resultRe.exec(block))) {
+        const resultBlock = resultMatch[1];
+        messages.push({
+          type: (extractTag(resultBlock, 'status') || 'INFO').toUpperCase(),
+          text: extractTag(resultBlock, 'text')
+        });
+      }
+      if (name) results.push({ name, messages });
+    }
+    return results;
+  }
+
+  function slugify(value = '') {
+    return String(value)
+      .toLowerCase()
+      .replace(/mltop10/g, '')
+      .replace(/check/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'check';
+  }
+
+  function inferMessageType(text = '') {
+    const lower = String(text).toLowerCase();
+    if (lower.includes('warning')) return 'WARNING';
+    if (lower.includes('error') || lower.includes('does not') || lower.includes('not ') || lower.includes('potentially possible') || lower.includes('cannot be ensured') || lower.includes('no information')) return 'ERROR';
+    return 'INFO';
+  }
+
+  function cleanShortName(name = '') {
+    return String(name).replace(/^MLTop10\s+/i, '').replace(/\s+Check$/i, '').trim();
+  }
+
+  function inferCategory(name = '') {
+    const lower = name.toLowerCase();
+    if (lower.includes('supply chain')) return 'AI Security';
+    if (lower.includes('data poisoning')) return 'Data Risk';
+    if (lower.includes('input')) return 'Application Security';
+    if (lower.includes('membership')) return 'Privacy & Compliance';
+    if (lower.includes('inversion')) return 'Privacy & Security';
+    if (lower.includes('model poisoning')) return 'Model Security';
+    if (lower.includes('skewing')) return 'Operational Risk';
+    if (lower.includes('theft')) return 'Model Protection';
+    if (lower.includes('output')) return 'Output Security';
+    if (lower.includes('transfer')) return 'Model Security';
+    return 'AI Risk Control';
+  }
+
+  function inferControlArea(name = '') {
+    const lower = name.toLowerCase();
+    if (lower.includes('supply chain')) return 'Dependency & package integrity';
+    if (lower.includes('data poisoning')) return 'Training data integrity';
+    if (lower.includes('input')) return 'Input robustness';
+    if (lower.includes('membership')) return 'Training data exposure';
+    if (lower.includes('inversion')) return 'Model output privacy';
+    if (lower.includes('model poisoning')) return 'Algorithm/model integrity';
+    if (lower.includes('skewing')) return 'Feedback data integrity';
+    if (lower.includes('theft')) return 'Training data protection';
+    if (lower.includes('output')) return 'Logging & integrity assurance';
+    if (lower.includes('transfer')) return 'Transfer learning controls';
+    return 'AI control evidence';
+  }
+
+  function inferSeverity(success, counts) {
+    if (success && counts.warning > 0) return 'Low';
+    if (success) return 'Verified';
+    if (counts.error >= 5) return 'High';
+    return 'Medium';
+  }
+
+  function remediationFor(name = '') {
+    const lower = name.toLowerCase();
+    if (lower.includes('supply chain')) return ['Implement a documented package update cadence, dependency scanning, and release evidence.'];
+    if (lower.includes('data poisoning')) return ['Document the training-data server architecture and mitigations protecting training-data storage and access.', 'Add provenance and integrity verification for training data before ingestion.'];
+    if (lower.includes('skewing')) return ['Introduce access control for feedback data.', 'Add authenticity verification, validation, and cleaning for feedback inputs.', 'Implement anomaly detection for feedback-data processing and storage.'];
+    if (lower.includes('theft')) return ['Define backup and recovery controls for training and knowledge data assets.', 'Reassess data-publicness assumptions and document their implications for model-theft risk.'];
+    if (lower.includes('output')) return ['Implement tamper-evident logging for the AI application.', 'Link output-integrity assurance to package maintenance and software update controls.'];
+    return ['Review the failed evidence, add missing mitigation controls, and rerun the CARiSMA analysis.'];
+  }
+
+  function formatCarismaTimestamp(timestamp = '') {
+    const match = String(timestamp).match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+    if (!match) return timestamp || new Date().toISOString();
+    const [, y, m, d, hh, mm, ss] = match;
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+  }
+
+  function normalizeRawCarisma(raw, options = {}) {
+    const xml = raw?.reports?.XML || '';
+    const xmlChecks = parseXmlCheckResults(xml);
+    const rawChecks = Array.isArray(raw?.checks) ? raw.checks : [];
+    const checkSource = rawChecks.length ? rawChecks : xmlChecks.map(c => ({ name: c.name, success: false, messages: c.messages.map(m => m.text) }));
+    const analyzedModel = raw?.name || extractTag(xml, 'AnalyzedModel') || options.service || 'Unnamed CARiSMA model';
+    const sourceFile = extractTag(xml, 'Filepath') || '';
+    const timestamp = extractTag(xml, 'Timestamp') || '';
+    const originalStatus = extractTag(xml, 'Status') || (raw?.success ? 'PASS' : 'FAIL');
+
+    const checks = checkSource.map((check, index) => {
+      const xmlMatch = xmlChecks.find(x => x.name === check.name);
+      const messageObjects = xmlMatch?.messages?.length ? xmlMatch.messages : (check.messages || []).map(text => ({ type: inferMessageType(text), text }));
+      const counts = messageObjects.reduce((acc, msg) => {
+        const type = String(msg.type || 'INFO').toLowerCase();
+        if (type.includes('warn')) acc.warning += 1;
+        else if (type.includes('error')) acc.error += 1;
+        else acc.info += 1;
+        return acc;
+      }, { info: 0, warning: 0, error: 0 });
+      const success = Boolean(check.success);
+      const shortName = cleanShortName(check.name);
+      return {
+        id: `check-${String(index + 1).padStart(2, '0')}-${slugify(shortName)}`,
+        name: check.name,
+        shortName,
+        category: inferCategory(check.name),
+        controlArea: inferControlArea(check.name),
+        success,
+        status: success ? 'passed' : 'failed',
+        statusLabel: success ? (counts.warning > 0 ? 'Passed with note' : 'Passed') : (counts.error >= 5 ? 'High-priority remediation' : 'Remediation required'),
+        severity: inferSeverity(success, counts),
+        messageCounts: counts,
+        messages: messageObjects.map(msg => ({ type: String(msg.type || 'INFO').toUpperCase(), text: msg.text })),
+        remediationActions: success ? [] : remediationFor(check.name)
+      };
+    });
+
+    const passedChecks = checks.filter(c => c.status === 'passed').length;
+    const failedChecks = checks.filter(c => c.status === 'failed').length;
+    const warningMessages = checks.reduce((sum, c) => sum + (c.messageCounts.warning || 0), 0);
+    const errorMessages = checks.reduce((sum, c) => sum + (c.messageCounts.error || 0), 0);
+    const totalChecks = checks.length;
+    const passRate = totalChecks ? Math.round((passedChecks / totalChecks) * 100) : 0;
+    const serviceName = options.service || raw?.service?.name || analyzedModel;
+
+    const credential = {
+      schemaVersion: '2.0',
+      credential: {
+        title: 'Trustworthy AI Analysis Credential',
+        subtitle: 'Automated evidence view for compliance, risk, and security analysis',
+        credentialId: `TAI-${slugify(analyzedModel).toUpperCase()}-${timestamp || Date.now()}`,
+        issuer: 'Trustworthy AI Building Block / CARiSMA MLTop10 Analysis',
+        subjectService: serviceName,
+        modelName: analyzedModel,
+        sourceFile,
+        sourceReport: options.sourceReport || '',
+        analysisTimestamp: timestamp,
+        analysisDateDisplay: formatCarismaTimestamp(timestamp),
+        overallStatus: failedChecks > 0 ? 'analysis-completed-remediation-required' : 'analysis-completed-passed',
+        overallStatusLabel: failedChecks > 0 ? 'Analysis completed — remediation required' : 'Analysis completed — all checks passed',
+        originalReportStatus: originalStatus,
+        generatedAt: new Date().toISOString()
+      },
+      tool: {
+        name: 'CARiSMA Tool',
+        repositoryUrl: 'https://github.com/CARiSMA-Tool/carisma-tool',
+        vendor: 'CARiSMA-Tool / University of Koblenz research context',
+        description: 'CARiSMA is the modelling-based analysis tool used to generate this assessment evidence. It supports compliance analyses, risk analyses, and security analyses for software models and is extensible through a plugin architecture.',
+        capabilities: ['Compliance analyses', 'Risk analyses', 'Security analyses', 'MLTop10-oriented model checks', 'Extensible plugin-based analysis'],
+        evidenceNote: 'The credential view below is a presentation layer. The underlying evidence originates from the CARiSMA analysis output.'
+      },
+      summary: {
+        totalChecks,
+        passedChecks,
+        failedChecks,
+        warningMessages,
+        errorMessages,
+        passRate,
+        failedCheckNames: checks.filter(c => c.status === 'failed').map(c => c.shortName),
+        passedCheckNames: checks.filter(c => c.status === 'passed').map(c => c.shortName)
+      },
+      dimensions: [
+        { name: 'Compliance Analysis', status: 'Completed', description: 'Credential view confirms that compliance-related control evidence was analysed, including privacy, transparency, and auditability-relevant checks.' },
+        { name: 'Risk Analysis', status: failedChecks > 0 ? 'Completed with open risks' : 'Completed', description: 'Risk posture is visible through failed checks, warning notes, and remediation actions instead of a simple pass/fail badge.' },
+        { name: 'Security Analysis', status: failedChecks > 0 ? 'Completed with remediation required' : 'Completed', description: 'Security checks cover MLTop10 attack classes such as supply chain, poisoning, skewing, model theft, and output integrity.' }
+      ],
+      process: {
+        title: 'How the assessment and service process works',
+        intro: 'The process flow combines two perspectives: how CARiSMA analyses the model and generates evidence, and how the service scenario exchanges data across its modelled components.',
+        steps: [
+          { title: '1. Model and scenario are prepared', description: 'The UML-based service scenario is modelled, including infrastructure, AI components, data sources, feedback paths, and secure communication paths.' },
+          { title: '2. CARiSMA executes the analysis', description: 'The CARiSMA tool runs compliance, risk, and security checks on the model and produces machine-readable evidence in JSON and report form.' },
+          { title: '3. Data exchange and service components are reviewed', description: 'The credential page links the modelled service components with the analysis evidence, including open risks and passed controls.' },
+          { title: '4. Findings are inspected', description: 'Reviewers can open each check to inspect messages, warnings, errors, and remediation actions.' },
+          { title: '5. Remediation is tracked', description: 'After mitigations are implemented, the CARiSMA analysis should be rerun and the credential regenerated from the new raw report.' }
+        ]
+      },
+      checks
+    };
+    if (options.diagram) credential.diagram = options.diagram.diagram || options.diagram;
+    return credential;
+  }
+
+  function isRawCarismaReport(data) {
+    return !!(data && !data.credential && (data.reports || data.checks));
+  }
+
+  window.normalizeRawCarisma = normalizeRawCarisma;
+  window.isRawCarismaReport = isRawCarismaReport;
+})();
+
+  </script>
+  <script>
+    const state = {
+      data: null,
+      search: '',
+      statusFilter: 'all',
+      categoryFilter: 'all',
+      eventsBound: false,
+      currentDiagramObjectUrl: null,
+      defaultDiagramPath: '',
+      zoom: 1,
+      panX: 0,
+      panY: 0,
+      minZoom: 0.6,
+      maxZoom: 3,
+      dragging: false,
+      dragStartX: 0,
+      dragStartY: 0,
+      startPanX: 0,
+      startPanY: 0
+    };
+
+    const $ = (sel) => document.querySelector(sel);
+
+    function readJsonFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            resolve(JSON.parse(String(reader.result || '')));
+          } catch (err) {
+            reject(new Error(`Invalid JSON in ${file.name}`));
+          }
+        };
+        reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+        reader.readAsText(file);
+      });
+    }
+
+    function parseDirectoryListingLinks(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      return [...doc.querySelectorAll('a[href]')]
+        .map(a => a.getAttribute('href') || '')
+        .map(href => href.split('#')[0].split('?')[0].trim())
+        .filter(Boolean);
+    }
+
+    async function resolveInputPaths() {
+      const params = new URLSearchParams(window.location.search);
+      const explicitJson = (params.get('data') || '').trim();
+      const explicitDiagram = (params.get('diagram') || '').trim();
+      const defaultJson = 'carisma-raw-data.json';
+      const defaultDiagram = 'system-process-diagram.png';
+      if (explicitJson && explicitDiagram) {
+        return { jsonPath: explicitJson, diagramPath: explicitDiagram };
+      }
+      if (explicitJson && !explicitDiagram) {
+        return { jsonPath: explicitJson, diagramPath: defaultDiagram };
+      }
+      if (!explicitJson && explicitDiagram) {
+        return { jsonPath: defaultJson, diagramPath: explicitDiagram };
+      }
+
+      try {
+        const jsonProbe = await fetch(defaultJson, { method: 'HEAD', cache: 'no-store' });
+        const diagramProbe = await fetch(defaultDiagram, { method: 'HEAD', cache: 'no-store' });
+        if (jsonProbe.ok && diagramProbe.ok) {
+          return { jsonPath: defaultJson, diagramPath: defaultDiagram };
+        }
+      } catch (_) {
+        // Ignore probing errors and continue to discovery fallback.
+      }
+
+      let jsonCandidates = [];
+      let pngCandidates = [];
+      try {
+        const listingResponse = await fetch('./', { cache: 'no-store' });
+        if (listingResponse.ok) {
+          const listingHtml = await listingResponse.text();
+          const links = parseDirectoryListingLinks(listingHtml)
+            .filter(name => !name.startsWith('http://') && !name.startsWith('https://'))
+            .map(name => decodeURIComponent(name))
+            .filter(name => !name.endsWith('/'));
+          jsonCandidates = [...new Set(links.filter(name => /\.json$/i.test(name)))].sort((a, b) => a.localeCompare(b));
+          pngCandidates = [...new Set(links.filter(name => /\.png$/i.test(name)))].sort((a, b) => a.localeCompare(b));
+        }
+      } catch (_) {
+        // Fallback below if listing is unavailable.
+      }
+
+      const jsonPath = explicitJson || jsonCandidates[0] || defaultJson;
+      const diagramPath = explicitDiagram || pngCandidates[0] || defaultDiagram;
+      if (!jsonPath) {
+        throw new Error('Could not find a .json file in this folder.');
+      }
+
+      return { jsonPath, diagramPath };
+    }
+
+    async function loadData(jsonPath, serviceName) {
+      const response = await fetch(jsonPath);
+      if (!response.ok) throw new Error('Failed to load JSON data.');
+      const loaded = await response.json();
+
+      // Supports both the normalized frontend JSON and the raw CARiSMA JSON.
+      // For raw CARiSMA, the browser normalizer maps checks, XML metadata, counts,
+      // warnings, errors, and remediation hints into the credential structure.
+      if (window.isRawCarismaReport && window.isRawCarismaReport(loaded)) {
+        return window.normalizeRawCarisma(loaded, {
+          sourceReport: jsonPath,
+          service: serviceName || undefined
+        });
+      }
+
+      return loaded;
+    }
+
+    function getPillClass(text = '') {
+      const value = String(text).toLowerCase();
+      if (value.includes('pass') || value.includes('verified') || value.includes('completed')) return 'good';
+      if (value.includes('fail') || value.includes('not passed') || value.includes('high-priority') || value.includes('remediation')) return 'bad';
+      if (value.includes('warning') || value.includes('open') || value.includes('required')) return 'warn';
+      return 'neutral';
+    }
+
+    function escapeHtml(str = '') {
+      return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderHeader(data) {
+      document.title = data.credential?.title || 'Trustworthy AI Analysis Credential';
+      $('#brandTitle').textContent = data.credential?.title || 'Trustworthy AI Credential';
+      $('#brandSubtitle').textContent = data.credential?.subtitle || 'Interactive analysis evidence view';
+      $('#heroTitle').textContent = data.credential?.title || 'Trustworthy AI Analysis Credential';
+      $('#heroSubtitle').textContent = data.credential?.subtitle || '';
+      $('#heroStatusLabel').textContent = data.credential?.overallStatusLabel || 'Analysis completed';
+      $('#metaService').textContent = data.credential?.subjectService || '—';
+      $('#metaDate').textContent = data.credential?.analysisDateDisplay || data.credential?.analysisTimestamp || '—';
+      $('#metaModel').textContent = data.credential?.modelName || '—';
+      $('#metaIssuer').textContent = data.credential?.issuer || '—';
+      $('#credentialId').textContent = data.credential?.credentialId || '—';
+      $('#originalStatus').textContent = data.credential?.originalReportStatus || '—';
+      $('#heroVerdict').textContent = (data.summary?.failedChecks || 0) > 0
+        ? 'Assessment completed — open findings remain and remediation is required.'
+        : 'Assessment completed — all analysed checks passed.';
+
+      const passRate = Number(data.summary?.passRate || 0);
+      document.documentElement.style.setProperty('--pass-rate', `${passRate}%`);
+      $('#passRateValue').textContent = `${passRate}%`;
+
+      $('#statTotal').textContent = data.summary?.totalChecks ?? 0;
+      $('#statPassed').textContent = data.summary?.passedChecks ?? 0;
+      $('#statFailed').textContent = data.summary?.failedChecks ?? 0;
+      $('#statWarnings').textContent = data.summary?.warningMessages ?? 0;
+    }
+
+    function renderDimensions(data) {
+      const host = $('#dimensions');
+      host.innerHTML = '';
+      (data.dimensions || []).forEach(item => {
+        const card = document.createElement('article');
+        card.className = 'dimension-card';
+        const pillClass = getPillClass(item.status);
+        card.innerHTML = `
+          <span class="pill ${pillClass}">${escapeHtml(item.status)}</span>
+          <h3>${escapeHtml(item.name)}</h3>
+          <p>${escapeHtml(item.description)}</p>
+        `;
+        host.appendChild(card);
+      });
+    }
+
+    function renderTool(data) {
+      const tool = data.tool || {};
+      $('#toolName').textContent = tool.name || '—';
+      $('#toolDescription').textContent = tool.description || '—';
+      $('#toolEvidenceNote').textContent = tool.evidenceNote || '';
+      const link = $('#toolLink');
+      if (tool.repositoryUrl) {
+        link.href = tool.repositoryUrl;
+        link.textContent = 'Open CARiSMA repository';
+      }
+      const caps = $('#toolCapabilities');
+      caps.innerHTML = '';
+      (tool.capabilities || []).forEach(cap => {
+        const li = document.createElement('li');
+        li.textContent = cap;
+        caps.appendChild(li);
+      });
+    }
+
+    function renderDiagram(data) {
+      const diagram = data.diagram || {};
+      const resolvedDiagram = diagram.image || state.currentDiagramObjectUrl || state.defaultDiagramPath || '';
+      $('#diagramTitle').textContent = diagram.title || 'Interactive system and process diagram';
+      $('#diagramDescription').textContent = diagram.description || '';
+      if (!resolvedDiagram) {
+        throw new Error('No diagram image was resolved. Provide a PNG file via URL parameter (?diagram=...) or the fallback picker.');
+      }
+      $('#diagramImage').src = resolvedDiagram;
+      setupPanZoom();
+    }
+
+    function renderAll(data) {
+      state.data = data;
+      renderHeader(state.data);
+      renderDimensions(state.data);
+      renderTool(state.data);
+      renderDiagram(state.data);
+      populateCategoryFilter(state.data.checks || []);
+      renderChecks(state.data.checks || []);
+      bindEvents();
+    }
+
+    function normalizeLoadedJson(loaded, sourceName) {
+      if (window.isRawCarismaReport && window.isRawCarismaReport(loaded)) {
+        return window.normalizeRawCarisma(loaded, { sourceReport: sourceName });
+      }
+      return loaded;
+    }
+
+    function setupPanZoom() {
+      const viewport = $('#diagramViewport');
+      const stage = $('#diagramStage');
+      const img = $('#diagramImage');
+
+      state.zoom = 1;
+      const fitScale = () => {
+        const vw = viewport.clientWidth;
+        const naturalW = state.data?.diagram?.width || img.naturalWidth || vw;
+        state.zoom = Math.max(0.6, Math.min(1, vw / naturalW));
+        state.panX = 0;
+        state.panY = 0;
+        applyTransform();
+      };
+
+      function applyTransform() {
+        stage.style.width = `${state.data?.diagram?.width || img.naturalWidth || viewport.clientWidth}px`;
+        stage.style.height = `${state.data?.diagram?.height || img.naturalHeight || viewport.clientHeight}px`;
+        stage.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+      }
+
+      function zoomBy(factor) {
+        state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom, state.zoom * factor));
+        applyTransform();
+      }
+
+      img.onload = () => fitScale();
+      if (img.complete) fitScale();
+
+      $('#zoomIn').onclick = () => zoomBy(1.2);
+      $('#zoomOut').onclick = () => zoomBy(1 / 1.2);
+      $('#zoomReset').onclick = () => fitScale();
+
+      viewport.onwheel = (e) => {
+        e.preventDefault();
+        zoomBy(e.deltaY < 0 ? 1.08 : 1 / 1.08);
+      };
+
+      viewport.onpointerdown = (e) => {
+        state.dragging = true;
+        viewport.classList.add('dragging');
+        state.dragStartX = e.clientX;
+        state.dragStartY = e.clientY;
+        state.startPanX = state.panX;
+        state.startPanY = state.panY;
+        viewport.setPointerCapture(e.pointerId);
+      };
+      viewport.onpointermove = (e) => {
+        if (!state.dragging) return;
+        state.panX = state.startPanX + (e.clientX - state.dragStartX);
+        state.panY = state.startPanY + (e.clientY - state.dragStartY);
+        applyTransform();
+      };
+      const stopDrag = () => {
+        state.dragging = false;
+        viewport.classList.remove('dragging');
+      };
+      viewport.onpointerup = stopDrag;
+      viewport.onpointercancel = stopDrag;
+      window.addEventListener('resize', fitScale, { passive: true });
+    }
+
+    function categoryOptions(checks) {
+      return [...new Set(checks.map(c => c.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    }
+
+    function populateCategoryFilter(checks) {
+      const select = $('#categoryFilter');
+      select.innerHTML = '<option value="all">All categories</option>';
+      categoryOptions(checks).forEach(cat => {
+        const opt = document.createElement('option');
+        opt.value = cat;
+        opt.textContent = cat;
+        select.appendChild(opt);
+      });
+    }
+
+    function renderChecks(checks) {
+      const q = state.search.trim().toLowerCase();
+      const filtered = checks.filter(check => {
+        const matchesStatus = state.statusFilter === 'all' || check.status === state.statusFilter;
+        const matchesCategory = state.categoryFilter === 'all' || check.category === state.categoryFilter;
+        const blob = `${check.name} ${check.shortName} ${check.category} ${check.controlArea}`.toLowerCase();
+        const matchesSearch = !q || blob.includes(q);
+        return matchesStatus && matchesCategory && matchesSearch;
+      });
+
+      const grid = $('#checkGrid');
+      grid.innerHTML = '';
+      filtered.forEach(check => {
+        const card = document.createElement('button');
+        card.className = 'check-card';
+        card.type = 'button';
+        const statusTagClass = check.status === 'passed' ? 'good' : 'bad';
+        card.innerHTML = `
+          <div class="head">
+            <div>
+              <h3>${escapeHtml(check.shortName || check.name)}</h3>
+              <div class="check-meta">${escapeHtml(check.category || 'Uncategorized')} · ${escapeHtml(check.controlArea || '—')}</div>
+            </div>
+            <span class="tag ${statusTagClass}">${escapeHtml(check.statusLabel || check.status)}</span>
+          </div>
+          <div class="detail-badges">
+            <span class="pill neutral">Severity: ${escapeHtml(check.severity || '—')}</span>
+          </div>
+          <div class="check-stats">
+            <span class="tag neutral">Info ${check.messageCounts?.info ?? 0}</span>
+            <span class="tag warn">Warnings ${check.messageCounts?.warning ?? 0}</span>
+            <span class="tag bad">Errors ${check.messageCounts?.error ?? 0}</span>
+          </div>
+        `;
+        card.addEventListener('click', () => openDrawer(check));
+        grid.appendChild(card);
+      });
+
+      if (!filtered.length) {
+        const empty = document.createElement('div');
+        empty.className = 'detail-card';
+        empty.innerHTML = '<p class="detail-copy">No checks match the current filters.</p>';
+        grid.appendChild(empty);
+      }
+    }
+
+    function openDrawer(check) {
+      $('#drawerTitle').textContent = check.name || 'Check detail';
+      $('#drawerStatus').textContent = check.statusLabel || check.status || 'Detail';
+      $('#drawerStatus').className = `pill ${getPillClass(check.statusLabel || check.status)}`;
+
+      const badges = $('#drawerBadges');
+      badges.innerHTML = '';
+      [check.category, check.controlArea, `Severity: ${check.severity || '—'}`].forEach(text => {
+        const badge = document.createElement('span');
+        badge.className = `pill ${getPillClass(text)}`;
+        badge.textContent = text;
+        badges.appendChild(badge);
+      });
+
+      $('#drawerSummary').textContent = `${check.messageCounts?.info ?? 0} info, ${check.messageCounts?.warning ?? 0} warnings, and ${check.messageCounts?.error ?? 0} errors were recorded for this check.`;
+
+      const messages = $('#drawerMessages');
+      messages.innerHTML = '';
+      (check.messages || []).forEach(msg => {
+        const type = String(msg.type || 'INFO').toLowerCase();
+        const li = document.createElement('li');
+        li.className = `message-item ${type === 'error' ? 'error' : type === 'warning' ? 'warning' : 'info'}`;
+        li.innerHTML = `<strong>${escapeHtml(msg.type || 'INFO')}</strong><p>${escapeHtml(msg.text || '')}</p>`;
+        messages.appendChild(li);
+      });
+
+      const actions = $('#drawerActions');
+      actions.innerHTML = '';
+      if ((check.remediationActions || []).length) {
+        check.remediationActions.forEach(action => {
+          const li = document.createElement('li');
+          li.textContent = action;
+          actions.appendChild(li);
+        });
+      } else {
+        const li = document.createElement('li');
+        li.textContent = 'No immediate remediation action is listed for this check.';
+        actions.appendChild(li);
+      }
+
+      $('#drawer').classList.add('open');
+      $('#backdrop').classList.add('show');
+      $('#drawer').setAttribute('aria-hidden', 'false');
+    }
+
+    function closeDrawer() {
+      $('#drawer').classList.remove('open');
+      $('#backdrop').classList.remove('show');
+      $('#drawer').setAttribute('aria-hidden', 'true');
+    }
+
+    async function loadFromSelectedFiles(jsonInput, pngInput, statusNode) {
+      const jsonFile = jsonInput?.files?.[0];
+      const pngFile = pngInput?.files?.[0];
+      if (!jsonFile || !pngFile) {
+        if (statusNode) statusNode.textContent = 'Select both a JSON file and a PNG file.';
+        return;
+      }
+
+      if (state.currentDiagramObjectUrl) {
+        URL.revokeObjectURL(state.currentDiagramObjectUrl);
+      }
+
+      try {
+        if (statusNode) statusNode.textContent = 'Loading selected files...';
+        const loadedJson = await readJsonFile(jsonFile);
+        const normalized = normalizeLoadedJson(loadedJson, jsonFile.name);
+        state.currentDiagramObjectUrl = URL.createObjectURL(pngFile);
+        state.defaultDiagramPath = '';
+        renderAll(normalized);
+        const overlay = document.getElementById('fileFallbackOverlay');
+        if (overlay) overlay.remove();
+      } catch (err) {
+        if (statusNode) statusNode.textContent = err.message || 'Failed to load selected files.';
+      }
+    }
+
+    function showFileFallback(errorMessage) {
+      if (document.getElementById('fileFallbackOverlay')) return;
+      const overlay = document.createElement('div');
+      overlay.id = 'fileFallbackOverlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:120;display:grid;place-items:center;padding:16px;';
+      overlay.innerHTML = `
+        <div style="width:min(760px,100%);background:#fff;border:1px solid #d8e2ee;border-radius:18px;padding:20px;box-shadow:0 20px 50px rgba(15,23,42,.25);font-family:Inter,ui-sans-serif,system-ui,sans-serif;">
+          <h2 style="margin:0 0 10px;color:#0f2744;">Provide JSON and PNG files</h2>
+          <p style="margin:0 0 14px;color:#475569;">Automatic file-name discovery was not possible. Choose any <code>.json</code> and any <code>.png</code> from the same folder to render the visualization.</p>
+          <p style="margin:0 0 14px;color:#b91c1c;">${escapeHtml(errorMessage || 'Files were not found.')}</p>
+          <div style="display:grid;gap:10px;margin-bottom:12px;">
+            <label for="fallbackJsonFileInput" style="font-weight:700;color:#334155;">JSON file (.json)</label>
+            <input id="fallbackJsonFileInput" type="file" accept=".json,application/json" />
+            <label for="fallbackPngFileInput" style="font-weight:700;color:#334155;">PNG file (.png)</label>
+            <input id="fallbackPngFileInput" type="file" accept=".png,image/png" />
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <button class="btn primary" id="fallbackLoadFilesBtn" type="button">Load files</button>
+          </div>
+          <p id="fallbackStatus" style="margin:12px 0 0;color:#64748b;"></p>
+        </div>`;
+      document.body.appendChild(overlay);
+      const jsonInput = document.getElementById('fallbackJsonFileInput');
+      const pngInput = document.getElementById('fallbackPngFileInput');
+      const statusNode = document.getElementById('fallbackStatus');
+      document.getElementById('fallbackLoadFilesBtn').addEventListener('click', () => {
+        loadFromSelectedFiles(jsonInput, pngInput, statusNode);
+      });
+    }
+
+    function bindEvents() {
+      if (state.eventsBound) return;
+      state.eventsBound = true;
+      $('#closeDrawer').addEventListener('click', closeDrawer);
+      $('#backdrop').addEventListener('click', closeDrawer);
+      $('#searchInput').addEventListener('input', (e) => {
+        state.search = e.target.value || '';
+        renderChecks(state.data?.checks || []);
+      });
+      $('#statusFilter').addEventListener('change', (e) => {
+        state.statusFilter = e.target.value;
+        renderChecks(state.data?.checks || []);
+      });
+      $('#categoryFilter').addEventListener('change', (e) => {
+        state.categoryFilter = e.target.value;
+        renderChecks(state.data?.checks || []);
+      });
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeDrawer();
+      });
+    }
+
+    async function init() {
+      bindEvents();
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const paths = await resolveInputPaths();
+        state.defaultDiagramPath = paths.diagramPath;
+        const loadedData = await loadData(paths.jsonPath, params.get('service') || undefined);
+        renderAll(loadedData);
+      } catch (err) {
+        showFileFallback((err && err.message) ? err.message : 'Could not automatically load files.');
+        console.error(err);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
+
+
+
+
+
+

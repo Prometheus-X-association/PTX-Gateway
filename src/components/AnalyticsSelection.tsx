@@ -18,47 +18,10 @@ import {
   getParamValuesMap,
 } from "@/types/dataspace";
 import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { buildCredentialSrcdoc, createCredentialPngObjectUrl } from "@/utils/credentialPreview";
 
 // Re-export type for backward compatibility
 export type { AnalyticsOption } from "@/types/dataspace";
-
-function buildCredentialSrcdoc(htmlContent: string, jsonContent: string, pngBlobUrl: string): string {
-  let jsonBase64 = "";
-  try {
-    jsonBase64 = btoa(unescape(encodeURIComponent(jsonContent)));
-  } catch {
-    jsonBase64 = btoa(jsonContent);
-  }
-
-  // Injected before all other scripts: intercepts fetch for JSON, exposes PNG blob URL.
-  const injectedScript = `<script>
-(function(){
-  var _j=decodeURIComponent(escape(atob(${JSON.stringify(jsonBase64)})));
-  window.__ptxCredPng=${JSON.stringify(pngBlobUrl)};
-  var _f=window.fetch.bind(window);
-  window.fetch=function(u,o){
-    var us=String(u),isH=o&&String(o.method||"").toUpperCase()==="HEAD";
-    if(/\\.json/i.test(us)||us==="carisma-raw-data.json"){
-      if(isH)return Promise.resolve(new Response("",{status:200}));
-      return Promise.resolve(new Response(_j,{status:200,headers:{"Content-Type":"application/json"}}));
-    }
-    if(/\\.png/i.test(us)||us==="system-process-diagram.png"){
-      if(isH)return Promise.resolve(new Response("",{status:200}));
-    }
-    return _f(u,o);
-  };
-})();
-<\/script>`;
-
-  let html = htmlContent;
-  html = html.replace("<head>", `<head>\n${injectedScript}`);
-  // Make the diagram stage use the injected PNG blob URL instead of a relative path.
-  html = html.replace(
-    "state.defaultDiagramPath = paths.diagramPath;",
-    "state.defaultDiagramPath = window.__ptxCredPng || paths.diagramPath;",
-  );
-  return html;
-}
 
 interface AnalyticsSelectionProps {
   selected: AnalyticsOption | null;
@@ -151,16 +114,14 @@ const AnalyticsSelection = ({
   const openCredentialModal = useCallback((plugin: CredentialPluginConfig, entry: CredentialEntry) => {
     credentialBlobUrls.current.forEach((u) => URL.revokeObjectURL(u));
     credentialBlobUrls.current = [];
-    const pngBytes = Uint8Array.from(atob(entry.png_base64), (c) => c.charCodeAt(0));
-    const pngBlob = new Blob([pngBytes], { type: "image/png" });
-    const pngUrl = URL.createObjectURL(pngBlob);
+    const pngUrl = createCredentialPngObjectUrl(entry.png_base64);
     credentialBlobUrls.current.push(pngUrl);
     setCredentialModal({
       pluginId: plugin.id,
       pluginName: plugin.name,
       pluginDescription: plugin.description,
       entryLabel: entry.label,
-      srcdoc: buildCredentialSrcdoc(plugin.html_content, entry.json_content, pngUrl),
+      srcdoc: buildCredentialSrcdoc(plugin.gateway_html_content || plugin.html_content, entry.json_content, pngUrl),
     });
   }, []);
 

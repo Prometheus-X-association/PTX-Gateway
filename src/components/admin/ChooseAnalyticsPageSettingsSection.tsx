@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,17 +8,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ChevronDown, ChevronRight, FileText, Loader2, Pencil, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, FileText, Loader2, Pencil, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { AnalyticsPagePluginType, CredentialEntry, CredentialPluginConfig } from "@/types/dataspace";
+import { buildCredentialSrcdoc, createCredentialPngObjectUrl } from "@/utils/credentialPreview";
 
 const PLUGIN_TYPES: { value: AnalyticsPagePluginType; label: string; description: string }[] = [
   {
     value: "carisma",
     label: "T-AI CARiSMA",
-    description: "Compliance certificate viewer. Requires one shared HTML template and per-target JSON + PNG data pairs.",
+    description: "Compliance certificate viewer. Supports an admin HTML template, an optional gateway HTML template, and per-target JSON + PNG data pairs.",
   },
 ];
 
@@ -61,10 +63,17 @@ interface PluginForm {
   name: string;
   description: string;
   htmlFile: File | null;
+  gatewayHtmlFile: File | null;
 }
 
 const emptyEntryForm = (): EntryForm => ({ label: "", jsonFile: null, pngFile: null, targetIds: [] });
-const emptyPluginForm = (): PluginForm => ({ plugin_type: "carisma", name: "", description: "", htmlFile: null });
+const emptyPluginForm = (): PluginForm => ({
+  plugin_type: "carisma",
+  name: "",
+  description: "",
+  htmlFile: null,
+  gatewayHtmlFile: null,
+});
 
 const ChooseAnalyticsPageSettingsSection = () => {
   const { user } = useAuth();
@@ -91,8 +100,9 @@ const ChooseAnalyticsPageSettingsSection = () => {
   const [editingPluginNameVal, setEditingPluginNameVal] = useState("");
   const pluginNameInputRef = useRef<HTMLInputElement>(null);
 
-  // Replace HTML template
+  // Replace admin/default and optional gateway HTML templates
   const [replacingHtmlFor, setReplacingHtmlFor] = useState<string | null>(null);
+  const [replacingGatewayHtmlFor, setReplacingGatewayHtmlFor] = useState<string | null>(null);
   const replaceHtmlRef = useRef<HTMLInputElement>(null);
 
   // Add-plugin form
@@ -100,6 +110,23 @@ const ChooseAnalyticsPageSettingsSection = () => {
   const [pluginForm, setPluginForm] = useState<PluginForm>(emptyPluginForm());
   const [pluginError, setPluginError] = useState<string | null>(null);
   const htmlFileRef = useRef<HTMLInputElement>(null);
+  const gatewayHtmlFileRef = useRef<HTMLInputElement>(null);
+
+  // Rendered preview of one saved HTML + JSON + PNG entry
+  const [preview, setPreview] = useState<{
+    pluginId: string;
+    entryId: string;
+    pluginName: string;
+    pluginDescription?: string;
+    entryLabel: string;
+    templateLabel: string;
+    srcdoc: string;
+  } | null>(null);
+  const previewPngUrlRef = useRef<string | null>(null);
+
+  useEffect(() => () => {
+    if (previewPngUrlRef.current) URL.revokeObjectURL(previewPngUrlRef.current);
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -175,7 +202,10 @@ const ChooseAnalyticsPageSettingsSection = () => {
     if (!pluginForm.htmlFile) { setPluginError("HTML template file is required."); return; }
     setIsSaving(true);
     try {
-      const html = await readAsText(pluginForm.htmlFile);
+      const [html, gatewayHtml] = await Promise.all([
+        readAsText(pluginForm.htmlFile),
+        pluginForm.gatewayHtmlFile ? readAsText(pluginForm.gatewayHtmlFile) : Promise.resolve(undefined),
+      ]);
       const newPlugin: CredentialPluginConfig = {
         id: `plugin-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         plugin_type: pluginForm.plugin_type,
@@ -183,12 +213,14 @@ const ChooseAnalyticsPageSettingsSection = () => {
         description: pluginForm.description.trim() || undefined,
         is_active: true,
         html_content: html,
+        gateway_html_content: gatewayHtml,
         credentials: [],
       };
       await persist([...plugins, newPlugin]);
       setShowAddPlugin(false);
       setPluginForm(emptyPluginForm());
       if (htmlFileRef.current) htmlFileRef.current.value = "";
+      if (gatewayHtmlFileRef.current) gatewayHtmlFileRef.current.value = "";
       setExpandedId(newPlugin.id);
     } catch (e) { setPluginError(e instanceof Error ? e.message : "Failed"); }
     finally { setIsSaving(false); }
@@ -205,6 +237,19 @@ const ChooseAnalyticsPageSettingsSection = () => {
       await persist(plugins.map((p) => (p.id === id ? { ...p, html_content: html } : p)));
       setReplacingHtmlFor(null);
     } catch { toast.error("Failed to replace HTML template"); }
+  };
+
+  const handleReplaceGatewayHtml = async (id: string, file: File) => {
+    try {
+      const html = await readAsText(file);
+      await persist(plugins.map((p) => (p.id === id ? { ...p, gateway_html_content: html } : p)));
+      setReplacingGatewayHtmlFor(null);
+    } catch { toast.error("Failed to replace gateway HTML template"); }
+  };
+
+  const removeGatewayHtml = (id: string) => {
+    void persist(plugins.map((p) => (p.id === id ? { ...p, gateway_html_content: undefined } : p)));
+    setReplacingGatewayHtmlFor(null);
   };
 
   // ── Add-entry actions ─────────────────────────────────────────────────────
@@ -295,6 +340,43 @@ const ChooseAnalyticsPageSettingsSection = () => {
 
   const deleteEntry = (pluginId: string, entryId: string) =>
     void persist(plugins.map((p) => p.id === pluginId ? { ...p, credentials: p.credentials.filter((e) => e.id !== entryId) } : p));
+
+  const closePreview = () => {
+    if (previewPngUrlRef.current) {
+      URL.revokeObjectURL(previewPngUrlRef.current);
+      previewPngUrlRef.current = null;
+    }
+    setPreview(null);
+  };
+
+  const openPreview = (
+    plugin: CredentialPluginConfig,
+    entry: CredentialEntry,
+    template: "admin" | "gateway",
+  ) => {
+    try {
+      if (previewPngUrlRef.current) URL.revokeObjectURL(previewPngUrlRef.current);
+      const pngUrl = createCredentialPngObjectUrl(entry.png_base64);
+      const isDedicatedGatewayTemplate = template === "gateway" && Boolean(plugin.gateway_html_content);
+      const htmlContent = template === "gateway"
+        ? plugin.gateway_html_content || plugin.html_content
+        : plugin.html_content;
+      previewPngUrlRef.current = pngUrl;
+      setPreview({
+        pluginId: plugin.id,
+        entryId: entry.id,
+        pluginName: plugin.name,
+        pluginDescription: plugin.description,
+        entryLabel: entry.label,
+        templateLabel: template === "admin"
+          ? "Admin template"
+          : isDedicatedGatewayTemplate ? "Gateway template" : "Gateway preview · admin fallback",
+        srcdoc: buildCredentialSrcdoc(htmlContent, entry.json_content, pngUrl),
+      });
+    } catch {
+      toast.error("Could not open the plugin preview");
+    }
+  };
 
   const toggleEntryTarget = (id: string, checked: boolean) =>
     setEntryForm((p) => ({ ...p, targetIds: checked ? [...p.targetIds, id] : p.targetIds.filter((t) => t !== id) }));
@@ -417,6 +499,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
   }
 
   return (
+    <>
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
@@ -425,7 +508,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
         </CardTitle>
         <CardDescription>
           Add verification plugins that appear as badge buttons on analytics option cards in the gateway.
-          Each plugin has a shared HTML template and multiple data entries (each targeted to specific analytics options).
+          Each plugin has an admin HTML template, an optional gateway-specific HTML template, and multiple data entries targeted to analytics options.
           Currently supported: <strong>T-AI CARiSMA</strong> — compliance certificate viewer (HTML + JSON + PNG).
         </CardDescription>
       </CardHeader>
@@ -451,7 +534,13 @@ const ChooseAnalyticsPageSettingsSection = () => {
                   type="button"
                   className="shrink-0 p-0.5 rounded hover:bg-muted/50"
                   onClick={() => {
-                    if (isExpanded) { setExpandedId(null); cancelEntryForm(); cancelEditEntry(); setReplacingHtmlFor(null); }
+                    if (isExpanded) {
+                      setExpandedId(null);
+                      cancelEntryForm();
+                      cancelEditEntry();
+                      setReplacingHtmlFor(null);
+                      setReplacingGatewayHtmlFor(null);
+                    }
                     else setExpandedId(plugin.id);
                   }}
                 >
@@ -497,7 +586,13 @@ const ChooseAnalyticsPageSettingsSection = () => {
                   <div
                     className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
                     onClick={() => {
-                      if (isExpanded) { setExpandedId(null); cancelEntryForm(); cancelEditEntry(); setReplacingHtmlFor(null); }
+                      if (isExpanded) {
+                        setExpandedId(null);
+                        cancelEntryForm();
+                        cancelEditEntry();
+                        setReplacingHtmlFor(null);
+                        setReplacingGatewayHtmlFor(null);
+                      }
                       else setExpandedId(plugin.id);
                     }}
                   >
@@ -542,12 +637,12 @@ const ChooseAnalyticsPageSettingsSection = () => {
                     <p className="text-xs text-muted-foreground">{plugin.description}</p>
                   )}
 
-                  {/* HTML template row */}
+                  {/* Admin/default HTML template row */}
                   <div className="flex items-center gap-3 rounded-md border bg-muted/10 px-3 py-2">
                     <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <span className="text-sm">HTML template</span>
-                      <span className="text-xs text-muted-foreground ml-2">shared across all entries</span>
+                      <span className="text-sm">Admin HTML template</span>
+                      <span className="text-xs text-muted-foreground ml-2">required · gateway fallback</span>
                     </div>
                     {replacingHtmlFor === plugin.id ? (
                       <div className="flex items-center gap-2">
@@ -569,6 +664,50 @@ const ChooseAnalyticsPageSettingsSection = () => {
                       <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setReplacingHtmlFor(plugin.id)}>
                         Replace
                       </Button>
+                    )}
+                  </div>
+
+                  {/* Optional gateway-specific HTML template row */}
+                  <div className="flex items-center gap-3 rounded-md border bg-muted/10 px-3 py-2">
+                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm">Gateway HTML template</span>
+                      <span className="text-xs text-muted-foreground ml-2">
+                        {plugin.gateway_html_content ? "custom template active" : "optional · using admin template"}
+                      </span>
+                    </div>
+                    {replacingGatewayHtmlFor === plugin.id ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="file"
+                          accept=".html,text/html"
+                          className="text-xs"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) void handleReplaceGatewayHtml(plugin.id, file);
+                          }}
+                        />
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setReplacingGatewayHtmlFor(null)}>
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setReplacingGatewayHtmlFor(plugin.id)}>
+                          {plugin.gateway_html_content ? "Replace" : "Upload"}
+                        </Button>
+                        {plugin.gateway_html_content && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                            onClick={() => removeGatewayHtml(plugin.id)}
+                            disabled={isSaving}
+                          >
+                            Remove
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </div>
 
@@ -606,7 +745,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
                         );
                       }
                       return (
-                        <div key={entry.id} className="flex items-start justify-between gap-3 rounded-md border px-3 py-2.5 bg-background">
+                        <div key={entry.id} className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 rounded-md border px-3 py-2.5 bg-background">
                           <div className="space-y-0.5 min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <p className="text-sm font-medium">
@@ -618,7 +757,31 @@ const ChooseAnalyticsPageSettingsSection = () => {
                             </div>
                             <p className="text-xs text-muted-foreground truncate">{targetNames(entry.target_resource_ids)}</p>
                           </div>
-                          <div className="flex items-center gap-1 shrink-0">
+                          <div className="flex flex-wrap items-center gap-1 sm:justify-end shrink-0">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => openPreview(plugin, entry, "admin")}
+                              disabled={isSaving}
+                              title="Preview the admin HTML with this JSON and PNG"
+                            >
+                              <Eye className="h-3.5 w-3.5 mr-1" />
+                              Admin Preview
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => openPreview(plugin, entry, "gateway")}
+                              disabled={isSaving}
+                              title={plugin.gateway_html_content
+                                ? "Preview the gateway HTML with this JSON and PNG"
+                                : "Preview the gateway using the admin HTML fallback"}
+                            >
+                              <Eye className="h-3.5 w-3.5 mr-1" />
+                              Gateway Preview
+                            </Button>
                             <Button
                               variant="ghost"
                               size="icon"
@@ -731,12 +894,28 @@ const ChooseAnalyticsPageSettingsSection = () => {
               </div>
               <div className="space-y-2 md:col-span-2">
                 <Label className="flex items-center gap-1">
-                  <FileText className="h-3.5 w-3.5" /> HTML template file <span className="text-destructive">*</span>
+                  <FileText className="h-3.5 w-3.5" /> Admin HTML template <span className="text-destructive">*</span>
                 </Label>
                 <input ref={htmlFileRef} type="file" accept=".html,text/html" className="w-full text-sm"
                   onChange={(e) => setPluginForm((p) => ({ ...p, htmlFile: e.target.files?.[0] ?? null }))} />
                 <p className="text-xs text-muted-foreground">
-                  Shared across all data entries in this plugin. Add JSON + PNG entries after saving.
+                  Used for admin previews and as the gateway fallback when no gateway-specific template is uploaded.
+                </p>
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label className="flex items-center gap-1">
+                  <FileText className="h-3.5 w-3.5" /> Gateway HTML template
+                  <span className="text-muted-foreground font-normal">(optional)</span>
+                </Label>
+                <input
+                  ref={gatewayHtmlFileRef}
+                  type="file"
+                  accept=".html,text/html"
+                  className="w-full text-sm"
+                  onChange={(e) => setPluginForm((p) => ({ ...p, gatewayHtmlFile: e.target.files?.[0] ?? null }))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  When provided, this template is shown on gateway and embed pages. It uses the same JSON + PNG entries as the admin template.
                 </p>
               </div>
             </div>
@@ -761,6 +940,50 @@ const ChooseAnalyticsPageSettingsSection = () => {
 
       </CardContent>
     </Card>
+    {preview && createPortal(
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 md:p-6">
+        <div className="flex flex-col bg-background w-full h-full md:rounded-lg md:border md:shadow-2xl md:w-[80vw] md:max-w-6xl md:h-[90vh]">
+          <div className="flex items-center justify-between px-4 py-2 border-b bg-background shrink-0 md:rounded-t-lg">
+            <div className="flex items-center gap-2 min-w-0">
+              <ShieldCheck className="h-4 w-4 text-primary shrink-0" />
+              <span className="font-medium text-sm truncate">{preview.pluginName}</span>
+              {preview.entryLabel && (
+                <span className="text-xs text-muted-foreground hidden sm:inline truncate">
+                  — {preview.entryLabel}
+                </span>
+              )}
+              <Badge variant="outline" className="hidden sm:inline-flex shrink-0 text-[10px]">
+                {preview.templateLabel}
+              </Badge>
+              {preview.pluginDescription && (
+                <span className="text-xs text-muted-foreground hidden lg:inline truncate">
+                  ({preview.pluginDescription})
+                </span>
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={closePreview}
+              aria-label="Close plugin preview"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <iframe
+            key={`${preview.pluginId}-${preview.entryId}`}
+            className="flex-1 w-full border-0 md:rounded-b-lg"
+            srcDoc={preview.srcdoc}
+            sandbox="allow-scripts allow-same-origin allow-popups"
+            title={`${preview.pluginName} — ${preview.entryLabel || "Preview"}`}
+          />
+        </div>
+      </div>,
+      document.body,
+    )}
+    </>
   );
 };
 
