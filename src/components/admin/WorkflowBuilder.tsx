@@ -3,7 +3,7 @@ import {
   ReactFlow, Background, Controls, MiniMap,
   addEdge, applyNodeChanges, applyEdgeChanges, reconnectEdge,
   type Node, type Edge, type NodeChange, type EdgeChange, type Connection, type ReactFlowInstance,
-  Handle, Position, MarkerType,
+  Handle, Position, MarkerType, ConnectionMode,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -72,6 +72,60 @@ const NODE_ACCENTS: Record<string, string> = {
 
 const EDGE_STYLE = { stroke: "hsl(var(--muted-foreground))", strokeWidth: 1.6 };
 const EDGE_MARKER = { type: MarkerType.ArrowClosed, color: "hsl(var(--muted-foreground))" };
+type HandleSide = "top" | "right" | "bottom" | "left";
+
+const HANDLE_POSITIONS: Array<{ side: HandleSide; position: Position }> = [
+  { side: "top", position: Position.Top },
+  { side: "right", position: Position.Right },
+  { side: "bottom", position: Position.Bottom },
+  { side: "left", position: Position.Left },
+];
+
+const branchFromHandle = (handle?: string | null): "true" | "false" | undefined => {
+  if (handle === "true" || handle?.startsWith("true-")) return "true";
+  if (handle === "false" || handle?.startsWith("false-")) return "false";
+  return undefined;
+};
+
+const sideFromHandle = (handle?: string | null): HandleSide | undefined => {
+  const side = handle?.split("-").pop();
+  return (["top", "right", "bottom", "left"] as const).find((item) => item === side);
+};
+
+const nodeCenter = (node: Node) => ({
+  x: node.position.x + (node.measured?.width ?? node.width ?? 200) / 2,
+  y: node.position.y + (node.measured?.height ?? node.height ?? 86) / 2,
+});
+
+const connectionSides = (source: Node, target: Node): { source: HandleSide; target: HandleSide } => {
+  const from = nodeCenter(source);
+  const to = nodeCenter(target);
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0 ? { source: "right", target: "left" } : { source: "left", target: "right" };
+  }
+  return dy >= 0 ? { source: "bottom", target: "top" } : { source: "top", target: "bottom" };
+};
+
+const normalizeEdgeHandles = (nodes: Node[], edges: Edge[]): Edge[] => edges.map((edge) => {
+  const source = nodes.find((node) => node.id === edge.source);
+  const target = nodes.find((node) => node.id === edge.target);
+  if (!source || !target) return edge;
+  const sides = connectionSides(source, target);
+  const branch = branchFromHandle(edge.sourceHandle);
+  const sourceSide = sideFromHandle(edge.sourceHandle) ?? sides.source;
+  const targetSide = sideFromHandle(edge.targetHandle) ?? sides.target;
+  return {
+    ...edge,
+    sourceHandle: source.type === "condition"
+      ? `${branch ?? "true"}-${sourceSide}`
+      : `port-${sourceSide}`,
+    targetHandle: target.type === "condition"
+      ? `input-${targetSide}`
+      : `port-${targetSide}`,
+  };
+});
 
 type TestNodeStatus = "running" | "success" | "error";
 interface TestNodeRun {
@@ -113,7 +167,6 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
   const Icon = NODE_ICONS[type] ?? NODE_ICONS.agent;
   const label = (data.label as string) || type;
   const isCondition = type === "condition";
-  const isTrigger = type === "trigger";
   const isOutput = type === "output";
   const testStatus = data.__testStatus as TestNodeStatus | undefined;
 
@@ -122,14 +175,14 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
       className={`rounded-lg border border-l-4 bg-background shadow-sm min-w-[180px] max-w-[220px] cursor-pointer transition-all
         ${NODE_ACCENTS[type] ?? NODE_ACCENTS.agent} ${selected ? "ring-2 ring-primary/60 shadow-md" : "hover:shadow-md"}`}
     >
-      {/* Input handle — all except trigger */}
-      {!isTrigger && (
-        <Handle
-          type="target"
-          position={Position.Top}
-          className="!w-2.5 !h-2.5 !bg-background !border-2 !border-muted-foreground"
-        />
-      )}
+      {!isCondition && HANDLE_POSITIONS.map(({ side, position }) => (
+        <Handle key={`port-${side}`} id={`port-${side}`} type="source" position={position}
+          className="!h-3 !w-3 !border-2 !border-muted-foreground !bg-background transition-colors hover:!border-primary hover:!bg-primary/20" />
+      ))}
+      {isCondition && HANDLE_POSITIONS.map(({ side, position }) => (
+        <Handle key={`input-${side}`} id={`input-${side}`} type="target" position={position}
+          className="!h-3 !w-3 !border-2 !border-muted-foreground !bg-background" />
+      ))}
 
       <div className="flex items-center gap-2 border-b bg-muted/30 px-3 py-2">
         <span className={`flex h-6 w-6 items-center justify-center rounded-md ${NODE_LIBRARY.find((item) => item.type === type)?.iconBg ?? "bg-muted"}`}>
@@ -167,23 +220,16 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
       {isOutput && <p className="text-[10px] text-muted-foreground">Final workflow response</p>}
       </div>
 
-      {/* Output handle(s) */}
-      {!isOutput && !isCondition && (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          className="!w-2.5 !h-2.5 !bg-background !border-2 !border-muted-foreground"
-        />
-      )}
       {isCondition && (
         <>
-          <Handle id="true"  type="source" position={Position.Bottom} style={{ left: "30%" }}
-            className="!w-3 !h-3 !bg-emerald-400 !border-2 !border-emerald-600" />
-          <div className="text-[9px] flex justify-between mt-1 px-0.5 opacity-60">
-            <span>✓ true</span><span>✗ false</span>
-          </div>
-          <Handle id="false" type="source" position={Position.Bottom} style={{ left: "70%" }}
-            className="!w-3 !h-3 !bg-rose-400 !border-2 !border-rose-600" />
+          {HANDLE_POSITIONS.flatMap(({ side, position }) => (["true", "false"] as const).map((branch, index) => (
+            <Handle key={`${branch}-${side}`} id={`${branch}-${side}`} type="source" position={position}
+              style={position === Position.Top || position === Position.Bottom
+                ? { left: index === 0 ? "35%" : "65%" }
+                : { top: index === 0 ? "35%" : "65%" }}
+              className={`!h-2.5 !w-2.5 !border-2 ${branch === "true" ? "!border-emerald-600 !bg-emerald-400" : "!border-rose-600 !bg-rose-400"}`} />
+          )))}
+          <div className="mt-1 flex justify-between px-0.5 text-[9px] opacity-60"><span>✓ true</span><span>✗ false</span></div>
         </>
       )}
     </div>
@@ -920,7 +966,7 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
   const wf = workflow.nodes.length === 0 ? defaultWorkflow() : workflow;
 
   const [nodes, setNodes] = useState<Node[]>(wf.nodes as Node[]);
-  const [edges, setEdges] = useState<Edge[]>(wf.edges as Edge[]);
+  const [edges, setEdges] = useState<Edge[]>(() => normalizeEdgeHandles(wf.nodes as Node[], wf.edges as Edge[]));
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [showExamples, setShowExamples] = useState(false);
@@ -999,12 +1045,10 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
   }, [onChange]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
-    setNodes((nds) => {
-      const next = applyNodeChanges(changes, nds);
-      commit(next, edges);
-      return next;
-    });
-  }, [edges, commit]);
+    const next = applyNodeChanges(changes, nodes);
+    setNodes(next);
+    commit(next, edges);
+  }, [nodes, edges, commit]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges((eds) => {
@@ -1016,8 +1060,9 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
 
   const onConnect = useCallback((params: Connection) => {
     setEdges((eds) => {
+      const branch = branchFromHandle(params.sourceHandle);
       const next = addEdge(
-        { ...params, id: uid(), markerEnd: EDGE_MARKER, style: EDGE_STYLE, label: params.sourceHandle ?? undefined },
+        { ...params, id: uid(), markerEnd: EDGE_MARKER, style: EDGE_STYLE, label: branch },
         eds,
       );
       commit(nodes, next);
@@ -1027,11 +1072,11 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
 
   const onReconnect = useCallback((oldEdge: Edge, connection: Connection) => {
     setEdges((currentEdges) => {
-      const wasBranch = oldEdge.sourceHandle === "true" || oldEdge.sourceHandle === "false";
+      const wasBranch = branchFromHandle(oldEdge.sourceHandle);
       const next = reconnectEdge(oldEdge, connection, currentEdges, { shouldReplaceId: false }).map((edge) => {
         if (edge.id !== oldEdge.id) return edge;
-        const isBranch = connection.sourceHandle === "true" || connection.sourceHandle === "false";
-        return { ...edge, label: isBranch ? connection.sourceHandle : (wasBranch ? undefined : edge.label) };
+        const branch = branchFromHandle(connection.sourceHandle);
+        return { ...edge, label: branch ?? (wasBranch ? undefined : edge.label) };
       });
       commit(nodes, next);
       return next;
@@ -1096,8 +1141,9 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
 
   const loadExample = (ex: ExampleWorkflow) => {
     setNodes(ex.workflow.nodes as Node[]);
-    setEdges(ex.workflow.edges as Edge[]);
-    commit(ex.workflow.nodes as Node[], ex.workflow.edges as Edge[]);
+    const nextEdges = normalizeEdgeHandles(ex.workflow.nodes as Node[], ex.workflow.edges as Edge[]);
+    setEdges(nextEdges);
+    commit(ex.workflow.nodes as Node[], nextEdges);
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
     setShowExamples(false);
@@ -1179,7 +1225,8 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
             },
             body: JSON.stringify({
               messages: [{ role: "user", content: prompt }],
-              result: { __doc_context: true, result: { testData: resultData, previousNodeOutput: prevOutput } },
+              result: { __doc_context: true, result: resultData },
+              inputData: prevOutput,
               organizationId,
               agentId: agentConfig.agentId,
               systemPrompt: agentConfig.inline?.systemPrompt,
@@ -1384,6 +1431,7 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
             }}
             onConnect={onConnect}
             onReconnect={onReconnect}
+            connectionMode={ConnectionMode.Loose}
             edgesReconnectable
             reconnectRadius={24}
             onNodeClick={(_, node) => { setSelectedNodeId(node.id); setSelectedEdgeId(null); }}
@@ -1476,9 +1524,10 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
                   <Label className="text-xs">From node</Label>
                   <Select value={selectedEdge.source} onValueChange={(source) => {
                     const isCondition = nodes.find((node) => node.id === source)?.type === "condition";
-                    const sourceHandle = isCondition ? (selectedEdge.sourceHandle ?? "true") : undefined;
-                    const wasBranch = selectedEdge.sourceHandle === "true" || selectedEdge.sourceHandle === "false";
-                    updateSelectedEdge({ source, sourceHandle, label: isCondition ? sourceHandle : (wasBranch ? undefined : selectedEdge.label) });
+                    const branch = branchFromHandle(selectedEdge.sourceHandle) ?? "true";
+                    const side = sideFromHandle(selectedEdge.sourceHandle) ?? "bottom";
+                    const wasBranch = branchFromHandle(selectedEdge.sourceHandle);
+                    updateSelectedEdge({ source, sourceHandle: isCondition ? `${branch}-${side}` : `port-${side}`, label: isCondition ? branch : (wasBranch ? undefined : selectedEdge.label) });
                   }}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>{nodes.filter((node) => node.type !== "output").map((node) => <SelectItem key={node.id} value={node.id}>{String(node.data.label || node.id)}</SelectItem>)}</SelectContent>
@@ -1487,7 +1536,7 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
                 {nodes.find((node) => node.id === selectedEdge.source)?.type === "condition" && (
                   <div className="space-y-1">
                     <Label className="text-xs">Condition branch</Label>
-                    <Select value={selectedEdge.sourceHandle ?? "true"} onValueChange={(sourceHandle) => updateSelectedEdge({ sourceHandle, label: sourceHandle })}>
+                    <Select value={branchFromHandle(selectedEdge.sourceHandle) ?? "true"} onValueChange={(branch) => updateSelectedEdge({ sourceHandle: `${branch}-${sideFromHandle(selectedEdge.sourceHandle) ?? "bottom"}`, label: branch })}>
                       <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent><SelectItem value="true">True</SelectItem><SelectItem value="false">False</SelectItem></SelectContent>
                     </Select>
@@ -1495,7 +1544,11 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
                 )}
                 <div className="space-y-1">
                   <Label className="text-xs">To node</Label>
-                  <Select value={selectedEdge.target} onValueChange={(target) => updateSelectedEdge({ target, targetHandle: undefined })}>
+                  <Select value={selectedEdge.target} onValueChange={(target) => {
+                    const side = sideFromHandle(selectedEdge.targetHandle) ?? "top";
+                    const isCondition = nodes.find((node) => node.id === target)?.type === "condition";
+                    updateSelectedEdge({ target, targetHandle: `${isCondition ? "input" : "port"}-${side}` });
+                  }}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>{nodes.filter((node) => node.type !== "trigger").map((node) => <SelectItem key={node.id} value={node.id}>{String(node.data.label || node.id)}</SelectItem>)}</SelectContent>
                   </Select>

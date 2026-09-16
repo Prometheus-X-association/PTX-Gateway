@@ -79,6 +79,13 @@ const selectDataPath = (value: unknown, path?: string): unknown => {
   return current;
 };
 
+const parseStructuredAgentOutput = (value: string): unknown => {
+  const fenced = value.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = (fenced ? fenced[1] : value).trim();
+  if (!candidate.startsWith("{") && !candidate.startsWith("[")) return value;
+  try { return JSON.parse(candidate); } catch { return value; }
+};
+
 export async function executeWorkflow(
   workflow: AgentWorkflow,
   ctx: ExecutorContext,
@@ -153,7 +160,10 @@ export async function executeWorkflow(
                 skillIds: d.skillIds ?? [],
               } }
             : { agentId: d.agentId };
-        output = await ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null);
+        const agentOutput = await ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null);
+        // Preserve structured responses as actual objects/arrays so downstream
+        // nodes and edge data paths can address fields deterministically.
+        output = parseStructuredAgentOutput(agentOutput);
 
       } else if (node.type === "plugin") {
         const d = node.data as PluginNodeData;
@@ -218,8 +228,13 @@ export async function executeWorkflow(
     // Follow outgoing edges. For condition nodes, only follow the matching branch.
     const outEdges = edges.filter((e) => {
       if (e.source !== node.id) return false;
-      if (e.sourceHandle === "true" || e.sourceHandle === "false") {
-        return conditionResults.get(node.id) === (e.sourceHandle === "true");
+      const branch = e.sourceHandle === "true" || e.sourceHandle?.startsWith("true-")
+        ? true
+        : e.sourceHandle === "false" || e.sourceHandle?.startsWith("false-")
+          ? false
+          : undefined;
+      if (branch !== undefined) {
+        return conditionResults.get(node.id) === branch;
       }
       return true;
     });

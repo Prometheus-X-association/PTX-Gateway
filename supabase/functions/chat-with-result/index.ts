@@ -141,6 +141,8 @@ interface LlmInsightsConfig {
 interface ChatRequest {
   messages: Array<{ role: string; content: string }>;
   result?: unknown;
+  /** Immediate input received from the previous workflow node. */
+  inputData?: unknown;
   org_execution_token?: string;
   agentId?: string;
   /** Inline agent: system prompt provided directly, bypassing agent lookup */
@@ -589,6 +591,234 @@ const formatAgentSkill = (skill: AgentSkill): string => {
   return `# Agent Skill: ${skill.name || skill.id} (v${skill.version || 1})\nActivation: ${skill.description || ""}\nObjective: ${skill.objective || ""}\nOutput type: ${skill.outputType || "text"}\n\n## Required information\n${requiredInputs}\n\n## Procedure\n${skill.instructions || ""}\n\n## Output template\n${skill.outputTemplate || ""}${references ? `\n\n## Supporting resources\n${references}` : ""}`.slice(0, 40_000);
 };
 
+// Build a deterministic, compact structural index before asking the model to
+// reason over raw JSON. This is especially useful for older/smaller models that
+// struggle to infer hierarchy and exact collection sizes from serialized data.
+const describeJsonStructure = (value: unknown, parsedFromString = false): string => {
+
+  type PathStat = {
+    types: Set<string>;
+    occurrences: number;
+    keys: Set<string>;
+    arrayInstances: number;
+    arrayItems: number;
+    minLength?: number;
+    maxLength?: number;
+  };
+  const paths = new Map<string, PathStat>();
+  const totals = { objects: 0, arrays: 0, fields: 0, arrayItems: 0, strings: 0, numbers: 0, booleans: 0, nulls: 0 };
+  const seen = new WeakSet<object>();
+  const MAX_VALUES = 100_000;
+  const MAX_PATHS = 300;
+  let visited = 0;
+  let maxDepth = 0;
+  let truncated = false;
+
+  const valueType = (item: unknown): string => item === null ? "null" : Array.isArray(item) ? "array" : typeof item;
+  const childPath = (path: string, key: string): string => /^[A-Za-z_$][\w$]*$/.test(key)
+    ? `${path}.${key}`
+    : `${path}[${JSON.stringify(key)}]`;
+  const statFor = (path: string): PathStat | null => {
+    const existing = paths.get(path);
+    if (existing) return existing;
+    if (paths.size >= MAX_PATHS) return null;
+    const created: PathStat = { types: new Set(), occurrences: 0, keys: new Set(), arrayInstances: 0, arrayItems: 0 };
+    paths.set(path, created);
+    return created;
+  };
+
+  const visit = (item: unknown, path: string, depth: number) => {
+    if (visited >= MAX_VALUES) { truncated = true; return; }
+    visited += 1;
+    maxDepth = Math.max(maxDepth, depth);
+    const type = valueType(item);
+    const stat = statFor(path);
+    if (stat) { stat.types.add(type); stat.occurrences += 1; }
+
+    if (Array.isArray(item)) {
+      totals.arrays += 1;
+      totals.arrayItems += item.length;
+      if (stat) {
+        stat.arrayInstances += 1;
+        stat.arrayItems += item.length;
+        stat.minLength = stat.minLength === undefined ? item.length : Math.min(stat.minLength, item.length);
+        stat.maxLength = stat.maxLength === undefined ? item.length : Math.max(stat.maxLength, item.length);
+      }
+      if (seen.has(item)) return;
+      seen.add(item);
+      for (const child of item) {
+        if (truncated) break;
+        visit(child, `${path}[]`, depth + 1);
+      }
+      return;
+    }
+
+    if (item && typeof item === "object") {
+      totals.objects += 1;
+      const record = item as Record<string, unknown>;
+      const keys = Object.keys(record);
+      totals.fields += keys.length;
+      if (stat) keys.forEach((key) => stat.keys.add(key));
+      if (seen.has(item)) return;
+      seen.add(item);
+      for (const key of keys) {
+        if (truncated) break;
+        visit(record[key], childPath(path, key), depth + 1);
+      }
+      return;
+    }
+
+    if (item === null) totals.nulls += 1;
+    else if (typeof item === "string") totals.strings += 1;
+    else if (typeof item === "number") totals.numbers += 1;
+    else if (typeof item === "boolean") totals.booleans += 1;
+  };
+
+  visit(value, "$", 0);
+  const rows = [...paths.entries()].map(([path, stat]) => {
+    const details: string[] = [`type=${[...stat.types].join("|")}`, `occurrences=${stat.occurrences}`];
+    if (stat.arrayInstances > 0) {
+      details.push(`array_instances=${stat.arrayInstances}`, `total_items=${stat.arrayItems}`);
+      details.push(stat.minLength === stat.maxLength ? `length=${stat.minLength}` : `length_range=${stat.minLength}..${stat.maxLength}`);
+    }
+    if (stat.keys.size > 0) {
+      const keys = [...stat.keys];
+      details.push(`fields=${keys.length}`, `keys=[${keys.slice(0, 30).join(", ")}${keys.length > 30 ? ", …" : ""}]`);
+    }
+    return `- ${path}: ${details.join("; ")}`;
+  });
+
+  return [
+    "## Structured Data Map (machine-derived)",
+    "Use this map to understand hierarchy and exact counts. `$` is the root; `[]` means each repeated array element. Paths preserve parent-child relationships. Do not estimate array sizes from the raw text when an explicit length is listed here.",
+    parsedFromString ? "The input arrived as text but contained valid JSON, so it was parsed for this map." : null,
+    `Summary: root_type=${valueType(value)}; object_instances=${totals.objects}; array_instances=${totals.arrays}; object_fields_total=${totals.fields}; array_items_total=${totals.arrayItems}; primitive_values={strings:${totals.strings}, numbers:${totals.numbers}, booleans:${totals.booleans}, nulls:${totals.nulls}}; max_depth=${maxDepth}; scanned_values=${visited}${truncated ? ` (scan capped at ${MAX_VALUES}; later counts may be partial)` : " (complete scan)"}.`,
+    "### Path index",
+    ...rows,
+    paths.size >= MAX_PATHS ? `- … path index capped at ${MAX_PATHS} unique paths; raw data remains below.` : null,
+  ].filter(Boolean).join("\n").slice(0, 16_000);
+};
+
+const describeXmlStructure = (xml: string): string | null => {
+  const source = xml.trim();
+  if (!/^<\?xml\b|^<[A-Za-z_][\w:.-]*(?:\s|>|\/)/.test(source)) return null;
+
+  type XmlPathStat = { occurrences: number; attributes: Set<string>; children: Set<string> };
+  const paths = new Map<string, XmlPathStat>();
+  const stack: string[] = [];
+  const MAX_ELEMENTS = 100_000;
+  const MAX_PATHS = 300;
+  let elements = 0;
+  let attributes = 0;
+  let maxDepth = 0;
+  let root = "";
+  let truncated = false;
+  const tagPattern = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<![^>]*>|<\/?[A-Za-z_][\w:.-]*(?:\s[^<>]*?)?\/?>/g;
+
+  for (const match of source.matchAll(tagPattern)) {
+    const tag = match[0];
+    if (tag.startsWith("<!--") || tag.startsWith("<?") || tag.startsWith("<!")) continue;
+    const closing = /^<\//.test(tag);
+    const selfClosing = /\/\s*>$/.test(tag);
+    const nameMatch = tag.match(/^<\/?\s*([A-Za-z_][\w:.-]*)/);
+    if (!nameMatch) continue;
+    const name = nameMatch[1];
+    if (closing) {
+      const index = stack.lastIndexOf(name);
+      if (index >= 0) stack.splice(index);
+      continue;
+    }
+    if (elements >= MAX_ELEMENTS) { truncated = true; break; }
+    elements += 1;
+    if (!root) root = name;
+    const path = `$xml/${[...stack, name].join("/")}`;
+    const attributeNames = [...tag.matchAll(/\s([A-Za-z_][\w:.-]*)\s*=\s*(?:"[^"]*"|'[^']*')/g)].map((item) => item[1]);
+    attributes += attributeNames.length;
+    if (paths.size < MAX_PATHS || paths.has(path)) {
+      const stat = paths.get(path) ?? { occurrences: 0, attributes: new Set<string>(), children: new Set<string>() };
+      stat.occurrences += 1;
+      attributeNames.forEach((attribute) => stat.attributes.add(attribute));
+      paths.set(path, stat);
+      const parentPath = stack.length > 0 ? `$xml/${stack.join("/")}` : null;
+      if (parentPath && paths.has(parentPath)) paths.get(parentPath)!.children.add(name);
+    }
+    if (!selfClosing) {
+      stack.push(name);
+      maxDepth = Math.max(maxDepth, stack.length);
+    }
+  }
+
+  if (!root || elements === 0) return null;
+  const rows = [...paths.entries()].map(([path, stat]) => {
+    const details = [`elements=${stat.occurrences}`];
+    if (stat.attributes.size > 0) details.push(`attributes=[${[...stat.attributes].join(", ")}]`);
+    if (stat.children.size > 0) details.push(`child_elements=[${[...stat.children].join(", ")}]`);
+    return `- ${path}: ${details.join("; ")}`;
+  });
+  return [
+    "## Structured XML Map (machine-derived)",
+    "Use this map to understand XML hierarchy and repeated elements. Paths preserve parent-child relationships. Element text remains unchanged in the raw input below.",
+    `Summary: format=xml; root=${root}; element_instances=${elements}; attributes_total=${attributes}; max_depth=${maxDepth}${truncated ? `; scan capped at ${MAX_ELEMENTS} elements` : "; complete scan"}.`,
+    "### XML path index",
+    ...rows,
+    paths.size >= MAX_PATHS ? `- … path index capped at ${MAX_PATHS} unique paths; raw XML remains below.` : null,
+  ].filter(Boolean).join("\n").slice(0, 16_000);
+};
+
+const describeStructuredData = (input: unknown): string | null => {
+  if (Array.isArray(input) || (input !== null && typeof input === "object")) {
+    const embedded: string[] = [];
+    const seen = new WeakSet<object>();
+    const inspectEmbedded = (value: unknown, path: string) => {
+      if (embedded.length >= 8) return;
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        let description: string | null = null;
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed) || (parsed !== null && typeof parsed === "object")) {
+              description = describeJsonStructure(parsed, true);
+            }
+          } catch { /* unstructured text */ }
+        }
+        description ??= describeXmlStructure(trimmed);
+        if (description) embedded.push(`### Structured subsection at ${path}\n${description.slice(0, 4_000)}`);
+        return;
+      }
+      if (!value || typeof value !== "object" || seen.has(value)) return;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        for (const child of value) {
+          if (embedded.length >= 8) break;
+          inspectEmbedded(child, `${path}[]`);
+        }
+      } else {
+        for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+          if (embedded.length >= 8) break;
+          inspectEmbedded(child, `${path}.${key}`);
+        }
+      }
+    };
+    inspectEmbedded(input, "$");
+    const primary = describeJsonStructure(input);
+    return embedded.length > 0
+      ? `${primary}\n\n## Embedded structured fields\n${embedded.join("\n\n")}`.slice(0, 24_000)
+      : primary;
+  }
+  if (typeof input !== "string") return null;
+  const trimmed = input.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed) || (parsed !== null && typeof parsed === "object")) {
+        return describeJsonStructure(parsed, true);
+      }
+    } catch { /* unstructured text that resembles JSON */ }
+  }
+  return describeXmlStructure(trimmed);
+};
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 serve(async (req: Request) => {
@@ -692,15 +922,25 @@ serve(async (req: Request) => {
     typeof x === "object" && x !== null && (x as Record<string, unknown>).__doc_context === true;
 
   const clipJson = (v: unknown, limit = 40000): string => {
-    const s = JSON.stringify(v, null, 2);
+    const serialized = JSON.stringify(v, null, 2);
+    const s = serialized === undefined ? String(v) : serialized;
     return s.length > limit ? `${s.slice(0, limit)}\n...<truncated>` : s;
+  };
+
+  const formatDataContext = (label: string, value: unknown): string => {
+    const structure = describeStructuredData(value);
+    const raw = typeof value === "string"
+      ? (value.length > 40000 ? `${value.slice(0, 40000)}\n...<truncated>` : value)
+      : clipJson(value);
+    return structure
+      ? `\n## ${label}\n${structure}\n\n### Raw ${label.toLowerCase()}\n${raw}`
+      : `\n## ${label} (unstructured)\n${raw}`;
   };
 
   let contextBlock: string | null = null;
   if (body.result !== undefined) {
     if (isDocContextPayload(body.result)) {
-      const resultStr = clipJson(body.result.result);
-      const parts: string[] = [`\n---\nResult dataset (JSON):\n${resultStr}`];
+      const parts: string[] = [`\n---${formatDataContext("Result data", body.result.result)}`];
 
       if (body.result.docText) {
         // Full document text — no chunking needed
@@ -719,8 +959,12 @@ serve(async (req: Request) => {
       contextBlock = parts.join("");
     } else {
       // No document context — full result JSON only
-      contextBlock = `\n---\nResult dataset (JSON):\n${clipJson(body.result)}`;
+      contextBlock = `\n---${formatDataContext("Result data", body.result)}`;
     }
+  }
+  if (body.inputData !== undefined && body.inputData !== null) {
+    const inputBlock = formatDataContext("Current node input", body.inputData);
+    contextBlock = `${contextBlock ?? "\n---"}${inputBlock}`;
   }
 
   // Append output instructions as a dedicated section

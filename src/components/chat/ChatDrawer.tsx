@@ -813,9 +813,8 @@ const ChatDrawer = ({
           // Resolve inline vs existing agent
           const isInline = !!agentConfig.inline;
 
-          // Inline agents receive only the fields they actually need — not the full analytics
-          // JSON (which causes LLMs to extract sentences from node labels) and not _acc
-          // (the growing accumulated array — n-accumulate now reads it directly via getNodeOutput).
+          // Prepare the immediate node input independently from the always-present
+          // result dataset. Drop _acc because accumulation nodes read it directly.
           const inlineResult = (() => {
             if (!prevOutput || typeof prevOutput !== "object") return prevOutput;
             // Strip _acc so it never reaches the LLM context
@@ -823,11 +822,9 @@ const ChatDrawer = ({
             void _dropped;
             return rest;
           })();
-          const contextPayload = isInline
-            ? { __doc_context: true, result: inlineResult, docText }
-            : (prevOutput !== null || docText)
-              ? { __doc_context: true, result: resultData, prevOutput, docText }
-              : resultData;
+          const contextPayload = docText
+            ? { __doc_context: true, result: resultData, docText }
+            : resultData;
           const agentId = isInline ? undefined : agentConfig.agentId;
           const systemPromptOverride = isInline ? agentConfig.inline!.systemPrompt : undefined;
           const outputType = isInline ? agentConfig.inline!.outputType : undefined;
@@ -845,6 +842,7 @@ const ChatDrawer = ({
             body: JSON.stringify({
               messages: [{ role: "user", content: prompt }],
               result: contextPayload,
+              inputData: inlineResult,
               organizationId,
               org_execution_token: orgExecutionToken,
               agentId,
