@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { WorkflowBuilder } from "@/components/admin/WorkflowBuilder";
 import type { WorkflowConfig, AgentWorkflow } from "@/types/workflow";
-import type { AgentStub } from "@/components/admin/WorkflowBuilder";
+import type { AgentStub, SkillStub } from "@/components/admin/WorkflowBuilder";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -59,11 +59,13 @@ const NodePill = ({ type, label }: { type: string; label: string }) => {
 interface EditPanelProps {
   config: WorkflowConfig;
   agents: AgentStub[];
+  skills: SkillStub[];
+  organizationId?: string;
   onChange: (updated: WorkflowConfig) => void;
   onClose: () => void;
 }
 
-const EditPanel = ({ config, agents, onChange, onClose }: EditPanelProps) => (
+const EditPanel = ({ config, agents, skills, organizationId, onChange, onClose }: EditPanelProps) => (
   <div className="border-t bg-muted/20 p-4 space-y-4">
     <div className="flex items-center justify-between">
       <h4 className="text-sm font-semibold">Edit: {config.name}</h4>
@@ -95,6 +97,8 @@ const EditPanel = ({ config, agents, onChange, onClose }: EditPanelProps) => (
     <WorkflowBuilder
       workflow={config.graph}
       agents={agents}
+      skills={skills}
+      organizationId={organizationId}
       onChange={(graph: AgentWorkflow) => onChange({ ...config, graph })}
     />
   </div>
@@ -108,6 +112,8 @@ interface RowProps {
   total: number;
   isEditing: boolean;
   agents: AgentStub[];
+  skills: SkillStub[];
+  organizationId?: string;
   onToggleEdit: () => void;
   onChange: (updated: WorkflowConfig) => void;
   onDuplicate: () => void;
@@ -116,7 +122,7 @@ interface RowProps {
 }
 
 const WorkflowRow = ({
-  config, index, total, isEditing, agents,
+  config, index, total, isEditing, agents, skills, organizationId,
   onToggleEdit, onChange, onDuplicate, onRemove, onMove,
 }: RowProps) => {
   const nodeCount = config.graph.nodes.length;
@@ -217,6 +223,8 @@ const WorkflowRow = ({
         <EditPanel
           config={config}
           agents={agents}
+          skills={skills}
+          organizationId={organizationId}
           onChange={onChange}
           onClose={onToggleEdit}
         />
@@ -230,10 +238,12 @@ const WorkflowRow = ({
 interface WorkflowsManagementProps {
   workflows: WorkflowConfig[];
   agents: AgentStub[];
+  skills: SkillStub[];
+  organizationId?: string;
   onChange: (workflows: WorkflowConfig[]) => void;
 }
 
-export const WorkflowsManagement = ({ workflows, agents, onChange }: WorkflowsManagementProps) => {
+export const WorkflowsManagement = ({ workflows, agents, skills, organizationId, onChange }: WorkflowsManagementProps) => {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const update = (index: number, updated: WorkflowConfig) => {
@@ -313,6 +323,8 @@ export const WorkflowsManagement = ({ workflows, agents, onChange }: WorkflowsMa
               total={workflows.length}
               isEditing={editingId === wf.id}
               agents={agents}
+              skills={skills}
+              organizationId={organizationId}
               onToggleEdit={() => setEditingId(editingId === wf.id ? null : wf.id)}
               onChange={(updated) => update(i, updated)}
               onDuplicate={() => duplicate(i)}

@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -14,10 +15,13 @@ import {
   Loader2, Brain, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Eye, EyeOff, Server, Zap, RotateCcw, Bot, MessageSquarePlus,
   Pencil, X, ChevronsUpDown, Info, Link2, FlaskConical,
-  CheckCircle2, XCircle, ChevronRight, Wrench, Workflow,
+  CheckCircle2, XCircle, ChevronRight, Wrench, Workflow, BookOpen,
 } from "lucide-react";
 import { WorkflowsManagement } from "@/components/admin/WorkflowsManagement";
+import { AgentSkillsManagement } from "@/components/admin/AgentSkillsManagement";
 import type { WorkflowConfig } from "@/types/workflow";
+import type { AgentSkill } from "@/types/agentSkill";
+import { createSkillsFrameworkMapperTemplate } from "@/types/agentSkill";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -46,13 +50,15 @@ interface LlmAgent {
   name: string;
   description: string;
   systemPrompt: string;
-  expectedOutput: "text" | "json" | "html" | "mixed";
+  expectedOutput: "auto" | "text" | "json" | "html" | "mixed";
+  fallbackOutput: "text" | "json" | "html" | "mixed";
   outputInstructions: string;
   mcpServerIds: string[];
   mcpToolFilter: Record<string, string[]>;
   providerIds: string[];
   agentProviders: LlmProvider[];
   defaultPrompts: string[];
+  skillIds: string[];
   enabled: boolean;
   ragSources: "all" | "result" | "document" | "none";
   ragMode: "auto" | "chunks" | "none"; // auto = full doc if small, chunks if large
@@ -64,6 +70,7 @@ interface LlmInsightsConfig {
   providers: LlmProvider[];
   mcpServers: McpServer[];
   agents: LlmAgent[];
+  skills: AgentSkill[];
   predefinedPrompts: string[];
   workflows: WorkflowConfig[];
 }
@@ -98,6 +105,13 @@ const OUTPUT_OPTIONS: Array<{
   color: string;
   defaultInstructions: string;
 }> = [
+  {
+    value: "auto",
+    label: "Auto / Skill-controlled",
+    description: "Activated skill controls output; otherwise the fallback applies",
+    color: "bg-slate-500/15 text-slate-600 dark:text-slate-300 border-slate-500/30",
+    defaultInstructions: "",
+  },
   {
     value: "text",
     label: "Text",
@@ -154,8 +168,9 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "General data analysis, insights, and trend identification",
     systemPrompt: DATA_ANALYST_PROMPT,
     expectedOutput: "text",
+    fallbackOutput: "text",
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
-    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
     defaultPrompts: [
       "Summarize the key findings in 3 bullet points",
       "Which item has the highest value and why might that be?",
@@ -170,8 +185,9 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "Creates interactive ECharts visualizations from data",
     systemPrompt: CHART_BUILDER_PROMPT,
     expectedOutput: "html",
+    fallbackOutput: "html",
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "html")!.defaultInstructions,
-    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
     defaultPrompts: [
       "Show me a bar chart of the top 10 results",
       "Create a pie chart of the data distribution",
@@ -186,8 +202,9 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "Full analysis with written insights and a chart visualization",
     systemPrompt: AI_INSIGHT_PROMPT,
     expectedOutput: "mixed",
+    fallbackOutput: "mixed",
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "mixed")!.defaultInstructions,
-    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
     defaultPrompts: [
       "Generate a complete AI insight with visualization for this data",
       "Give me a business summary with a supporting chart",
@@ -201,9 +218,10 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     description: "Returns structured JSON with summary, insights, and a switchable chart spec",
     systemPrompt: SWITCHABLE_CHART_PROMPT,
     expectedOutput: "json",
+    fallbackOutput: "json",
     outputInstructions:
       'Return ONLY valid JSON. No markdown, no code fences.\n\nRequired keys:\n- "summary": string\n- "insights": string[]\n- "visualization": { "type": "bar"|"line"|"pie"|"scatter"|"area", "data": array, "labels"?: string[] }',
-    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+    mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
     defaultPrompts: [
       "Analyze this data and generate an interactive chart I can switch between types",
       "Generate a summary with insights and a switchable visualization",
@@ -218,7 +236,9 @@ const DEFAULT_CONFIG: LlmInsightsConfig = {
   providers: [],
   mcpServers: [],
   agents: DEFAULT_AGENTS,
+  skills: [createSkillsFrameworkMapperTemplate()],
   predefinedPrompts: [],
+  workflows: [],
 };
 
 const DEFAULT_GLOBAL_SNAPSHOT: GlobalConfigSnapshot = {
@@ -253,8 +273,10 @@ const emptyAgent = (): LlmAgent => ({
   id: uid(), name: "New Agent", description: "",
   systemPrompt: "You are a helpful data assistant. Answer questions about the result data clearly and concisely.",
   expectedOutput: "text",
+  fallbackOutput: "text",
   outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
   mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], defaultPrompts: [], enabled: true,
+  skillIds: [],
   ragSources: "all", ragMode: "auto", ragTopK: 20,
 });
 
@@ -292,14 +314,17 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         const raw = String(a.expectedOutput ?? "text");
         if (raw === "echarts") return "html";
         if (raw === "table") return "text";
-        return (["text", "json", "html", "mixed"].includes(raw) ? raw : "text") as LlmAgent["expectedOutput"];
+        return (["auto", "text", "json", "html", "mixed"].includes(raw) ? raw : "text") as LlmAgent["expectedOutput"];
       })(),
+      fallbackOutput: (["text", "json", "html", "mixed"].includes(String(a.fallbackOutput))
+        ? a.fallbackOutput
+        : (["text", "json", "html", "mixed"].includes(String(a.expectedOutput)) ? a.expectedOutput : "text")) as LlmAgent["fallbackOutput"],
       outputInstructions: typeof a.outputInstructions === "string" && a.outputInstructions
         ? a.outputInstructions
         : (() => {
             const raw = String(a.expectedOutput ?? "text");
             const mapped = raw === "echarts" ? "html" : raw === "table" ? "text" : raw;
-            return OUTPUT_OPTIONS.find((o) => o.value === mapped)?.defaultInstructions ?? OUTPUT_OPTIONS[0].defaultInstructions;
+            return OUTPUT_OPTIONS.find((o) => o.value === mapped)?.defaultInstructions ?? OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions;
           })(),
       mcpServerIds: Array.isArray(a.mcpServerIds) ? (a.mcpServerIds as unknown[]).map(String) : [],
       mcpToolFilter: (a.mcpToolFilter && typeof a.mcpToolFilter === "object" && !Array.isArray(a.mcpToolFilter))
@@ -319,11 +344,14 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
           }))
         : [],
       defaultPrompts: Array.isArray(a.defaultPrompts) ? (a.defaultPrompts as unknown[]).map(String).filter(Boolean) : [],
+      skillIds: Array.isArray(a.skillIds) ? (a.skillIds as unknown[]).map(String) : [],
       enabled: a.enabled !== false,
       ragSources: (["all", "result", "document", "none"].includes(String(a.ragSources ?? "")) ? a.ragSources : "all") as LlmAgent["ragSources"],
       ragMode: (["auto", "chunks", "none"].includes(String(a.ragMode ?? "")) ? a.ragMode : "auto") as LlmAgent["ragMode"],
       ragTopK: typeof a.ragTopK === "number" && a.ragTopK > 0 ? a.ragTopK : 20,
-    }));
+    })).map((agent) => agent.skillIds.length > 0 && agent.expectedOutput !== "auto"
+      ? { ...agent, fallbackOutput: agent.expectedOutput, expectedOutput: "auto" as const }
+      : agent);
   } else {
     // Legacy: if there's a chatSystemPrompt, create a single agent from it
     const legacyPrompt = typeof raw.chatSystemPrompt === "string" ? raw.chatSystemPrompt.trim() : "";
@@ -335,10 +363,12 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         ...DEFAULT_AGENTS[0],
         id: uid(),
         systemPrompt: legacyPrompt,
-        outputInstructions: OUTPUT_OPTIONS[0].defaultInstructions,
+        outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
+        fallbackOutput: "text",
         mcpToolFilter: {},
         providerIds: [],
         agentProviders: [],
+        skillIds: [],
         defaultPrompts: legacyPredefined.length > 0 ? legacyPredefined : DEFAULT_AGENTS[0].defaultPrompts,
       }, DEFAULT_AGENTS[1], DEFAULT_AGENTS[2]];
     } else {
@@ -351,6 +381,35 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
   const predefinedPrompts: string[] = Array.isArray(raw.predefinedPrompts) && Array.isArray(raw.agents)
     ? (raw.predefinedPrompts as unknown[]).map(String).filter(Boolean)
     : [];
+
+  const skills: AgentSkill[] = Array.isArray(raw.skills)
+    ? (raw.skills as AgentSkill[]).map((skill) => ({
+        id: String(skill.id || uid()),
+        name: String(skill.name || "Agent Skill"),
+        description: String(skill.description || ""),
+        objective: String(skill.objective || ""),
+        instructions: String(skill.instructions || ""),
+        requiredInputs: Array.isArray(skill.requiredInputs) ? skill.requiredInputs.map((field) => ({
+          id: String(field.id || uid()),
+          key: String(field.key || ""),
+          label: String(field.label || ""),
+          type: (["text", "number", "boolean", "json", "document"].includes(String(field.type)) ? field.type : "text") as AgentSkill["requiredInputs"][number]["type"],
+          description: String(field.description || ""),
+          required: field.required !== false,
+          defaultValue: typeof field.defaultValue === "string" ? field.defaultValue : undefined,
+        })) : [],
+        outputTemplate: String(skill.outputTemplate || ""),
+        outputType: (["text", "json", "html", "mixed"].includes(String(skill.outputType)) ? skill.outputType : "text") as AgentSkill["outputType"],
+        references: Array.isArray(skill.references) ? skill.references.map((reference) => ({
+          id: String(reference.id || uid()),
+          name: String(reference.name || ""),
+          description: String(reference.description || ""),
+          content: String(reference.content || ""),
+        })) : [],
+        enabled: skill.enabled !== false,
+        version: typeof skill.version === "number" && skill.version > 0 ? skill.version : 1,
+      }))
+    : [createSkillsFrameworkMapperTemplate()];
 
   // Workflows — migrate from old single `workflow` field if present, then use array
   let workflows: WorkflowConfig[] = [];
@@ -378,7 +437,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
     }
   }
 
-  return { enabled: Boolean(raw.enabled ?? false), providers, mcpServers, agents, predefinedPrompts, workflows };
+  return { enabled: Boolean(raw.enabled ?? false), providers, mcpServers, agents, skills, predefinedPrompts, workflows };
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -842,6 +901,7 @@ const AgentTableRow = ({ agent, index, total, isEditing, mcpServers, onToggleEdi
 
 interface AgentEditPanelProps {
   agent: LlmAgent;
+  skills: AgentSkill[];
   mcpServers: McpServer[];
   globalProviders: LlmProvider[];
   supabaseClient: typeof supabase;
@@ -850,7 +910,7 @@ interface AgentEditPanelProps {
   onClose: () => void;
 }
 
-const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, organizationId, onChange, onClose }: AgentEditPanelProps) => {
+const AgentEditPanel = ({ agent, skills, mcpServers, globalProviders, supabaseClient, organizationId, onChange, onClose }: AgentEditPanelProps) => {
   const [showAgentProviderKey, setShowAgentProviderKey] = useState<string | null>(null);
   // per-server tool discovery state
   const [serverTools, setServerTools] = useState<Record<string, { loading: boolean; tools: McpTool[]; error?: string }>>({});
@@ -916,6 +976,19 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
     if (showAgentProviderKey === removed?.id) setShowAgentProviderKey(null);
   };
 
+  const toggleSkill = (skillId: string) => {
+    const selected = agent.skillIds.includes(skillId);
+    const skillIds = selected
+      ? agent.skillIds.filter((id) => id !== skillId)
+      : [...agent.skillIds, skillId];
+    if (skillIds.length > 0) {
+      const fallbackOutput = agent.expectedOutput === "auto" ? agent.fallbackOutput : agent.expectedOutput;
+      onChange({ ...agent, skillIds, expectedOutput: "auto", fallbackOutput });
+    } else {
+      onChange({ ...agent, skillIds, expectedOutput: agent.fallbackOutput });
+    }
+  };
+
   return (
     <div className="border-t border-primary/20 bg-muted/20 px-4 pt-4 pb-5 space-y-4">
       {/* Panel header */}
@@ -953,6 +1026,31 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
         </p>
       </div>
 
+      {/* Agent Skills */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs">Agent Skills</Label>
+          <span className="text-[10px] text-muted-foreground">Reusable playbooks injected into this agent</span>
+        </div>
+        {skills.filter((skill) => skill.enabled).length === 0 ? (
+          <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No enabled skills. Create one in the Agent Skills tab.</p>
+        ) : (
+          <div className="grid gap-2 md:grid-cols-2">
+            {skills.filter((skill) => skill.enabled).map((skill) => {
+              const selected = agent.skillIds.includes(skill.id);
+              return (
+                <button key={skill.id} type="button"
+                  onClick={() => toggleSkill(skill.id)}
+                  className={`rounded-lg border p-3 text-left transition-colors ${selected ? "border-primary/50 bg-primary/10" : "bg-background hover:border-primary/40"}`}>
+                  <div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold">{skill.name}</span><Badge variant="outline" className="text-[9px]">v{skill.version}</Badge></div>
+                  <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">{skill.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Output Format */}
       <div className="space-y-2.5">
         <div className="flex items-center justify-between">
@@ -960,13 +1058,21 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
           <span className="text-[10px] text-muted-foreground">Controls how the chat renders the response</span>
         </div>
 
+        {agent.skillIds.length > 0 && (
+          <div className="rounded-md border border-slate-300 bg-slate-100 px-3 py-2 text-[10px] text-slate-600 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-300">
+            Output is skill-controlled. The most recently activated skill sets the response type; if no skill activates, <strong>{agent.fallbackOutput}</strong> is used.
+          </div>
+        )}
+
         {/* Type pills */}
-        <div className="flex flex-wrap gap-2">
+        <div className={`flex flex-wrap gap-2 ${agent.skillIds.length > 0 ? "opacity-55" : ""}`}>
           {OUTPUT_OPTIONS.map((opt) => (
             <button key={opt.value} type="button"
+              disabled={agent.skillIds.length > 0 || opt.value === "auto"}
               onClick={() => onChange({
                 ...agent,
                 expectedOutput: opt.value,
+                fallbackOutput: opt.value === "auto" ? agent.fallbackOutput : opt.value,
                 outputInstructions: agent.outputInstructions || opt.defaultInstructions,
               })}
               className={`inline-flex flex-col items-start px-3 py-2 rounded-lg border text-xs transition-all ${
@@ -985,16 +1091,18 @@ const AgentEditPanel = ({ agent, mcpServers, globalProviders, supabaseClient, or
           <div className="flex items-center justify-between">
             <Label className="text-xs">Output Instructions</Label>
             <button type="button"
+              disabled={agent.skillIds.length > 0}
               className="text-[10px] text-primary hover:underline"
               onClick={() => {
-                const preset = OUTPUT_OPTIONS.find((o) => o.value === agent.expectedOutput);
+                const preset = OUTPUT_OPTIONS.find((o) => o.value === (agent.expectedOutput === "auto" ? agent.fallbackOutput : agent.expectedOutput));
                 if (preset) onChange({ ...agent, outputInstructions: preset.defaultInstructions });
               }}>
               Reset to preset
             </button>
           </div>
           <Textarea
-            className="text-xs font-mono min-h-[100px]"
+            disabled={agent.skillIds.length > 0}
+            className={`text-xs font-mono min-h-[100px] ${agent.skillIds.length > 0 ? "bg-muted text-muted-foreground" : ""}`}
             rows={6}
             placeholder="Describe exactly what format the LLM should return…"
             value={agent.outputInstructions}
@@ -1416,6 +1524,49 @@ const LlmSettingsSection = () => {
   }, [user?.organization?.id]);
 
   const patchLlm = (patch: Partial<LlmInsightsConfig>) => setLlm((prev) => ({ ...prev, ...patch }));
+  const updateSkills = (skills: AgentSkill[]) => {
+    const validIds = new Set(skills.map((skill) => skill.id));
+    setLlm((prev) => ({
+      ...prev,
+      skills,
+      agents: prev.agents.map((agent) => {
+        const skillIds = agent.skillIds.filter((id) => validIds.has(id));
+        return {
+          ...agent,
+          skillIds,
+          expectedOutput: agent.skillIds.length > 0 && skillIds.length === 0
+            ? agent.fallbackOutput
+            : agent.expectedOutput,
+        };
+      }),
+      workflows: prev.workflows.map((workflow) => ({
+        ...workflow,
+        graph: {
+          ...workflow.graph,
+          nodes: workflow.graph.nodes.map((node) => {
+            if (node.type !== "agent") return node;
+            const data = node.data as {
+              skillIds?: string[];
+              inlineOutputType?: "auto" | "text" | "json" | "html" | "mixed";
+              inlineFallbackOutputType?: "text" | "json" | "html" | "mixed";
+            };
+            if (!Array.isArray(data.skillIds)) return node;
+            const skillIds = data.skillIds.filter((id) => validIds.has(id));
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                skillIds,
+                inlineOutputType: data.skillIds.length > 0 && skillIds.length === 0
+                  ? (data.inlineFallbackOutputType ?? "text")
+                  : data.inlineOutputType,
+              },
+            };
+          }),
+        },
+      })),
+    }));
+  };
 
   const updateProvider = (i: number, updated: LlmProvider) =>
     patchLlm({ providers: llm.providers.map((p, j) => (j === i ? updated : p)) });
@@ -1445,6 +1596,19 @@ const LlmSettingsSection = () => {
 
   const handleSave = async () => {
     if (!user?.organization?.id) return;
+    const invalidSkill = llm.skills.find((skill) => {
+      const inputKeys = skill.requiredInputs.map((field) => field.key.trim()).filter(Boolean);
+      const hasInvalidInput = skill.requiredInputs.some((field) => !field.key.trim() || !field.label.trim());
+      const hasDuplicateInput = new Set(inputKeys).size !== inputKeys.length;
+      const hasInvalidReference = skill.references.some((reference) => !reference.name.trim() || !reference.content.trim());
+      return !skill.name.trim() || !skill.description.trim() || !skill.objective.trim() ||
+        !skill.instructions.trim() || !skill.outputTemplate.trim() || hasInvalidInput ||
+        hasDuplicateInput || hasInvalidReference;
+    });
+    if (invalidSkill) {
+      toast.error(`Complete the required fields and use unique input keys for “${invalidSkill.name || "Unnamed skill"}”`);
+      return;
+    }
     setIsSaving(true);
     try {
       const { error } = await supabase.from("global_configs").upsert({
@@ -1494,10 +1658,35 @@ const LlmSettingsSection = () => {
           <Switch checked={llm.enabled} onCheckedChange={(v) => patchLlm({ enabled: v })} />
         </div>
 
-        <Separator />
+        <Tabs defaultValue="providers" className="space-y-5">
+          <TabsList className="grid h-auto w-full grid-cols-1 gap-1 rounded-xl bg-muted/60 p-1 sm:grid-cols-2 lg:grid-cols-4">
+            <TabsTrigger value="providers" className="gap-2 rounded-lg py-2.5">
+              <Server className="h-4 w-4" />
+              Providers &amp; MCP
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">
+                {llm.providers.length + llm.mcpServers.length}
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="skills" className="gap-2 rounded-lg py-2.5">
+              <BookOpen className="h-4 w-4" />
+              Agent Skills
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.skills.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="agents" className="gap-2 rounded-lg py-2.5">
+              <Bot className="h-4 w-4" />
+              AI Agents
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.agents.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="workflows" className="gap-2 rounded-lg py-2.5">
+              <Workflow className="h-4 w-4" />
+              Agent Workflows
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.workflows.length}</Badge>
+            </TabsTrigger>
+          </TabsList>
 
-        {/* LLM Providers */}
-        <div className="space-y-3">
+          <TabsContent value="providers" className="mt-0 space-y-6 rounded-xl border bg-muted/10 p-4 sm:p-5">
+            {/* LLM Providers */}
+            <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-muted-foreground" />
             <h3 className="font-semibold text-sm">LLM Providers</h3>
@@ -1521,12 +1710,12 @@ const LlmSettingsSection = () => {
             onClick={() => patchLlm({ providers: [...llm.providers, emptyProvider()] })}>
             <Plus className="h-4 w-4" /> Add Provider
           </Button>
-        </div>
+            </div>
 
-        <Separator />
+            <Separator />
 
-        {/* MCP Servers */}
-        <div className="space-y-3">
+            {/* MCP Servers */}
+            <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Server className="h-4 w-4 text-muted-foreground" />
             <h3 className="font-semibold text-sm">MCP Servers</h3>
@@ -1553,12 +1742,12 @@ const LlmSettingsSection = () => {
             onClick={() => patchLlm({ mcpServers: [...llm.mcpServers, emptyMcpServer()] })}>
             <Plus className="h-4 w-4" /> Add MCP Server
           </Button>
-        </div>
+            </div>
+          </TabsContent>
 
-        <Separator />
-
-        {/* Agents */}
-        <div className="space-y-3">
+          <TabsContent value="agents" className="mt-0 space-y-6 rounded-xl border bg-muted/10 p-4 sm:p-5">
+            {/* Agents */}
+            <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Bot className="h-4 w-4 text-muted-foreground" />
@@ -1608,7 +1797,7 @@ const LlmSettingsSection = () => {
                   />
                   {editingAgentId === agent.id && (
                     <AgentEditPanel
-                      agent={agent} mcpServers={llm.mcpServers} globalProviders={llm.providers}
+                      agent={agent} skills={llm.skills} mcpServers={llm.mcpServers} globalProviders={llm.providers}
                       supabaseClient={supabase} organizationId={user?.organization?.id}
                       onChange={(updated) => updateAgent(i, updated)}
                       onClose={() => setEditingAgentId(null)}
@@ -1623,12 +1812,12 @@ const LlmSettingsSection = () => {
             onClick={() => patchLlm({ agents: [...llm.agents, emptyAgent()] })}>
             <Plus className="h-4 w-4" /> Add Agent
           </Button>
-        </div>
+            </div>
 
-        <Separator />
+            <Separator />
 
-        {/* General Prompts — not tied to any agent */}
-        <div className="space-y-3">
+            {/* General Prompts — not tied to any agent */}
+            <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-muted-foreground" />
             <h3 className="font-semibold text-sm">General Prompts</h3>
@@ -1667,12 +1856,16 @@ const LlmSettingsSection = () => {
             onClick={() => patchLlm({ predefinedPrompts: [...llm.predefinedPrompts, ""] })}>
             <Plus className="h-4 w-4" /> Add General Prompt
           </Button>
-        </div>
+            </div>
+          </TabsContent>
 
-        <Separator />
+          <TabsContent value="skills" className="mt-0 rounded-xl border bg-muted/10 p-4 sm:p-5">
+            <AgentSkillsManagement skills={llm.skills} onChange={updateSkills} />
+          </TabsContent>
 
-        {/* Agentic Workflows */}
-        <div className="space-y-3">
+          <TabsContent value="workflows" className="mt-0 rounded-xl border bg-muted/10 p-4 sm:p-5">
+            {/* Agentic Workflows */}
+            <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Workflow className="h-4 w-4 text-muted-foreground" />
             <h3 className="font-semibold text-sm">Agentic Workflows</h3>
@@ -1685,6 +1878,8 @@ const LlmSettingsSection = () => {
           </p>
           <WorkflowsManagement
             workflows={llm.workflows ?? []}
+            organizationId={user?.organization?.id}
+            skills={llm.skills.filter((skill) => skill.enabled)}
             agents={llm.agents.filter((a) => a.enabled).map((a) => ({
               id: a.id,
               name: a.name,
@@ -1693,7 +1888,9 @@ const LlmSettingsSection = () => {
             }))}
             onChange={(workflows) => patchLlm({ workflows })}
           />
-        </div>
+            </div>
+          </TabsContent>
+        </Tabs>
 
         <Separator />
 

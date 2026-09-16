@@ -1,4 +1,5 @@
 // Authentication and Authorization Types
+import type { AgentSkill } from './agentSkill';
 
 export type AppRole = 'super_admin' | 'admin' | 'user';
 
@@ -90,7 +91,8 @@ export interface GlobalConfig {
         name: string;
         description: string;
         systemPrompt: string;
-        expectedOutput: 'text' | 'json' | 'html' | 'mixed';
+        expectedOutput: 'auto' | 'text' | 'json' | 'html' | 'mixed';
+        fallbackOutput?: 'text' | 'json' | 'html' | 'mixed';
         outputInstructions: string;
         mcpServerIds: string[];
         mcpToolFilter: Record<string, string[]>;
@@ -100,8 +102,10 @@ export interface GlobalConfig {
           apiKey: string; model: string; enabled: boolean;
         }>;
         defaultPrompts: string[];
+        skillIds: string[];
         enabled: boolean;
       }>;
+      skills?: AgentSkill[];
       // Legacy fields kept for backward compat
       insightSystemPrompt?: string;
       chatSystemPrompt?: string;

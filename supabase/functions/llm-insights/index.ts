@@ -41,9 +41,14 @@ interface LlmAgent {
   description?: string;
   systemPrompt?: string;
   expectedOutput?: string;
+  fallbackOutput?: string;
   mcpServerIds?: string[];
   defaultPrompts?: string[];
   enabled?: boolean;
+  agentProviders?: LlmProvider[];
+  ragSources?: "all" | "result" | "document" | "none";
+  ragMode?: "auto" | "chunks" | "none";
+  ragTopK?: number;
 }
 
 interface LlmInsightsConfig {
@@ -55,6 +60,7 @@ interface LlmInsightsConfig {
   mcpServers?: unknown[];
   predefinedPrompts?: string[];
   agents?: LlmAgent[];
+  workflows?: unknown[];
   // legacy flat fields (backward compat)
   apiBaseUrl?: string;
   apiKey?: string;
@@ -464,17 +470,36 @@ serve(async (req) => {
               name: String(a.name || "Agent"),
               description: String(a.description || ""),
               expectedOutput: String(a.expectedOutput || "text"),
+              fallbackOutput: String(a.fallbackOutput || (a.expectedOutput === "auto" ? "text" : a.expectedOutput) || "text"),
               defaultPrompts: Array.isArray(a.defaultPrompts)
                 ? a.defaultPrompts.map(String).filter(Boolean)
                 : [],
+              ragSources: ["all", "result", "document", "none"].includes(String(a.ragSources))
+                ? a.ragSources
+                : "all",
+              ragMode: ["auto", "chunks", "none"].includes(String(a.ragMode))
+                ? a.ragMode
+                : "auto",
+              ragTopK: typeof a.ragTopK === "number" && a.ragTopK > 0
+                ? Math.min(a.ragTopK, 100)
+                : 20,
             }))
         : [];
+
+      const freeChatConfigured = providers.some((p) => p.apiKey?.trim() && p.model?.trim());
+      const configured = freeChatConfigured ||
+        (Array.isArray(llmConfig.agents) && llmConfig.agents.some((agent) =>
+          agent.enabled !== false &&
+          Array.isArray(agent.agentProviders) &&
+          agent.agentProviders.some((p) => p.enabled !== false && p.apiKey?.trim() && p.model?.trim())
+        ));
 
       return new Response(
         JSON.stringify({
           ok: true,
           enabled: Boolean(llmConfig.enabled),
-          configured: providers.some((p) => p.apiKey?.trim() && p.model?.trim()),
+          configured,
+          freeChatConfigured,
           agents: agentList,
           predefinedPrompts: Array.isArray(llmConfig.predefinedPrompts)
             ? llmConfig.predefinedPrompts.map(String).filter(Boolean)

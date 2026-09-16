@@ -2489,9 +2489,13 @@ const ResultsView = ({
   const [isPostImportAttentionActive, setIsPostImportAttentionActive] = useState(false);
   const [reportPerformedAt] = useState<Date>(new Date());
   const [llmInsightsEnabled, setLlmInsightsEnabled] = useState(false);
+  const [llmFreeChatEnabled, setLlmFreeChatEnabled] = useState(false);
   const [llmAgents, setLlmAgents] = useState<Array<{
     id: string; name: string; description: string;
-    expectedOutput: string; defaultPrompts: string[];
+    expectedOutput: string; fallbackOutput?: string; defaultPrompts: string[];
+    ragSources: "all" | "result" | "document" | "none";
+    ragMode: "auto" | "chunks" | "none";
+    ragTopK: number;
   }>>([]);
   const [llmGlobalPrompts, setLlmGlobalPrompts] = useState<string[]>([]);
   const [llmWorkflows, setLlmWorkflows] = useState<import("@/types/workflow").WorkflowConfig[]>([]);
@@ -2690,10 +2694,13 @@ const ResultsView = ({
     const fetchLlmInsightStatus = async () => {
       if (!organizationId && !orgExecutionToken) {
         setLlmInsightsEnabled(false);
+        setLlmFreeChatEnabled(false);
         return;
       }
 
       try {
+        setLlmInsightsEnabled(false);
+        setLlmFreeChatEnabled(false);
         const headers: Record<string, string> = {};
         if (organizationId) {
           headers["x-organization-id"] = organizationId;
@@ -2708,7 +2715,10 @@ const ResultsView = ({
         });
 
         if (!isMounted) return;
-        setLlmInsightsEnabled(!error && Boolean(data?.ok) && Boolean(data?.enabled));
+        setLlmInsightsEnabled(
+          !error && Boolean(data?.ok) && Boolean(data?.enabled) && Boolean(data?.configured)
+        );
+        setLlmFreeChatEnabled(!error && Boolean(data?.freeChatConfigured));
         if (Array.isArray(data?.agents)) {
           setLlmAgents(
             (data.agents as Array<Record<string, unknown>>).map((a) => ({
@@ -2716,6 +2726,7 @@ const ResultsView = ({
               name: String(a.name || "Agent"),
               description: String(a.description || ""),
               expectedOutput: String(a.expectedOutput || "text"),
+              fallbackOutput: String(a.fallbackOutput || (a.expectedOutput === "auto" ? "text" : a.expectedOutput) || "text"),
               defaultPrompts: Array.isArray(a.defaultPrompts)
                 ? (a.defaultPrompts as unknown[]).map(String)
                 : [],
@@ -2738,6 +2749,7 @@ const ResultsView = ({
       } catch {
         if (isMounted) {
           setLlmInsightsEnabled(false);
+          setLlmFreeChatEnabled(false);
         }
       }
     };
@@ -3886,6 +3898,7 @@ const ResultsView = ({
             agents={llmAgents}
             globalPrompts={llmGlobalPrompts}
             enabled={llmInsightsEnabled}
+            freeChatEnabled={llmFreeChatEnabled}
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
             rag={rag}

@@ -22,7 +22,10 @@ export interface AgentNodeData {
   // ── inline mode ──
   inlineName?: string;
   inlineSystemPrompt?: string;
-  inlineOutputType?: "text" | "json" | "html" | "mixed";
+  inlineOutputType?: "auto" | "text" | "json" | "html" | "mixed";
+  inlineFallbackOutputType?: "text" | "json" | "html" | "mixed";
+  /** Skills attached directly to an inline workflow agent. Existing agents inherit their saved skills. */
+  skillIds?: string[];
   // ── shared ──
   promptOverride?: string;
   passPrevOutput: boolean;
@@ -82,7 +85,11 @@ export interface WorkflowEdge {
   source: string;
   target: string;
   sourceHandle?: string;
+  targetHandle?: string;
   label?: string;
+  type?: "default" | "straight" | "smoothstep" | "step";
+  /** Optional dot/bracket path selecting which part of the source output reaches the target. */
+  dataPath?: string;
 }
 
 export interface AgentWorkflow {
@@ -107,7 +114,9 @@ export interface WorkflowStepResult {
   nodeId: string;
   nodeType: NodeType;
   output: unknown;
+  input?: unknown;
   error?: string;
+  durationMs?: number;
   /** Only set for output nodes — carries the renderAs setting for final display routing */
   renderAs?: OutputNodeData["renderAs"];
 }

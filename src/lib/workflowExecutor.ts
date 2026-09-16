@@ -1,9 +1,12 @@
 import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge } from "@/types/workflow";
 import type { AgentNodeData, PluginNodeData, ConditionNodeData, TriggerNodeData } from "@/types/workflow";
+import { executeSandboxedJavascript } from "@/lib/workflowSandbox";
 
 export interface InlineAgentConfig {
   systemPrompt: string;
-  outputType: "text" | "json" | "html" | "mixed";
+  outputType: "auto" | "text" | "json" | "html" | "mixed";
+  fallbackOutputType: "text" | "json" | "html" | "mixed";
+  skillIds?: string[];
 }
 
 export interface ExecutorContext {
@@ -20,36 +23,33 @@ export interface ExecutorContext {
     prevOutput: unknown,
   ) => Promise<string>;
   onStepDone: (step: WorkflowStepResult) => void;
+  onStepStart?: (nodeId: string, input: unknown) => void;
+  /** Test/debug runs can stop immediately at the first failed node. */
+  stopOnError?: boolean;
   signal?: AbortSignal;
 }
 
 // ─── Sandboxed JS eval ────────────────────────────────────────────────────────
 
-function runPlugin(
+async function runPlugin(
   code: string,
-  input: { result: unknown; docText: string | null; prevOutput: unknown; getNodeOutput: (id: string) => unknown },
-): unknown {
+  input: { result: unknown; docText: string | null; prevOutput: unknown },
+  nodeOutputs: Record<string, unknown>,
+): Promise<unknown> {
   try {
-    // eslint-disable-next-line no-new-func
-    return new Function("input", `"use strict";\n${code}`)(input);
+    return await executeSandboxedJavascript({ operation: "plugin", code, input, nodeOutputs });
   } catch (e) {
     throw new Error(`Plugin error: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
-function evalCondition(expression: string, prevOutput: unknown): boolean {
-  try {
-    // eslint-disable-next-line no-new-func
-    return Boolean(new Function("prevOutput", `"use strict"; return !!(${expression});`)(prevOutput));
-  } catch {
-    return false;
-  }
+async function evalCondition(expression: string, prevOutput: unknown): Promise<boolean> {
+  return Boolean(await executeSandboxedJavascript({ operation: "condition", code: expression, input: prevOutput }));
 }
 
-function runTransform(code: string, prevOutput: unknown): unknown {
+async function runTransform(code: string, prevOutput: unknown): Promise<unknown> {
   try {
-    // eslint-disable-next-line no-new-func
-    return new Function("prevOutput", `"use strict";\n${code}`)(prevOutput);
+    return await executeSandboxedJavascript({ operation: "transform", code, input: prevOutput });
   } catch {
     return prevOutput;
   }
@@ -64,7 +64,20 @@ export interface WorkflowResult {
   /** true when the run was intentionally aborted by the user */
   aborted: boolean;
   error?: string;
+  stopReason?: string;
 }
+
+const selectDataPath = (value: unknown, path?: string): unknown => {
+  const normalized = path?.trim().replace(/^\$\.?/, "");
+  if (!normalized) return value;
+  const parts = normalized.replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean);
+  let current = value;
+  for (const part of parts) {
+    if (current === null || current === undefined || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+};
 
 export async function executeWorkflow(
   workflow: AgentWorkflow,
@@ -78,6 +91,8 @@ export async function executeWorkflow(
   const results: WorkflowStepResult[] = [];
   const outputByNodeId = new Map<string, unknown>();
   const conditionResults = new Map<string, boolean>();
+  let stopReason: string | undefined;
+  let fatalStop = false;
   // Track visits per node to detect infinite loops
   const nodeVisitCount = new Map<string, number>();
 
@@ -88,6 +103,7 @@ export async function executeWorkflow(
    */
   const processNode = async (nodeId: string, fromEdge?: WorkflowEdge): Promise<void> => {
     if (ctx.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (fatalStop) return;
 
     const visits = (nodeVisitCount.get(nodeId) ?? 0) + 1;
     if (visits > MAX_NODE_VISITS) throw new Error(`Node "${nodeId}" exceeded max iterations (${MAX_NODE_VISITS})`);
@@ -98,15 +114,21 @@ export async function executeWorkflow(
 
     // When called via a specific edge (including back-edges), use that edge's source output.
     // When called as the first node (trigger), prevOutput is null.
-    const prevOutput = fromEdge ? (outputByNodeId.get(fromEdge.source) ?? null) : null;
+    const sourceOutput = fromEdge ? (outputByNodeId.get(fromEdge.source) ?? null) : null;
+    const prevOutput = fromEdge ? selectDataPath(sourceOutput, fromEdge.dataPath) : null;
+    ctx.onStepStart?.(node.id, prevOutput);
+    const startedAt = performance.now();
 
     let output: unknown = prevOutput;
     let error: string | undefined;
 
     try {
+      if (fromEdge?.dataPath?.trim() && prevOutput === undefined) {
+        throw new Error(`Connection data path "${fromEdge.dataPath}" was not found in the output of node "${fromEdge.source}".`);
+      }
       if (node.type === "trigger") {
         const d = node.data as TriggerNodeData;
-        output = { triggerType: d.triggerType, userMessage: ctx.userMessage };
+        output = { triggerType: d.triggerType, userMessage: ctx.userMessage, data: ctx.resultData };
 
       } else if (node.type === "agent") {
         const d = node.data as AgentNodeData;
@@ -124,18 +146,22 @@ export async function executeWorkflow(
           });
         const agentConfig =
           d.mode === "inline"
-            ? { inline: { systemPrompt: d.inlineSystemPrompt ?? "", outputType: d.inlineOutputType ?? "text" } }
+            ? { inline: {
+                systemPrompt: d.inlineSystemPrompt ?? "",
+                outputType: d.inlineOutputType ?? "text",
+                fallbackOutputType: d.inlineFallbackOutputType ?? "text",
+                skillIds: d.skillIds ?? [],
+              } }
             : { agentId: d.agentId };
         output = await ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null);
 
       } else if (node.type === "plugin") {
         const d = node.data as PluginNodeData;
-        output = runPlugin(d.code, {
+        output = await runPlugin(d.code, {
           result: ctx.resultData,
           docText: ctx.docText,
           prevOutput,
-          getNodeOutput: (id: string) => outputByNodeId.get(id) ?? null,
-        });
+        }, Object.fromEntries(outputByNodeId));
 
       } else if (node.type === "condition") {
         const d = node.data as ConditionNodeData;
@@ -149,7 +175,7 @@ export async function executeWorkflow(
         } else {
           output = prevOutput;
         }
-        let result = evalCondition(d.expression, output);
+        let result = await evalCondition(d.expression, output);
         // Belt-and-suspenders: enforce loop limit via index even if items weren't re-sliced.
         // maxLoopIndex = number of iterations allowed - 1 (relative to slice start).
         if (result && d.loopEnd !== undefined && output && typeof output === "object") {
@@ -162,23 +188,32 @@ export async function executeWorkflow(
       } else if (node.type === "output") {
         const d = node.data as OutputNodeData;
         if (d.renderAs === "update_result" && d.transformCode?.trim()) {
-          output = runTransform(d.transformCode, prevOutput);
+          output = await runTransform(d.transformCode, prevOutput);
         } else {
           output = prevOutput;
         }
       }
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") throw e;
+      if (e instanceof Error && e.name === "AbortError") throw e;
       error = e instanceof Error ? e.message : String(e);
       output = null;
     }
 
     outputByNodeId.set(node.id, output);
     const stepResult: WorkflowStepResult = {
-      nodeId: node.id, nodeType: node.type, output, error,
+      nodeId: node.id, nodeType: node.type, input: prevOutput, output, error,
+      durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
       ...(node.type === "output" ? { renderAs: (node.data as OutputNodeData).renderAs } : {}),
     };
     results.push(stepResult);
     ctx.onStepDone(stepResult);
+
+    if (error && ctx.stopOnError) {
+      stopReason = `Stopped at "${String(node.data.label || node.id)}": ${error}`;
+      fatalStop = true;
+      return;
+    }
 
     // Follow outgoing edges. For condition nodes, only follow the matching branch.
     const outEdges = edges.filter((e) => {
@@ -188,6 +223,12 @@ export async function executeWorkflow(
       }
       return true;
     });
+
+    if (outEdges.length === 0 && node.type !== "output") {
+      stopReason = node.type === "condition"
+        ? `Condition "${String(node.data.label || node.id)}" evaluated to ${conditionResults.get(node.id) ? "true" : "false"}, but that branch has no connection.`
+        : `Flow ended at "${String(node.data.label || node.id)}" because it has no outgoing connection.`;
+    }
 
     for (const edge of outEdges) {
       await processNode(edge.target, edge);
@@ -208,7 +249,10 @@ export async function executeWorkflow(
     }
   }
 
-  return { results, aborted, error };
+  if (aborted) stopReason = "Test run was stopped by the user.";
+  if (error) stopReason = `Execution failed: ${error}`;
+  if (!stopReason && results.some((result) => result.nodeType === "output")) stopReason = "Workflow completed at an output node.";
+  return { results, aborted, error, stopReason };
 }
 
 export function getWorkflowFinalOutput(results: WorkflowStepResult[]): {

@@ -29,11 +29,12 @@ interface ChatMessageData {
 }
 
 interface SSEEvent {
-  type: "token" | "tool_call" | "tool_result" | "done" | "error";
+  type: "token" | "tool_call" | "tool_result" | "output_type" | "done" | "error";
   content?: string;
   name?: string;
   result?: string;
   message?: string;
+  outputType?: "text" | "json" | "html" | "mixed";
 }
 
 export interface LlmAgentInfo {
@@ -41,6 +42,7 @@ export interface LlmAgentInfo {
   name: string;
   description: string;
   expectedOutput: string;
+  fallbackOutput?: string;
   defaultPrompts: string[];
   ragSources?: "all" | "result" | "document" | "none";
   ragMode?: "auto" | "chunks" | "none";
@@ -54,6 +56,8 @@ interface ChatDrawerProps {
   agents?: LlmAgentInfo[];
   globalPrompts?: string[];
   enabled?: boolean;
+  /** Whether global providers are available for generic chat without an agent. */
+  freeChatEnabled?: boolean;
   isOpen: boolean;
   onClose: () => void;
   rag?: RagWorkerHandle;
@@ -264,7 +268,10 @@ const collectJsonImages = (value: unknown, found: ChatImageRef[] = [], seen = ne
 };
 
 const OUTPUT_LABELS: Record<string, string> = {
+  auto: "Auto",
   text: "Text",
+  json: "JSON",
+  html: "HTML",
   echarts: "Chart",
   table: "Table",
   mixed: "Mixed",
@@ -619,6 +626,7 @@ const ChatDrawer = ({
   agents = [],
   globalPrompts = [],
   enabled = true,
+  freeChatEnabled = true,
   isOpen,
   onClose,
   rag,
@@ -633,12 +641,15 @@ const ChatDrawer = ({
   const [showPrompts, setShowPrompts] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);   // bottom picker (/ command)
   const [showHeaderAgentPicker, setShowHeaderAgentPicker] = useState(false); // top badge picker
-  const [activeAgentId, setActiveAgentId] = useState<string>("__free__");
+  const [activeAgentId, setActiveAgentId] = useState<string>(() =>
+    freeChatEnabled ? "__free__" : (agents[0]?.id ?? "__free__")
+  );
   // Local doc text overrides prop when the user uploads a file directly from the chatbox
   const [localDocText, setLocalDocText] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [showDocPopover, setShowDocPopover] = useState(false);
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false);
+  const workflowRunningRef = useRef(false);
   // Compact progress summary updated in chatbox text only
   const [workflowProgress, setWorkflowProgress] = useState<{
     total: number;       // steps completed so far
@@ -665,6 +676,12 @@ const ChatDrawer = ({
 
   // In-chat upload overrides prop doc text
   const docText = localDocText ?? propDocText ?? null;
+
+  useEffect(() => {
+    if (!freeChatEnabled && activeAgentId === "__free__" && agents[0]) {
+      setActiveAgentId(agents[0].id);
+    }
+  }, [freeChatEnabled, activeAgentId, agents]);
 
   // Stable ref to rag so sendMessage doesn't need rag in its dep array
   // (rag.status changes frequently; adding it would recreate sendMessage on every tick)
@@ -726,12 +743,13 @@ const ChatDrawer = ({
     }
   }, [uploadConfig, onDocUploaded]);
 
-  const runWorkflow = useCallback(async (userMsg: string) => {
-    if (!selectedWorkflow || selectedWorkflow.graph.nodes.length === 0) return;
-    if (isWorkflowRunning) return;
+  const runWorkflow = useCallback(async (userMsg: string, workflowOverride?: WorkflowConfig) => {
+    const workflowConfig = workflowOverride ?? selectedWorkflow;
+    if (!workflowConfig || workflowConfig.graph.nodes.length === 0) return;
+    if (workflowRunningRef.current) return;
 
     // Pre-flight checks before running the workflow.
-    const workflow: AgentWorkflow = selectedWorkflow.graph;
+    const workflow: AgentWorkflow = workflowConfig.graph;
     const hasResult = resultData !== null && resultData !== undefined;
     const hasDoc = !!docText?.trim();
     const needsDoc = workflow.nodes.some(
@@ -754,6 +772,7 @@ const ChatDrawer = ({
       return;
     }
 
+    workflowRunningRef.current = true;
     setIsWorkflowRunning(true);
     setWorkflowProgress(null);
     partialResultsRef.current = [];
@@ -812,12 +831,16 @@ const ChatDrawer = ({
           const agentId = isInline ? undefined : agentConfig.agentId;
           const systemPromptOverride = isInline ? agentConfig.inline!.systemPrompt : undefined;
           const outputType = isInline ? agentConfig.inline!.outputType : undefined;
+          const fallbackOutputType = isInline ? agentConfig.inline!.fallbackOutputType : undefined;
+          const skillIds = isInline ? agentConfig.inline!.skillIds : undefined;
 
           const resp = await fetch(`${supabaseUrl}/functions/v1/chat-with-result`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
+              apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
               ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              ...(organizationId ? { "x-organization-id": organizationId } : {}),
             },
             body: JSON.stringify({
               messages: [{ role: "user", content: prompt }],
@@ -827,6 +850,8 @@ const ChatDrawer = ({
               agentId,
               systemPrompt: systemPromptOverride,
               outputType,
+              fallbackOutputType,
+              skillIds,
             }),
           });
 
@@ -951,10 +976,11 @@ const ChatDrawer = ({
         : m
       ));
     } finally {
+      workflowRunningRef.current = false;
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, isWorkflowRunning, resultData, docText, organizationId, orgExecutionToken, agents, activeAgent]);
+  }, [selectedWorkflow, resultData, docText, organizationId, orgExecutionToken]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -981,14 +1007,25 @@ const ChatDrawer = ({
   const autoFiredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!isOpen) return;
-    for (const wf of activeWorkflows) {
-      if (autoFiredRef.current.has(wf.id)) continue;
+    const pending = activeWorkflows.filter((wf) => {
+      if (autoFiredRef.current.has(wf.id)) return false;
       const trigger = wf.graph.nodes.find((n) => n.type === "trigger");
-      if ((trigger?.data as { triggerType?: string } | undefined)?.triggerType !== "on_load") continue;
+      return (trigger?.data as { triggerType?: string } | undefined)?.triggerType === "on_load";
+    });
+    for (const wf of pending) {
       autoFiredRef.current.add(wf.id);
-      const prompt = (trigger?.data as { defaultPrompt?: string } | undefined)?.defaultPrompt || "Run workflow";
-      setTimeout(() => void runWorkflow(prompt), 400);
     }
+    if (pending.length === 0) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        for (const wf of pending) {
+          const trigger = wf.graph.nodes.find((n) => n.type === "trigger");
+          const prompt = (trigger?.data as { defaultPrompt?: string } | undefined)?.defaultPrompt || "Run workflow";
+          await runWorkflow(prompt, wf);
+        }
+      })();
+    }, 400);
+    return () => window.clearTimeout(timer);
   // Only fire when isOpen changes or activeWorkflows list changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, activeWorkflows.map((w) => w.id).join(",")]);
@@ -1045,10 +1082,12 @@ const ChatDrawer = ({
         const ragReady = currentRag && (currentRag.status === "ready" || currentRag.status === "syncing");
         const resolvedAgent = isFreeChatMode ? null : (agents.find((a) => a.id === (overrideAgentId ?? activeAgentId)) ?? agents[0] ?? null);
         const ragMode = isFreeChatMode ? "auto" : (resolvedAgent?.ragMode ?? "auto");
+        const ragSources = isFreeChatMode ? "all" : (resolvedAgent?.ragSources ?? "all");
+        const includeDocument = ragSources === "all" || ragSources === "document";
 
         let contextPayload: unknown = resultData;
 
-        if (ragMode !== "none" && docText) {
+        if (includeDocument && ragMode !== "none" && docText) {
           const useFullDoc = ragMode === "auto" && docText.length <= DOC_FULL_LIMIT;
           if (useFullDoc) {
             // Small doc — send full text directly, most reliable for cross-referencing
@@ -1100,6 +1139,11 @@ const ChatDrawer = ({
         let buffer = "";
         let accText = "";
         const toolEvents: ToolEvent[] = [];
+        let responseOutputType = !agentId
+          ? "mixed"
+          : (resolvedAgent?.expectedOutput === "auto"
+              ? (resolvedAgent.fallbackOutput ?? "text")
+              : (resolvedAgent?.expectedOutput ?? "text"));
 
         while (true) {
           const { done, value } = await reader.read();
@@ -1122,15 +1166,15 @@ const ChatDrawer = ({
             } else if (event.type === "tool_result" && event.name) {
               const idx = toolEvents.findLastIndex((t) => t.name === event.name && !t.result);
               if (idx >= 0) toolEvents[idx].result = event.result;
+            } else if (event.type === "output_type" && event.outputType) {
+              responseOutputType = event.outputType;
             } else if (event.type === "error") {
               accText += `\n\n*Error: ${event.message}*`;
             }
           }
         }
 
-        const activeAgent = agents.find((a) => a.id === activeAgentId);
-        const isFreeChat = activeAgentId === "__free__";
-        const { prose, html, json } = routeResponse(accText, isFreeChat ? "mixed" : (activeAgent?.expectedOutput ?? "text"));
+        const { prose, html, json } = routeResponse(accText, responseOutputType);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -1152,7 +1196,7 @@ const ChatDrawer = ({
         abortRef.current = null;
       }
     },
-    [messages, isStreaming, resultData, organizationId, orgExecutionToken, getAuthHeaders, activeAgentId]
+    [messages, isStreaming, resultData, orgExecutionToken, getAuthHeaders, activeAgentId, agents, docText, isFreeChatMode]
   );
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1231,7 +1275,10 @@ const ChatDrawer = ({
   if (!enabled || !isOpen) return null;
 
   const agentBadgeColor: Record<string, string> = {
+    auto: "bg-slate-500/15 text-slate-600 dark:text-slate-300",
     text: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+    json: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+    html: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
     echarts: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
     table: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
     mixed: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
@@ -1269,7 +1316,7 @@ const ChatDrawer = ({
                   <span className="text-xs font-medium text-muted-foreground">Switch Agent</span>
                 </div>
                 {/* Free Chat option */}
-                <button
+                {freeChatEnabled && <button
                   onMouseDown={(e) => { e.preventDefault(); selectAgent("__free__"); }}
                   className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 ${isFreeChatMode ? "bg-primary/5" : ""}`}
                 >
@@ -1280,8 +1327,8 @@ const ChatDrawer = ({
                     </div>
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">generic</span>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5 pl-5">Plain LLM — no data context, no constraints</p>
-                </button>
+                  <p className="text-xs text-muted-foreground mt-0.5 pl-5">Plain LLM with result context — no MCP tools</p>
+                </button>}
                 {/* Specialized agents */}
                 {agents.map((a) => (
                   <button
@@ -1396,7 +1443,7 @@ const ChatDrawer = ({
                             e.preventDefault();
                             setShowPrompts(false);
                             setActiveWorkflowId(wf.id);
-                            void runWorkflow(defaultPrompt ?? "Run workflow");
+                            void runWorkflow(defaultPrompt ?? "Run workflow", wf);
                           }}
                           className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 last:border-0 ${wf.id === selectedWorkflow?.id ? "bg-primary/5" : ""}`}
                         >
@@ -1448,7 +1495,7 @@ const ChatDrawer = ({
               </div>
               <div className="overflow-y-auto overscroll-contain [scrollbar-width:thin] [scrollbar-color:hsl(var(--border))_transparent]">
               {/* Free Chat entry */}
-              <button
+              {freeChatEnabled && <button
                 onMouseDown={(e) => { e.preventDefault(); selectAgent("__free__"); }}
                 className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 ${isFreeChatMode ? "bg-primary/5" : ""}`}
               >
@@ -1459,8 +1506,8 @@ const ChatDrawer = ({
                   </div>
                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">generic</span>
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5 pl-5">Plain LLM — no data context, no constraints</p>
-              </button>
+                <p className="text-xs text-muted-foreground mt-0.5 pl-5">Plain LLM with result context — no MCP tools</p>
+              </button>}
               {agents.map((a) => (
                 <button
                   key={a.id}

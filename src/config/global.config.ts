@@ -1,5 +1,7 @@
 // Global Configuration
 // Controls admin/debug mode and application-wide settings
+import type { AgentSkill } from "@/types/agentSkill";
+import { createSkillsFrameworkMapperTemplate } from "@/types/agentSkill";
 
 const DATA_ANALYST_SYSTEM_PROMPT =
   "You are a data analyst assistant. The user is viewing a result dataset. Answer questions clearly and concisely with insights, trends, patterns, and actionable recommendations. Structure your response with headings and bullet points for clarity.";
@@ -27,13 +29,15 @@ export interface LlmAgentConfig {
   name: string;
   description: string;
   systemPrompt: string;
-  expectedOutput: "text" | "json" | "html" | "mixed";
+  expectedOutput: "auto" | "text" | "json" | "html" | "mixed";
+  fallbackOutput?: "text" | "json" | "html" | "mixed";
   outputInstructions: string;
   mcpServerIds: string[];
   mcpToolFilter: Record<string, string[]>;
   providerIds: string[];
   agentProviders: LlmProviderConfig[];
   defaultPrompts: string[];
+  skillIds: string[];
   enabled: boolean;
 }
 
@@ -73,6 +77,7 @@ export interface GlobalConfig {
         enabled: boolean;
       }>;
       agents: LlmAgentConfig[];
+      skills: AgentSkill[];
     };
     maxFileSizeMB: number;
     maxFilesCount: number;
@@ -116,7 +121,7 @@ export const globalConfig: GlobalConfig = {
           description: "General data analysis, insights, and trend identification",
           systemPrompt: DATA_ANALYST_SYSTEM_PROMPT,
           expectedOutput: "text",
-          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
           defaultPrompts: [
             "Summarize the key findings in 3 bullet points",
             "Which item has the highest value and why might that be?",
@@ -130,8 +135,8 @@ export const globalConfig: GlobalConfig = {
           name: "Chart Builder",
           description: "Creates interactive ECharts visualizations from data",
           systemPrompt: CHART_BUILDER_SYSTEM_PROMPT,
-          expectedOutput: "echarts",
-          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+          expectedOutput: "html",
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
           defaultPrompts: [
             "Show me a bar chart of the top 10 results",
             "Create a pie chart of the data distribution",
@@ -146,7 +151,7 @@ export const globalConfig: GlobalConfig = {
           description: "Full analysis with written insights and a chart visualization",
           systemPrompt: AI_INSIGHT_SYSTEM_PROMPT,
           expectedOutput: "mixed",
-          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
           defaultPrompts: [
             "Generate a complete AI insight with visualization for this data",
             "Give me a business summary with a supporting chart",
@@ -159,8 +164,8 @@ export const globalConfig: GlobalConfig = {
           name: "Switchable Chart",
           description: "Returns structured JSON with summary, insights, and a chart spec the user can switch between types",
           systemPrompt: SWITCHABLE_CHART_SYSTEM_PROMPT,
-          expectedOutput: "mixed",
-          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+          expectedOutput: "json",
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
           defaultPrompts: [
             "Analyze this data and generate an interactive chart I can switch between types",
             "Generate a summary with insights and a switchable visualization",
@@ -169,6 +174,7 @@ export const globalConfig: GlobalConfig = {
           enabled: true,
         },
       ],
+      skills: [createSkillsFrameworkMapperTemplate()],
     },
     maxFileSizeMB: 50,
     maxFilesCount: 10,

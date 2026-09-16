@@ -84,13 +84,44 @@ interface LlmAgent {
   name?: string;
   systemPrompt?: string;
   expectedOutput?: string;
+  fallbackOutput?: "text" | "json" | "html" | "mixed";
   outputInstructions?: string;
   mcpServerIds?: string[];
   mcpToolFilter?: Record<string, string[]>;
   providerIds?: string[];
   agentProviders?: LlmProvider[];
   defaultPrompts?: string[];
+  skillIds?: string[];
   enabled?: boolean;
+}
+
+interface AgentSkillInputField {
+  key?: string;
+  label?: string;
+  type?: string;
+  description?: string;
+  required?: boolean;
+  defaultValue?: string;
+}
+
+interface AgentSkillReference {
+  name?: string;
+  description?: string;
+  content?: string;
+}
+
+interface AgentSkill {
+  id?: string;
+  name?: string;
+  description?: string;
+  objective?: string;
+  instructions?: string;
+  requiredInputs?: AgentSkillInputField[];
+  outputTemplate?: string;
+  outputType?: "text" | "json" | "html" | "mixed";
+  references?: AgentSkillReference[];
+  enabled?: boolean;
+  version?: number;
 }
 
 interface LlmInsightsConfig {
@@ -100,6 +131,7 @@ interface LlmInsightsConfig {
   mcpServers?: McpServerConfig[];
   predefinedPrompts?: string[];
   agents?: LlmAgent[];
+  skills?: AgentSkill[];
   // legacy flat fields
   apiBaseUrl?: string;
   apiKey?: string;
@@ -114,7 +146,11 @@ interface ChatRequest {
   /** Inline agent: system prompt provided directly, bypassing agent lookup */
   systemPrompt?: string;
   /** Inline agent: expected output format */
-  outputType?: "text" | "json" | "html" | "mixed";
+  outputType?: "auto" | "text" | "json" | "html" | "mixed";
+  /** Inline agent: format used when no assigned skill activates. */
+  fallbackOutputType?: "text" | "json" | "html" | "mixed";
+  /** Skills attached to an inline workflow agent. Saved agents use their configured skillIds. */
+  skillIds?: string[];
 }
 
 interface ExecutionTokenPayload {
@@ -539,6 +575,20 @@ const callMcpTool = async (
 const toObject = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
+const formatAgentSkill = (skill: AgentSkill): string => {
+  const requiredInputs = Array.isArray(skill.requiredInputs) && skill.requiredInputs.length > 0
+    ? skill.requiredInputs.map((field) =>
+        `- ${field.key || field.label || "input"} (${field.type || "text"}${field.required === false ? ", optional" : ", required"}): ${field.description || ""}${field.defaultValue ? ` Default: ${field.defaultValue}` : ""}`
+      ).join("\n")
+    : "- No explicit input contract.";
+  const references = Array.isArray(skill.references) && skill.references.length > 0
+    ? skill.references.map((reference) =>
+        `### Reference: ${reference.name || "Untitled"}\n${reference.description || ""}\n${reference.content || ""}`
+      ).join("\n\n")
+    : "";
+  return `# Agent Skill: ${skill.name || skill.id} (v${skill.version || 1})\nActivation: ${skill.description || ""}\nObjective: ${skill.objective || ""}\nOutput type: ${skill.outputType || "text"}\n\n## Required information\n${requiredInputs}\n\n## Procedure\n${skill.instructions || ""}\n\n## Output template\n${skill.outputTemplate || ""}${references ? `\n\n## Supporting resources\n${references}` : ""}`.slice(0, 40_000);
+};
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 serve(async (req: Request) => {
@@ -605,6 +655,9 @@ serve(async (req: Request) => {
   const activeAgent = body.agentId && Array.isArray(llmConfig.agents)
     ? llmConfig.agents.find((a) => a.id === body.agentId && a.enabled !== false) ?? null
     : null;
+  if (body.agentId && !activeAgent) {
+    return sendError("Requested LLM agent was not found or is disabled", 400);
+  }
 
   const defaultChatPrompt =
     "You are a data analyst assistant. The user is viewing a result dataset. Answer questions clearly and concisely.";
@@ -613,6 +666,16 @@ serve(async (req: Request) => {
     activeAgent?.systemPrompt?.trim() ||
     llmConfig.chatSystemPrompt?.trim() ||
     defaultChatPrompt;
+
+  const selectedSkillIds = activeAgent?.skillIds ?? body.skillIds ?? [];
+  const selectedSkills = Array.isArray(llmConfig.skills)
+    ? llmConfig.skills.filter((skill) =>
+        skill.enabled !== false && skill.id && selectedSkillIds.includes(skill.id)
+      )
+    : [];
+  const skillBlock = selectedSkills.length > 0
+    ? `\n## Available Agent Skills\nThe following reusable playbooks are available. When one matches the request, call activate_agent_skill before answering. You initially see metadata only; activation loads its full procedure and references. Skills do not grant tool permissions. If several skills activate, the most recently activated skill controls the final output type.\n${selectedSkills.map((skill) => `- ${skill.id}: ${skill.name || "Agent Skill"} — ${skill.description || ""} (output: ${skill.outputType || "text"})`).join("\n")}`
+    : null;
 
   // Inject result context.
   // Two modes:
@@ -662,10 +725,17 @@ serve(async (req: Request) => {
 
   // Append output instructions as a dedicated section
   const outputInstructions = activeAgent?.outputInstructions?.trim();
+  const configuredOutputType = body.outputType ?? activeAgent?.expectedOutput ?? "text";
+  const fallbackOutputType = body.fallbackOutputType ?? activeAgent?.fallbackOutput ??
+    (configuredOutputType === "auto" ? "text" : configuredOutputType);
+  const outputBlock = configuredOutputType === "auto"
+    ? `\n## Output Format\nUse ${fallbackOutputType} when no skill is activated. When a skill is activated, its declared output type and output template override this fallback. If multiple skills activate, the most recently activated skill wins.${outputInstructions ? `\n\nFallback instructions only:\n${outputInstructions}` : ""}`
+    : (outputInstructions ? `\n## Output Format\n${outputInstructions}` : `\n## Output Format\nReturn ${configuredOutputType}.`);
   const systemContent = [
     systemPromptBase,
+    skillBlock,
     contextBlock,
-    outputInstructions ? `\n## Output Format\n${outputInstructions}` : null,
+    outputBlock,
   ].filter(Boolean).join("\n");
 
   // Build message history
@@ -685,14 +755,38 @@ serve(async (req: Request) => {
 
   // Discover MCP tools — filter to agent's assigned servers if agent specifies them
   const agentMcpIds = activeAgent?.mcpServerIds;
-  const mcpServers = (llmConfig.mcpServers || []).filter((s) => {
+  // Generic/Free Chat intentionally has no tools. MCP access is only granted
+  // through a configured agent so its server and tool restrictions apply.
+  const mcpServers = activeAgent ? (llmConfig.mcpServers || []).filter((s) => {
     if (!s.enabled || !s.url?.trim()) return false;
     if (agentMcpIds && agentMcpIds.length > 0) return agentMcpIds.includes(s.id || "");
     return true;
-  });
+  }) : [];
   const allTools: OpenAITool[] = [];
   const mcpToolBindings = new Map<string, McpToolBinding>();
   const usedToolNames = new Set<string>();
+  if (selectedSkills.length > 0) {
+    allTools.push({
+      type: "function",
+      function: {
+        name: "activate_agent_skill",
+        description: "Load the complete instructions and supporting resources for an assigned agent skill. Call this before applying the skill.",
+        parameters: {
+          type: "object",
+          properties: {
+            skill_id: {
+              type: "string",
+              enum: selectedSkills.map((skill) => skill.id),
+              description: "The assigned skill to activate.",
+            },
+          },
+          required: ["skill_id"],
+          additionalProperties: false,
+        },
+      },
+    });
+    usedToolNames.add("activate_agent_skill");
+  }
   serverLoop: for (const [serverIndex, server] of mcpServers.entries()) {
     const discovery = await discoverMcpTools(server);
     const allowedNames = activeAgent?.mcpToolFilter?.[server.id ?? ""];
@@ -732,7 +826,7 @@ serve(async (req: Request) => {
 
         const loopMessages = [...history];
         const MAX_ITERATIONS = 5;
-        const isJsonAgent = activeAgent?.expectedOutput === "json";
+        let activeOutputType = fallbackOutputType;
         let completed = false;
 
         // Without MCP tools, stream once. The previous implementation first made
@@ -769,7 +863,19 @@ serve(async (req: Request) => {
             let args: unknown;
             try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
 
-            const result = await callMcpTool(mcpToolBindings, toolName, args);
+            const result = toolName === "activate_agent_skill"
+              ? (() => {
+                  const skillId = typeof args === "object" && args !== null
+                    ? String((args as Record<string, unknown>).skill_id || "")
+                    : "";
+                  const skill = selectedSkills.find((item) => item.id === skillId);
+                  if (skill) {
+                    activeOutputType = skill.outputType || "text";
+                    send({ type: "output_type", outputType: activeOutputType });
+                  }
+                  return skill ? formatAgentSkill(skill) : `Assigned skill "${skillId}" was not found or is disabled.`;
+                })()
+              : await callMcpTool(mcpToolBindings, toolName, args);
             send({ type: "tool_result", name: toolName, result: result.slice(0, 500) });
 
             loopMessages.push({
@@ -788,7 +894,7 @@ serve(async (req: Request) => {
             providers,
             loopMessages,
             undefined,
-            isJsonAgent,
+            activeOutputType === "json",
           );
           sendText(message.content || "MCP processing completed without a final response.");
         }
