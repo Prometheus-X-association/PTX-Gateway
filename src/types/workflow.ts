@@ -80,7 +80,7 @@ export interface ConditionNodeData {
   /** JS expression evaluated on prevOutput; truthy → "true" handle */
   expression: string;
   inputSchema?: string;
-  /** 0-based start index for loop slicing — enforced by executor on every condition visit */
+  /** 0-based start index for loop slicing — applied by the executor on first condition entry */
   loopStart?: number;
   /** 0-based inclusive end index for loop slicing — empty means last item */
   loopEnd?: number;

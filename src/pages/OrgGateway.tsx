@@ -25,6 +25,7 @@ import { Json } from "@/integrations/supabase/types";
 import { applyOrganizationVisualizationSettings, getVisualizationSettingsFromOrgSettings } from "@/utils/visualizationSettings";
 import { getParamValuesMap } from "@/types/dataspace";
 import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { resolveChatUploadConfig } from "@/utils/chatUploadConfig";
 
 interface SelectedDataType {
   files: File[];
@@ -481,6 +482,10 @@ const OrgGatewayContent = ({
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
   const activeProcessSessionId = selectedData?.processSessionId ?? sessionId;
+  const chatUploadConfig = useMemo(
+    () => resolveChatUploadConfig(selectedData?.uploadConfig, dataResources, activeProcessSessionId),
+    [selectedData?.uploadConfig, dataResources, activeProcessSessionId],
+  );
   const effectiveAnalyticsQueryParams = useMemo(() => {
     if (!selectedData?.processSessionId || selectedData.processSessionId === sessionId) {
       return analyticsQueryParams;
@@ -1036,7 +1041,7 @@ const OrgGatewayContent = ({
               showDebugApiExportConfig={isDebugMode}
               rag={rag}
               docText={sessionDocText}
-              uploadConfig={selectedData?.uploadConfig}
+              uploadConfig={chatUploadConfig}
             />
           )}
           </main>

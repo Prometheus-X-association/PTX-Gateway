@@ -180,7 +180,12 @@ export async function executeWorkflow(
 
       } else if (node.type === "condition") {
         const d = node.data as ConditionNodeData;
-        if ((d.loopStart !== undefined || d.loopEnd !== undefined) && prevOutput && typeof prevOutput === "object") {
+        if (
+          (d.loopStart !== undefined || d.loopEnd !== undefined) &&
+          prevOutput &&
+          typeof prevOutput === "object" &&
+          !("_loopRange" in prevOutput)
+        ) {
           const state = prevOutput as Record<string, unknown>;
           const allItems = Array.isArray(state.items) ? state.items : [];
           const start = d.loopStart ?? 0;

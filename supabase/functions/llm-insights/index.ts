@@ -33,6 +33,7 @@ interface LlmProvider {
   apiKey?: string;
   model?: string;
   enabled?: boolean;
+  providerType?: "openai" | "anthropic" | "gemini" | "openai_compatible";
 }
 
 interface LlmAgent {
@@ -515,12 +516,16 @@ serve(async (req) => {
             }))
         : [];
 
-      const freeChatConfigured = providers.some((p) => p.apiKey?.trim() && p.model?.trim());
+      const providerConfigured = (provider: LlmProvider) => Boolean(
+        provider.model?.trim() && provider.apiBaseUrl?.trim() &&
+        (provider.apiKey?.trim() || provider.providerType === "openai_compatible")
+      );
+      const freeChatConfigured = providers.some(providerConfigured);
       const configured = freeChatConfigured ||
         (Array.isArray(llmConfig.agents) && llmConfig.agents.some((agent) =>
           agent.enabled !== false &&
           Array.isArray(agent.agentProviders) &&
-          agent.agentProviders.some((p) => p.enabled !== false && p.apiKey?.trim() && p.model?.trim())
+          agent.agentProviders.some((p) => p.enabled !== false && providerConfigured(p))
         ));
 
       return new Response(

@@ -17,6 +17,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
 import { applyOrganizationVisualizationSettings, VisualizationSettings } from "@/utils/visualizationSettings";
 import GatewayHeader from "@/components/GatewayHeader";
+import { resolveChatUploadConfig } from "@/utils/chatUploadConfig";
 
 interface SelectedDataType {
   files: File[];
@@ -265,7 +266,12 @@ const EmbedGatewayContent = () => {
   const [selectedAnalytics, setSelectedAnalytics] = useState<AnalyticsOption | null>(null);
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
+  const [sessionDocText, setSessionDocText] = useState<string | null>(null);
   const activeProcessSessionId = selectedData?.processSessionId ?? sessionId;
+  const chatUploadConfig = useMemo(
+    () => resolveChatUploadConfig(selectedData?.uploadConfig, dataResources, activeProcessSessionId),
+    [selectedData?.uploadConfig, dataResources, activeProcessSessionId],
+  );
   const effectiveAnalyticsQueryParams = useMemo(() => {
     if (!selectedData?.processSessionId || selectedData.processSessionId === sessionId) {
       return analyticsQueryParams;
@@ -299,6 +305,7 @@ const EmbedGatewayContent = () => {
   const handleAnalyticsSelect = (option: AnalyticsOption) => {
     // New process session starts when user picks software/service chain.
     resetSession();
+    setSessionDocText(null);
     setSelectedAnalytics(option);
     setAnalyticsQueryParams({});
   };
@@ -362,6 +369,7 @@ const EmbedGatewayContent = () => {
 
     resetSession();
     setSelectedData(null);
+    setSessionDocText(null);
     if (preselected) {
       setSelectedAnalytics(preselected);
       setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
@@ -579,6 +587,7 @@ const EmbedGatewayContent = () => {
               onBack={() => goToStep(getStepIndex("Select Type"))}
               dataResources={dataResources}
               selectedAnalytics={selectedAnalytics}
+              onExtractedContent={setSessionDocText}
             />
           )}
           {getCurrentStepName() === "Processing" && selectedAnalytics && pdcPayload && (
@@ -604,7 +613,10 @@ const EmbedGatewayContent = () => {
               orgExecutionToken={orgExecutionToken}
               llmPromptContext={llmPromptContext}
               selectedAnalytics={selectedAnalytics}
+              selectedDataResources={selectedData?.selectedDataResources || []}
               customVisualizations={customVisualizations}
+              docText={sessionDocText}
+              uploadConfig={chatUploadConfig}
             />
           )}
           </main>

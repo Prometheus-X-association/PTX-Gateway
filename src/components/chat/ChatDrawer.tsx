@@ -8,6 +8,7 @@ import type { RagWorkerHandle } from "@/lib/useRagWorker";
 import type { UploadConfig } from "@/components/DocumentUploadZone";
 import type { AgentWorkflow, WorkflowConfig } from "@/types/workflow";
 import { executeWorkflow, getWorkflowFinalOutput } from "@/lib/workflowExecutor";
+import { extractPdfText } from "@/lib/pdfTextExtractor";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -618,6 +619,36 @@ const FALLBACK_PROMPTS = [
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 const DOC_FULL_LIMIT = 30_000; // chars — below this, send full document text
+const LOCAL_TEXT_FILE_RE = /\.(txt|md|markdown|csv|json|jsonl|xml|html?|yaml|yml)$/i;
+const REMOTE_DOCUMENT_ACCEPT = ".txt,.md,.json,.jsonl,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.xml,.html,.yaml,.yml";
+const LOCAL_DOCUMENT_ACCEPT = ".txt,.md,.json,.jsonl,.pdf,.doc,.docx,.xls,.xlsx,.csv,.xml,.html,.yaml,.yml";
+
+interface LlmAttachment {
+  name: string;
+  mimeType: string;
+  size: number;
+  base64: string;
+}
+
+const NATIVE_ATTACHMENT_LIMIT = 10 * 1024 * 1024;
+const attachmentMimeType = (file: File): string => {
+  if (file.type) return file.type;
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  return ({
+    pdf: "application/pdf", json: "application/json", jsonl: "application/x-ndjson", xml: "application/xml",
+    doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    csv: "text/csv", txt: "text/plain", md: "text/markdown", markdown: "text/markdown",
+    html: "text/html", htm: "text/html", yaml: "application/yaml", yml: "application/yaml",
+  } as Record<string, string>)[extension ?? ""] ?? "application/octet-stream";
+};
+const fileAsAttachment = async (file: File): Promise<LlmAttachment> => {
+  if (file.size > NATIVE_ATTACHMENT_LIMIT) throw new Error("Direct LLM attachments are currently limited to 10 MB per file.");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  return { name: file.name, mimeType: attachmentMimeType(file), size: file.size, base64: btoa(binary) };
+};
 
 const ChatDrawer = ({
   resultData,
@@ -646,6 +677,7 @@ const ChatDrawer = ({
   );
   // Local doc text overrides prop when the user uploads a file directly from the chatbox
   const [localDocText, setLocalDocText] = useState<string | null>(null);
+  const [localAttachment, setLocalAttachment] = useState<LlmAttachment | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [showDocPopover, setShowDocPopover] = useState(false);
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false);
@@ -676,6 +708,7 @@ const ChatDrawer = ({
 
   // In-chat upload overrides prop doc text
   const docText = localDocText ?? propDocText ?? null;
+  const hasDocument = Boolean(docText || localAttachment);
 
   useEffect(() => {
     if (!freeChatEnabled && activeAgentId === "__free__" && agents[0]) {
@@ -689,50 +722,69 @@ const ChatDrawer = ({
   useEffect(() => { ragRef.current = rag; }, [rag]);
 
   const handleFileAttach = useCallback(async (file: File) => {
-    if (!uploadConfig) return;
     setIsUploading(true);
 
-    const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-proxy`;
-    const formData = new FormData();
-    formData.append("file", file);
-    Object.entries(uploadConfig.queryParams || {}).forEach(([k, v]) => { if (v) formData.append(k, v); });
-
     try {
-      const resp = await fetch(proxyUrl, {
-        method: "POST",
-        headers: {
-          "x-upload-url": uploadConfig.uploadUrl,
-          "x-upload-authorization": uploadConfig.authorization || "",
-        },
-        body: formData,
-      });
-      const text = await resp.text();
-      let result: Record<string, unknown> = {};
-      try { result = text ? JSON.parse(text) : {}; } catch { result = { raw: text }; }
+      let extracted = "";
+      const attachment = await fileAsAttachment(file);
+      setLocalAttachment(attachment);
+      setLocalDocText(null);
 
-      const status = typeof result.status === "number" ? result.status : (resp.ok ? 200 : 500);
-      if (resp.ok && status >= 200 && status < 300) {
-        const extracted = typeof result.body === "string" ? result.body : JSON.stringify(result.body ?? result);
-        if (extracted) {
-          setLocalDocText(extracted);
-          ragRef.current?.indexData(extracted, "document");
-          onDocUploaded?.(extracted);
-          // Post a system-style assistant message confirming the upload
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: uid(),
-              role: "assistant",
-              content: `Document **"${file.name}"** attached (${Math.round(file.size / 1024)} KB). You can now ask questions about it.`,
-            },
-          ]);
+      const isNativeDocument = /\.(pdf|txt|md|markdown|csv|json|jsonl|xml|html?|ya?ml|doc|docx|xls|xlsx)$/i.test(file.name);
+      if (!uploadConfig?.uploadUrl || isNativeDocument) {
+        const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+        const isTextFile = file.type.startsWith("text/") || file.type === "application/json" || LOCAL_TEXT_FILE_RE.test(file.name);
+        if (isPdf) {
+          // Optional local text powers RAG for text PDFs. Native providers still
+          // receive the original bytes, so scanned PDFs remain valid attachments.
+          try { extracted = await extractPdfText(file); } catch { extracted = ""; }
+        } else if (isTextFile) {
+          extracted = await file.text();
+        } else if (!/\.(docx?|xlsx?)$/i.test(file.name)) {
+          throw new Error("This file type requires a configured document-conversion endpoint. Attach a PDF, TXT, Markdown, CSV, JSON, XML, HTML, or YAML file instead.");
         }
       } else {
-        setMessages((prev) => [
-          ...prev,
-          { id: uid(), role: "assistant", content: `Upload failed: ${result.error ?? result.message ?? "unknown error"}` },
-        ]);
+        const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-proxy`;
+        const formData = new FormData();
+        formData.append("files", file, file.name);
+        Object.entries(uploadConfig.queryParams || {}).forEach(([k, v]) => { if (v) formData.append(k, v); });
+
+        const resp = await fetch(proxyUrl, {
+          method: "POST",
+          headers: {
+            "x-upload-url": uploadConfig.uploadUrl,
+            "x-upload-authorization": uploadConfig.authorization || "",
+          },
+          body: formData,
+        });
+        const text = await resp.text();
+        let result: Record<string, unknown> = {};
+        try { result = text ? JSON.parse(text) : {}; } catch { result = { raw: text }; }
+
+        const status = typeof result.status === "number" ? result.status : (resp.ok ? 200 : 500);
+        if (!resp.ok || status < 200 || status >= 300) {
+          throw new Error(String(result.error ?? result.message ?? "unknown upload error"));
+        }
+        extracted = typeof result.body === "string" ? result.body : JSON.stringify(result.body ?? result);
       }
+
+      if (!extracted.trim() && !attachment) {
+        throw new Error("The attached document did not contain readable text.");
+      }
+
+      if (extracted.trim()) {
+        setLocalDocText(extracted);
+        ragRef.current?.indexData(extracted, "document");
+        onDocUploaded?.(extracted);
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: uid(),
+          role: "assistant",
+          content: `Document **"${file.name}"** attached (${Math.max(1, Math.round(file.size / 1024))} KB). You can now run the workflow again.`,
+        },
+      ]);
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -751,7 +803,7 @@ const ChatDrawer = ({
     // Pre-flight checks before running the workflow.
     const workflow: AgentWorkflow = workflowConfig.graph;
     const hasResult = resultData !== null && resultData !== undefined;
-    const hasDoc = !!docText?.trim();
+    const hasDoc = !!docText?.trim() || Boolean(localAttachment);
     const needsDoc = workflow.nodes.some(
       (n) => n.type === "agent" && (n.data as import("@/types/workflow").AgentNodeData).mode === "inline"
     );
@@ -850,7 +902,7 @@ const ChatDrawer = ({
             void _dropped;
             return rest;
           })();
-          const contextPayload = docText
+          const contextPayload = docText && !localAttachment
             ? { __doc_context: true, result: resultData, docText }
             : resultData;
           const agentId = isInline ? undefined : agentConfig.agentId;
@@ -878,6 +930,7 @@ const ChatDrawer = ({
               outputType,
               fallbackOutputType,
               skillIds,
+              attachment: localAttachment,
             }),
           });
 
@@ -1006,7 +1059,7 @@ const ChatDrawer = ({
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, resultData, docText, organizationId, orgExecutionToken]);
+  }, [selectedWorkflow, resultData, docText, localAttachment, organizationId, orgExecutionToken]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -1113,7 +1166,7 @@ const ChatDrawer = ({
 
         let contextPayload: unknown = resultData;
 
-        if (includeDocument && ragMode !== "none" && docText) {
+        if (includeDocument && ragMode !== "none" && docText && !localAttachment) {
           const useFullDoc = ragMode === "auto" && docText.length <= DOC_FULL_LIMIT;
           if (useFullDoc) {
             // Small doc — send full text directly, most reliable for cross-referencing
@@ -1149,6 +1202,7 @@ const ChatDrawer = ({
             signal: abortRef.current.signal,
             body: JSON.stringify({
               messages: historyForApi,
+              attachment: localAttachment,
               result: contextPayload,
               org_execution_token: orgExecutionToken || undefined,
               agentId,
@@ -1222,7 +1276,7 @@ const ChatDrawer = ({
         abortRef.current = null;
       }
     },
-    [messages, isStreaming, resultData, orgExecutionToken, getAuthHeaders, activeAgentId, agents, docText, isFreeChatMode]
+    [messages, isStreaming, resultData, orgExecutionToken, getAuthHeaders, activeAgentId, agents, docText, localAttachment, isFreeChatMode]
   );
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1558,37 +1612,35 @@ const ChatDrawer = ({
             </div>
           )}
 
-          {/* Hidden file input for document attachment */}
-          {uploadConfig && (
-            <input
-              ref={fileInputRef}
-              type="file"
-              className="hidden"
-              accept=".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void handleFileAttach(file);
-                e.target.value = "";
-              }}
-            />
-          )}
+          {/* Always available: configured endpoints handle binary office files;
+              otherwise the browser can attach text-based documents directly. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept={uploadConfig?.uploadUrl ? REMOTE_DOCUMENT_ACCEPT : LOCAL_DOCUMENT_ACCEPT}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleFileAttach(file);
+              e.target.value = "";
+            }}
+          />
           <div className="flex gap-2 items-end">
-            {/* Show paperclip when a doc is attached OR when upload is available */}
-            {(docText || uploadConfig) && (
-              <div className="relative shrink-0">
-                <Button
+            <div className="relative shrink-0">
+              <Button
                   variant="ghost"
                   size="icon"
                   className={`h-10 w-10 ${
                     isUploading ? "text-primary"
-                    : docText ? "text-emerald-600 dark:text-emerald-400"
+                    : hasDocument ? "text-emerald-600 dark:text-emerald-400"
                     : "text-muted-foreground"
                   }`}
-                  title={docText ? "Document attached" : "Attach document"}
+                  title={hasDocument ? "Document attached" : "Attach document"}
+                  aria-label={hasDocument ? "Document attached" : "Attach document"}
                   disabled={isUploading || isStreaming}
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    if (docText) {
+                    if (hasDocument) {
                       // Toggle info popover when a doc is already attached
                       setShowDocPopover((v) => !v);
                     } else {
@@ -1598,10 +1650,10 @@ const ChatDrawer = ({
                   }}
                 >
                   {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
-                </Button>
+              </Button>
 
-                {/* Doc-info popover */}
-                {showDocPopover && docText && (
+              {/* Doc-info popover */}
+              {showDocPopover && hasDocument && (
                   <div className="absolute bottom-12 left-0 z-50 w-64 rounded-lg border border-border bg-popover shadow-lg p-3 text-xs">
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="font-semibold text-foreground">Document attached</span>
@@ -1613,25 +1665,22 @@ const ChatDrawer = ({
                       </button>
                     </div>
                     <p className="text-muted-foreground mb-2">
-                      {localDocText ? "Uploaded in this session" : "Loaded from selection"}
-                      {" · "}{Math.round(docText.length / 1024)} KB
+                      {localAttachment?.name ?? (localDocText ? "Uploaded in this session" : "Loaded from selection")}
+                      {localAttachment ? ` · ${Math.max(1, Math.round(localAttachment.size / 1024))} KB` : docText ? ` · ${Math.round(docText.length / 1024)} KB` : ""}
                     </p>
-                    {uploadConfig && (
-                      <button
-                        className="text-primary hover:underline text-xs"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          setShowDocPopover(false);
-                          fileInputRef.current?.click();
-                        }}
-                      >
-                        Replace with a different file
-                      </button>
-                    )}
+                    <button
+                      className="text-primary hover:underline text-xs"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setShowDocPopover(false);
+                        fileInputRef.current?.click();
+                      }}
+                    >
+                      Replace with a different file
+                    </button>
                   </div>
-                )}
-              </div>
-            )}
+              )}
+            </div>
             <Textarea
               ref={inputRef}
               value={input}

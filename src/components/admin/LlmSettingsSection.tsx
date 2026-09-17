@@ -31,6 +31,7 @@ import { useAuth } from "@/contexts/AuthContext";
 interface LlmProvider {
   id: string;
   name: string;
+  providerType: "openai" | "anthropic" | "gemini" | "openai_compatible";
   apiBaseUrl: string;
   apiKey: string;
   model: string;
@@ -261,7 +262,7 @@ const moveItem = <T,>(arr: T[], from: number, to: number): T[] => {
 };
 
 const emptyProvider = (): LlmProvider => ({
-  id: uid(), name: "", apiBaseUrl: "https://api.openai.com/v1",
+  id: uid(), name: "", providerType: "openai", apiBaseUrl: "https://api.openai.com/v1",
   apiKey: "", model: "gpt-4o-mini", enabled: true,
 });
 
@@ -281,16 +282,25 @@ const emptyAgent = (): LlmAgent => ({
 });
 
 const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
+  const inferProviderType = (provider: Partial<LlmProvider>): LlmProvider["providerType"] => {
+    if (["openai", "anthropic", "gemini", "openai_compatible"].includes(String(provider.providerType))) return provider.providerType as LlmProvider["providerType"];
+    const url = String(provider.apiBaseUrl || "").toLowerCase();
+    if (url.includes("anthropic.com")) return "anthropic";
+    if (url.includes("generativelanguage.googleapis.com")) return "gemini";
+    if (url.includes("api.openai.com")) return "openai";
+    return "openai_compatible";
+  };
   const hasProviders = Array.isArray(raw.providers) && (raw.providers as unknown[]).length > 0;
   const providers: LlmProvider[] = hasProviders
     ? (raw.providers as LlmProvider[]).map((p) => ({
         id: String(p.id || uid()), name: String(p.name || ""),
+        providerType: inferProviderType(p),
         apiBaseUrl: String(p.apiBaseUrl || "https://api.openai.com/v1"),
         apiKey: String(p.apiKey || ""), model: String(p.model || "gpt-4o-mini"),
         enabled: p.enabled !== false,
       }))
     : typeof raw.apiKey === "string" && raw.apiKey
-    ? [{ id: uid(), name: "Default", apiBaseUrl: String(raw.apiBaseUrl || "https://api.openai.com/v1"),
+    ? [{ id: uid(), name: "Default", providerType: "openai" as const, apiBaseUrl: String(raw.apiBaseUrl || "https://api.openai.com/v1"),
         apiKey: String(raw.apiKey), model: String(raw.model || "gpt-4o-mini"), enabled: true }]
     : [];
 
@@ -338,6 +348,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       agentProviders: Array.isArray(a.agentProviders)
         ? (a.agentProviders as LlmProvider[]).map((p) => ({
             id: String(p.id || uid()), name: String(p.name || ""),
+            providerType: inferProviderType(p),
             apiBaseUrl: String(p.apiBaseUrl || "https://api.openai.com/v1"),
             apiKey: String(p.apiKey || ""), model: String(p.model || "gpt-4o-mini"),
             enabled: p.enabled !== false,
@@ -471,6 +482,16 @@ const ProviderCard = ({ provider, index, total, onChange, onMove, onRemove }: Pr
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="space-y-1">
+          <Label className="text-xs">Provider family</Label>
+          <Select value={provider.providerType} onValueChange={(providerType: LlmProvider["providerType"]) => {
+            const defaults = providerType === "openai" ? { apiBaseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" }
+              : providerType === "anthropic" ? { apiBaseUrl: "https://api.anthropic.com/v1", model: "claude-sonnet-4-5" }
+              : providerType === "gemini" ? { apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta", model: "gemini-2.5-flash" }
+              : { apiBaseUrl: provider.apiBaseUrl, model: provider.model };
+            onChange({ ...provider, providerType, ...defaults });
+          }}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="openai">OpenAI</SelectItem><SelectItem value="anthropic">Anthropic</SelectItem><SelectItem value="gemini">Google Gemini</SelectItem><SelectItem value="openai_compatible">Local / OpenAI-compatible</SelectItem></SelectContent></Select>
+        </div>
+        <div className="space-y-1">
           <Label className="text-xs">API Base URL</Label>
           <Input className="h-8 text-xs" placeholder="https://api.openai.com/v1" value={provider.apiBaseUrl}
             onChange={(e) => onChange({ ...provider, apiBaseUrl: e.target.value })} />
@@ -492,6 +513,12 @@ const ProviderCard = ({ provider, index, total, onChange, onMove, onRemove }: Pr
           </div>
         </div>
       </div>
+      <p className="rounded-md border bg-muted/30 px-2.5 py-2 text-[10px] leading-relaxed text-muted-foreground">
+        {provider.providerType === "openai" && "Native attachments use the Responses API input_file format."}
+        {provider.providerType === "anthropic" && "Native document blocks support PDF and plain-text formats. DOC/DOCX/XLS/XLSX require another configured provider or conversion."}
+        {provider.providerType === "gemini" && "Attachments use Gemini inline file data. Actual format support depends on the selected Gemini model."}
+        {provider.providerType === "openai_compatible" && "Local models receive OpenAI Responses-compatible input_file data. The local server must implement /responses and file input; an API key is optional."}
+      </p>
     </div>
   );
 };
@@ -1209,6 +1236,13 @@ const AgentEditPanel = ({ agent, skills, mcpServers, globalProviders, supabaseCl
                     onClick={() => removeAgentProvider(i)}><Trash2 className="h-3 w-3" /></Button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-0.5 col-span-2">
+                    <Label className="text-[10px]">Provider family</Label>
+                    <Select value={p.providerType} onValueChange={(providerType: LlmProvider["providerType"]) => updateAgentProvider(i, { ...p, providerType })}>
+                      <SelectTrigger className="h-7 text-[11px]"><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem value="openai">OpenAI</SelectItem><SelectItem value="anthropic">Anthropic</SelectItem><SelectItem value="gemini">Google Gemini</SelectItem><SelectItem value="openai_compatible">Local / OpenAI-compatible</SelectItem></SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-0.5">
                     <Label className="text-[10px]">Base URL</Label>
                     <Input className="h-7 text-[11px]" placeholder="https://api.openai.com/v1"

@@ -17,6 +17,7 @@ import { useDataspaceConfig } from "@/hooks/useDataspaceConfig";
 import { AnalyticsOption, DataResource } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import GatewayHeader from "@/components/GatewayHeader";
+import { resolveChatUploadConfig } from "@/utils/chatUploadConfig";
 
 interface SelectedDataType {
   files: File[];
@@ -77,7 +78,12 @@ const IndexContent = () => {
   const [selectedAnalytics, setSelectedAnalytics] = useState<AnalyticsOption | null>(null);
   const [analyticsQueryParams, setAnalyticsQueryParams] = useState<Record<string, string>>({});
   const [selectedData, setSelectedData] = useState<SelectedDataType | null>(null);
+  const [sessionDocText, setSessionDocText] = useState<string | null>(null);
   const activeProcessSessionId = selectedData?.processSessionId ?? sessionId;
+  const chatUploadConfig = useMemo(
+    () => resolveChatUploadConfig(selectedData?.uploadConfig, dataResources, activeProcessSessionId),
+    [selectedData?.uploadConfig, dataResources, activeProcessSessionId],
+  );
   const effectiveAnalyticsQueryParams = useMemo(() => {
     if (!selectedData?.processSessionId || selectedData.processSessionId === sessionId) {
       return analyticsQueryParams;
@@ -114,6 +120,7 @@ const IndexContent = () => {
   const handleAnalyticsSelect = (option: AnalyticsOption) => {
     // New process session starts when user picks software/service chain.
     resetSession();
+    setSessionDocText(null);
     setSelectedAnalytics(option);
     // Reset query params when selection changes
     setAnalyticsQueryParams({});
@@ -187,6 +194,7 @@ const IndexContent = () => {
     setSelectedAnalytics(null);
     setAnalyticsQueryParams({});
     setSelectedData(null);
+    setSessionDocText(null);
   };
 
   // Determine which component to render based on current step
@@ -345,6 +353,7 @@ const IndexContent = () => {
                 selectedAnalytics={selectedAnalytics}
                 isDebugMode={isDebugMode}
                 dataSelectionSettings={dataSelectionSettings}
+                onExtractedContent={setSessionDocText}
               />
             )}
             {getCurrentStepName() === "Validation" && selectedData && selectedAnalytics && (
@@ -382,6 +391,8 @@ const IndexContent = () => {
                 selectedDataResources={selectedData?.selectedDataResources || []}
                 customVisualizations={customVisualizations}
                 showDebugApiExportConfig={isDebugMode}
+                docText={sessionDocText}
+                uploadConfig={chatUploadConfig}
               />
             )}
             </main>

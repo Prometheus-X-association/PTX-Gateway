@@ -47,6 +47,14 @@ interface LlmProvider {
   apiKey?: string;
   model?: string;
   enabled?: boolean;
+  providerType?: "openai" | "anthropic" | "gemini" | "openai_compatible";
+}
+
+interface LlmAttachment {
+  name: string;
+  mimeType: string;
+  size: number;
+  base64: string;
 }
 
 interface McpServerConfig {
@@ -153,6 +161,8 @@ interface ChatRequest {
   fallbackOutputType?: "text" | "json" | "html" | "mixed";
   /** Skills attached to an inline workflow agent. Saved agents use their configured skillIds. */
   skillIds?: string[];
+  /** Original file bytes for provider-native document input. */
+  attachment?: LlmAttachment;
 }
 
 interface ExecutionTokenPayload {
@@ -289,6 +299,20 @@ const providerErrorDetail = (raw: string): string => {
   return raw.replace(/\s+/g, " ").trim().slice(0, 600);
 };
 
+const providerFamily = (provider: LlmProvider): NonNullable<LlmProvider["providerType"]> => {
+  if (provider.providerType) return provider.providerType;
+  const url = (provider.apiBaseUrl ?? "").toLowerCase();
+  if (url.includes("anthropic.com")) return "anthropic";
+  if (url.includes("generativelanguage.googleapis.com")) return "gemini";
+  if (url.includes("api.openai.com")) return "openai";
+  return "openai_compatible";
+};
+
+const conversationText = (messages: ChatMessage[]): string => messages
+  .filter((message) => message.role !== "system")
+  .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
+  .join("\n\n");
+
 // Non-streaming LLM call — returns full message (used in tool-use loop)
 const callLlmOnce = async (
   providers: LlmProvider[],
@@ -300,8 +324,9 @@ const callLlmOnce = async (
   for (const p of providers) {
     const apiKey = p.apiKey?.trim();
     const model = p.model?.trim();
+    const family = providerFamily(p);
     const baseUrl = (p.apiBaseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
-    if (!apiKey || !model) continue;
+    if ((!apiKey && family !== "openai_compatible") || !model) continue;
     const url = baseUrl.endsWith("/chat/completions")
       ? baseUrl
       : `${baseUrl}/chat/completions`;
@@ -311,7 +336,7 @@ const callLlmOnce = async (
       if (jsonMode && !tools?.length) body.response_format = { type: "json_object" };
       const resp = await fetch(url, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(90_000),
       });
@@ -336,21 +361,76 @@ const callLlmOnce = async (
 // Streaming LLM call — yields token strings, returns when done
 async function* streamLlm(
   providers: LlmProvider[],
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  attachment?: LlmAttachment,
 ): AsyncGenerator<string> {
   const errors: string[] = [];
   for (const p of providers) {
     const apiKey = p.apiKey?.trim();
     const model = p.model?.trim();
+    const family = providerFamily(p);
     const baseUrl = (p.apiBaseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
-    if (!apiKey || !model) continue;
+    if ((!apiKey && family !== "openai_compatible") || !model) continue;
     const url = baseUrl.endsWith("/chat/completions")
       ? baseUrl
       : `${baseUrl}/chat/completions`;
     try {
+      if (family === "anthropic") {
+        const supportedText = attachment ? (/^(text\/|application\/(json|xml))/.test(attachment.mimeType) || /\.(txt|md|csv|json|xml|ya?ml|html?)$/i.test(attachment.name)) : false;
+        const isPdf = attachment ? (attachment.mimeType === "application/pdf" || /\.pdf$/i.test(attachment.name)) : false;
+        if (attachment && !supportedText && !isPdf) {
+          errors.push(`${p.name || model}: Anthropic does not accept ${attachment.name} as a document block; DOC/DOCX/XLS/XLSX require conversion`);
+          continue;
+        }
+        const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+        const source = attachment && isPdf
+          ? { type: "base64", media_type: "application/pdf", data: attachment.base64 }
+          : attachment ? { type: "text", media_type: "text/plain", data: new TextDecoder().decode(Uint8Array.from(atob(attachment.base64), (char) => char.charCodeAt(0))) } : null;
+        const content = [...(source ? [{ type: "document", source }] : []), { type: "text", text: conversationText(messages) || "Respond to the user." }];
+        const anthropicUrl = baseUrl.endsWith("/messages") ? baseUrl : `${baseUrl}/messages`;
+        const resp = await fetch(anthropicUrl, {
+          method: "POST",
+          headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
+          body: JSON.stringify({ model, max_tokens: 4096, stream: true, system, messages: [{ role: "user", content }] }),
+          signal: AbortSignal.timeout(90_000),
+        });
+        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        const reader = resp.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+        while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const lines = buffer.split("\n"); buffer = lines.pop() ?? ""; for (const line of lines) { if (!line.startsWith("data:")) continue; try { const event = JSON.parse(line.slice(5)) as Record<string, unknown>; const delta = event.delta as Record<string, unknown> | undefined; if (event.type === "content_block_delta" && typeof delta?.text === "string") yield delta.text; } catch { /* ignore */ } } }
+        return;
+      }
+
+      if (family === "gemini") {
+        const geminiUrl = `${baseUrl}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+        const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+        const resp = await fetch(geminiUrl, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts: [...(attachment ? [{ inlineData: { mimeType: attachment.mimeType, data: attachment.base64 } }] : []), { text: conversationText(messages) || "Respond to the user." }] }] }),
+          signal: AbortSignal.timeout(90_000),
+        });
+        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        const reader = resp.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+        while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const lines = buffer.split("\n"); buffer = lines.pop() ?? ""; for (const line of lines) { if (!line.startsWith("data:")) continue; try { const event = JSON.parse(line.slice(5)) as Record<string, unknown>; const candidates = event.candidates as Array<Record<string, unknown>> | undefined; const content = candidates?.[0]?.content as Record<string, unknown> | undefined; const parts = content?.parts as Array<Record<string, unknown>> | undefined; for (const part of parts ?? []) if (typeof part.text === "string") yield part.text; } catch { /* ignore */ } } }
+        return;
+      }
+
+      if (attachment && (family === "openai" || family === "openai_compatible")) {
+        const responsesUrl = baseUrl.endsWith("/responses") ? baseUrl : `${baseUrl}/responses`;
+        const instructions = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+        const resp = await fetch(responsesUrl, {
+          method: "POST", headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
+          body: JSON.stringify({ model, instructions, stream: true, input: [{ role: "user", content: [{ type: "input_file", filename: attachment.name, file_data: `data:${attachment.mimeType};base64,${attachment.base64}` }, { type: "input_text", text: conversationText(messages) || "Analyze the attached document." }] }] }),
+          signal: AbortSignal.timeout(90_000),
+        });
+        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        const reader = resp.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+        while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const lines = buffer.split("\n"); buffer = lines.pop() ?? ""; for (const line of lines) { if (!line.startsWith("data:")) continue; try { const event = JSON.parse(line.slice(5)) as Record<string, unknown>; if (event.type === "response.output_text.delta" && typeof event.delta === "string") yield event.delta; } catch { /* ignore */ } } }
+        return;
+      }
+
       const resp = await fetch(url, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
         body: JSON.stringify({ model, temperature: 0.7, messages, stream: true }),
         signal: AbortSignal.timeout(90_000),
       });
@@ -850,6 +930,17 @@ serve(async (req: Request) => {
   } catch {
     return sendError("Invalid JSON body");
   }
+  if (body.attachment) {
+    const attachment = body.attachment;
+    const allowedName = /\.(pdf|txt|md|markdown|csv|json|jsonl|xml|html?|ya?ml|doc|docx|xls|xlsx)$/i.test(attachment.name || "");
+    const estimatedBytes = Math.floor((attachment.base64?.length ?? 0) * 0.75);
+    if (!allowedName || !attachment.base64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(attachment.base64)) {
+      return sendError("Unsupported or invalid document attachment", 400);
+    }
+    if (attachment.name.length > 255 || estimatedBytes > 10 * 1024 * 1024 || attachment.size > 10 * 1024 * 1024) {
+      return sendError("Document attachments are limited to 10 MB", 413);
+    }
+  }
 
   // Auth
   const authHeader = req.headers.get("Authorization");
@@ -904,7 +995,9 @@ serve(async (req: Request) => {
       )
     : [];
   const skillBlock = selectedSkills.length > 0
-    ? `\n## Available Agent Skills\nThe following reusable playbooks are available. When one matches the request, call activate_agent_skill before answering. You initially see metadata only; activation loads its full procedure and references. Skills do not grant tool permissions. If several skills activate, the most recently activated skill controls the final output type.\n${selectedSkills.map((skill) => `- ${skill.id}: ${skill.name || "Agent Skill"} — ${skill.description || ""} (output: ${skill.outputType || "text"})`).join("\n")}`
+    ? body.attachment
+      ? `\n## Assigned Agent Skills\nA native document attachment is present, so the assigned playbooks are provided directly. Apply every relevant playbook to the attached file.\n\n${selectedSkills.map(formatAgentSkill).join("\n\n---\n\n")}`
+      : `\n## Available Agent Skills\nThe following reusable playbooks are available. When one matches the request, call activate_agent_skill before answering. You initially see metadata only; activation loads its full procedure and references. Skills do not grant tool permissions. If several skills activate, the most recently activated skill controls the final output type.\n${selectedSkills.map((skill) => `- ${skill.id}: ${skill.name || "Agent Skill"} — ${skill.description || ""} (output: ${skill.outputType || "text"})`).join("\n")}`
     : null;
 
   // Inject result context.
@@ -1075,8 +1168,8 @@ serve(async (req: Request) => {
 
         // Without MCP tools, stream once. The previous implementation first made
         // a discarded non-streaming call and then repeated it as a stream.
-        if (allTools.length === 0) {
-          for await (const token of streamLlm(providers, loopMessages)) {
+        if (allTools.length === 0 || body.attachment) {
+          for await (const token of streamLlm(providers, loopMessages, body.attachment)) {
             send({ type: "token", content: token });
           }
           completed = true;
