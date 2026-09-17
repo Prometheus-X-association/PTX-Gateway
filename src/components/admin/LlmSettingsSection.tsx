@@ -1345,7 +1345,7 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
           <div className="flex items-center justify-between">
             <Label className="text-xs">MCP Tool Servers</Label>
             <span className="text-[10px] text-muted-foreground">
-              {agent.mcpServerIds.length === 0 ? "Using all servers (all tools)" : `${agent.mcpServerIds.length} server(s) selected`}
+              {agent.mcpServerIds.length === 0 ? "No servers selected" : `${agent.mcpServerIds.length} server(s) selected`}
             </span>
           </div>
 
@@ -1480,8 +1480,8 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
 
           {agent.mcpServerIds.length === 0 && (
             <div className="bg-muted/40 rounded-md px-3 py-2 text-[11px] text-muted-foreground">
-              <span className="font-medium text-foreground">All servers active</span>
-              <span className="ml-1">— the LLM sees every tool from every enabled server. Select servers above to restrict.</span>
+              <span className="font-medium text-foreground">No MCP access</span>
+              <span className="ml-1">— select one or more enabled servers to grant this agent access to their tools.</span>
             </div>
           )}
         </div>

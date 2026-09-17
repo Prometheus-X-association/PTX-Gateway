@@ -331,6 +331,95 @@ const callLlmOnce = async (
       ? baseUrl
       : `${baseUrl}/chat/completions`;
     try {
+      if (family === "anthropic") {
+        const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+        const anthropicMessages = messages.filter((message) => message.role !== "system").map((message) => {
+          if (message.role === "assistant" && message.tool_calls?.length) {
+            return {
+              role: "assistant",
+              content: [
+                ...(message.content ? [{ type: "text", text: message.content }] : []),
+                ...message.tool_calls.map((call) => {
+                  let input: unknown = {};
+                  try { input = JSON.parse(call.function.arguments); } catch { input = {}; }
+                  return { type: "tool_use", id: call.id, name: call.function.name, input };
+                }),
+              ],
+            };
+          }
+          if (message.role === "tool") {
+            return { role: "user", content: [{ type: "tool_result", tool_use_id: message.tool_call_id, content: message.content }] };
+          }
+          return { role: message.role === "assistant" ? "assistant" : "user", content: message.content };
+        });
+        const anthropicUrl = baseUrl.endsWith("/messages") ? baseUrl : `${baseUrl}/messages`;
+        const resp = await fetch(anthropicUrl, {
+          method: "POST",
+          headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model, max_tokens: 4096, system, messages: anthropicMessages,
+            ...(tools?.length ? { tools: tools.map((tool) => ({ name: tool.function.name, description: tool.function.description, input_schema: tool.function.parameters })) } : {}),
+          }),
+          signal: AbortSignal.timeout(90_000),
+        });
+        const raw = await resp.text();
+        if (!resp.ok) { errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const blocks = Array.isArray(parsed.content) ? parsed.content as Array<Record<string, unknown>> : [];
+        const text = blocks.filter((block) => block.type === "text").map((block) => String(block.text || "")).join("\n");
+        const toolCalls: ToolCall[] = blocks.filter((block) => block.type === "tool_use").map((block) => ({
+          id: String(block.id || crypto.randomUUID()),
+          type: "function" as const,
+          function: { name: String(block.name || ""), arguments: JSON.stringify(block.input ?? {}) },
+        }));
+        return { message: { role: "assistant", content: text, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }, providerName: p.name || model };
+      }
+
+      if (family === "gemini") {
+        const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+        const geminiContents = messages.filter((message) => message.role !== "system").map((message) => {
+          if (message.role === "assistant" && message.tool_calls?.length) {
+            return {
+              role: "model",
+              parts: [
+                ...(message.content ? [{ text: message.content }] : []),
+                ...message.tool_calls.map((call) => {
+                  let args: unknown = {};
+                  try { args = JSON.parse(call.function.arguments); } catch { args = {}; }
+                  return { functionCall: { name: call.function.name, args } };
+                }),
+              ],
+            };
+          }
+          if (message.role === "tool") {
+            return { role: "user", parts: [{ functionResponse: { name: message.name || "tool", response: { result: message.content } } }] };
+          }
+          return { role: message.role === "assistant" ? "model" : "user", parts: [{ text: message.content }] };
+        });
+        const geminiUrl = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const resp = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] }, contents: geminiContents,
+            ...(tools?.length ? { tools: [{ functionDeclarations: tools.map((tool) => ({ name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters })) }] } : {}),
+          }),
+          signal: AbortSignal.timeout(90_000),
+        });
+        const raw = await resp.text();
+        if (!resp.ok) { errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const candidates = parsed.candidates as Array<Record<string, unknown>> | undefined;
+        const content = candidates?.[0]?.content as Record<string, unknown> | undefined;
+        const parts = Array.isArray(content?.parts) ? content.parts as Array<Record<string, unknown>> : [];
+        const text = parts.filter((part) => typeof part.text === "string").map((part) => String(part.text)).join("\n");
+        const toolCalls: ToolCall[] = parts.filter((part) => part.functionCall && typeof part.functionCall === "object").map((part) => {
+          const call = part.functionCall as Record<string, unknown>;
+          return { id: crypto.randomUUID(), type: "function" as const, function: { name: String(call.name || ""), arguments: JSON.stringify(call.args ?? {}) } };
+        });
+        return { message: { role: "assistant", content: text, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }, providerName: p.name || model };
+      }
+
       const body: Record<string, unknown> = { model, temperature: 0.7, messages };
       if (tools && tools.length > 0) body.tools = tools;
       if (jsonMode && !tools?.length) body.response_format = { type: "json_object" };
@@ -559,7 +648,7 @@ const mcpNotifyInitialized = async (
 
 const discoverMcpTools = async (
   server: McpServerConfig,
-): Promise<{ tools: DiscoveredMcpTool[]; session: McpSession }> => {
+): Promise<{ tools: DiscoveredMcpTool[]; session: McpSession; error?: string }> => {
   try {
     // Initialize session
     const initialized = await mcpPost(server, "initialize", {
@@ -591,7 +680,7 @@ const discoverMcpTools = async (
     };
   } catch (error) {
     console.warn(`MCP discovery failed for ${server.name || server.url}:`, String(error));
-    return { tools: [], session: { protocolVersion: "2024-11-05" } };
+    return { tools: [], session: { protocolVersion: "2024-11-05" }, error: error instanceof Error ? error.message : String(error) };
   }
 };
 
@@ -1100,11 +1189,11 @@ serve(async (req: Request) => {
   // through a configured agent so its server and tool restrictions apply.
   const mcpServers = activeAgent ? (llmConfig.mcpServers || []).filter((s) => {
     if (!s.enabled || !s.url?.trim()) return false;
-    if (agentMcpIds && agentMcpIds.length > 0) return agentMcpIds.includes(s.id || "");
-    return true;
+    return Boolean(agentMcpIds?.includes(s.id || ""));
   }) : [];
   const allTools: OpenAITool[] = [];
   const mcpToolBindings = new Map<string, McpToolBinding>();
+  const mcpDiscoveryErrors: string[] = [];
   const usedToolNames = new Set<string>();
   if (selectedSkills.length > 0) {
     allTools.push({
@@ -1130,10 +1219,15 @@ serve(async (req: Request) => {
   }
   serverLoop: for (const [serverIndex, server] of mcpServers.entries()) {
     const discovery = await discoverMcpTools(server);
+    if (discovery.error) mcpDiscoveryErrors.push(`${server.name || server.url}: ${discovery.error}`);
+    if (!discovery.error && discovery.tools.length === 0) mcpDiscoveryErrors.push(`${server.name || server.url}: server advertised no tools`);
     const allowedNames = activeAgent?.mcpToolFilter?.[server.id ?? ""];
     const filtered = allowedNames && allowedNames.length > 0
       ? discovery.tools.filter((tool) => allowedNames.includes(tool.rawName))
       : discovery.tools;
+    if (!discovery.error && allowedNames && allowedNames.length > 0 && filtered.length === 0) {
+      mcpDiscoveryErrors.push(`${server.name || server.url}: none of the selected tools are currently advertised by the server`);
+    }
     for (const tool of filtered) {
       // OpenAI-compatible Chat Completions accepts at most 128 tools.
       if (allTools.length >= 128) break serverLoop;
@@ -1148,6 +1242,9 @@ serve(async (req: Request) => {
         rawName: tool.rawName,
       });
     }
+  }
+  if (activeAgent && mcpServers.length > 0 && mcpToolBindings.size === 0 && mcpDiscoveryErrors.length > 0) {
+    return sendError(`Assigned MCP tools are unavailable. ${mcpDiscoveryErrors.join("; ")}`, 502);
   }
 
   // SSE stream
@@ -1172,7 +1269,7 @@ serve(async (req: Request) => {
 
         // Without MCP tools, stream once. The previous implementation first made
         // a discarded non-streaming call and then repeated it as a stream.
-        if (allTools.length === 0 || body.attachment) {
+        if (allTools.length === 0) {
           for await (const token of streamLlm(providers, loopMessages, body.attachment)) {
             send({ type: "token", content: token });
           }
@@ -1190,7 +1287,13 @@ serve(async (req: Request) => {
 
           // No tool calls — final text response, stream it
           if (!message.tool_calls || message.tool_calls.length === 0) {
-            sendText(message.content || "");
+            if (body.attachment) {
+              for await (const token of streamLlm(providers, loopMessages, body.attachment)) {
+                send({ type: "token", content: token });
+              }
+            } else {
+              sendText(message.content || "");
+            }
             completed = true;
             break;
           }
