@@ -260,7 +260,7 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
 
     setIsSaving(true);
     try {
-      const { error } = await updateGlobalConfig({
+      const { data, error } = await updateGlobalConfig({
         app_name: config.app_name,
         app_version: config.app_version,
         environment: config.environment,
@@ -270,9 +270,44 @@ const GlobalConfigSection = ({ section = "all" }: GlobalConfigSectionProps) => {
 
       if (error) throw error;
 
+      // Keep the form synchronized with the row returned by the server. This
+      // also makes a successful save observable immediately without relying on
+      // a later remount/refetch.
+      if (data) {
+        const savedFeatures = data.features || {};
+        const savedProcessingPage = isRecord(savedFeatures.processingPage)
+          ? savedFeatures.processingPage
+          : {};
+
+        setConfig({
+          id: data.id,
+          app_name: data.app_name || DEFAULT_CONFIG.app_name,
+          app_version: data.app_version || DEFAULT_CONFIG.app_version,
+          environment: data.environment || DEFAULT_CONFIG.environment,
+          features: {
+            ...DEFAULT_CONFIG.features,
+            ...savedFeatures,
+            llmInsights: isRecord(savedFeatures.llmInsights)
+              ? savedFeatures.llmInsights
+              : DEFAULT_CONFIG.features.llmInsights,
+            processingPage: {
+              ...savedProcessingPage,
+              verticalStepBarTopText:
+                typeof savedProcessingPage.verticalStepBarTopText === "string"
+                  ? savedProcessingPage.verticalStepBarTopText
+                  : "",
+            },
+          },
+          logging: {
+            ...DEFAULT_CONFIG.logging,
+            ...(data.logging || {}),
+          },
+        });
+      }
+
       toast.success("Configuration saved");
-    } catch {
-      toast.error("Failed to save configuration");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save configuration");
     } finally {
       setIsSaving(false);
     }

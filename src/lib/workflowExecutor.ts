@@ -1,5 +1,5 @@
 import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge } from "@/types/workflow";
-import type { AgentNodeData, PluginNodeData, ConditionNodeData, TriggerNodeData } from "@/types/workflow";
+import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, TriggerNodeData } from "@/types/workflow";
 import { executeSandboxedJavascript } from "@/lib/workflowSandbox";
 
 export interface InlineAgentConfig {
@@ -10,6 +10,7 @@ export interface InlineAgentConfig {
 }
 
 export interface ExecutorContext {
+  workflowId?: string;
   resultData: unknown;
   docText: string | null;
   userMessage: string;
@@ -22,6 +23,7 @@ export interface ExecutorContext {
     prompt: string,
     prevOutput: unknown,
   ) => Promise<string>;
+  onApiRequest: (nodeId: string, config: ApiNodeData, prevOutput: unknown) => Promise<unknown>;
   onStepDone: (step: WorkflowStepResult) => void;
   onStepStart?: (nodeId: string, input: unknown) => void;
   /** Test/debug runs can stop immediately at the first failed node. */
@@ -164,6 +166,9 @@ export async function executeWorkflow(
         // Preserve structured responses as actual objects/arrays so downstream
         // nodes and edge data paths can address fields deterministically.
         output = parseStructuredAgentOutput(agentOutput);
+
+      } else if (node.type === "api") {
+        output = await ctx.onApiRequest(node.id, node.data as ApiNodeData, prevOutput);
 
       } else if (node.type === "plugin") {
         const d = node.data as PluginNodeData;

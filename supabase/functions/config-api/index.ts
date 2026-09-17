@@ -4,6 +4,7 @@ import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-organization-id, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
@@ -66,13 +67,13 @@ const FeaturesSchema = z.object({
     apiKey: z.string().max(5000).optional(),
     model: z.string().max(200).optional(),
     promptTemplate: z.string().max(50000).optional(),
-  }).optional(),
+  }).passthrough().optional(),
   resultPage: z.record(z.unknown()).optional(),
   dataSelection: z.record(z.unknown()).optional(),
   processingPage: z.record(z.unknown()).optional(),
   maxFileSizeMB: z.number().min(1).max(1000).optional(),
   maxFilesCount: z.number().min(1).max(100).optional(),
-}).strict();
+}).passthrough();
 
 const LoggingSchema = z.object({
   enabled: z.boolean().optional(),

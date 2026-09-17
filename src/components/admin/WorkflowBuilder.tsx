@@ -11,6 +11,7 @@ import {
   Play, Plus, Trash2, X, Code2, GitBranch,
   Bot, Square, ChevronRight, BookOpen, RotateCcw, GripVertical, Workflow, Settings2, Link2, Maximize2, Minimize2,
   FlaskConical, Loader2, CircleStop, CheckCircle2, XCircle,
+  Globe2, Send, KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type {
   AgentWorkflow, WorkflowNode, WorkflowEdge,
-  TriggerNodeData, AgentNodeData, PluginNodeData, ConditionNodeData, OutputNodeData, WorkflowStepResult,
+  TriggerNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, OutputNodeData, WorkflowStepResult,
 } from "@/types/workflow";
 import { executeWorkflow } from "@/lib/workflowExecutor";
 import { supabase } from "@/integrations/supabase/client";
@@ -49,6 +50,7 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
   trigger:   ({ className }) => <Play className={className} />,
   agent:     ({ className }) => <Bot className={className} />,
+  api:       ({ className }) => <Globe2 className={className} />,
   plugin:    ({ className }) => <Code2 className={className} />,
   condition: ({ className }) => <GitBranch className={className} />,
   output:    ({ className }) => <Square className={className} />,
@@ -57,6 +59,7 @@ const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
 const NODE_LIBRARY = [
   { type: "trigger", icon: Play, label: "Trigger", description: "Starts the workflow", color: "text-violet-600", iconBg: "bg-violet-500/10" },
   { type: "agent", icon: Bot, label: "AI Agent", description: "Runs an agent or skill", color: "text-sky-600", iconBg: "bg-sky-500/10" },
+  { type: "api", icon: Globe2, label: "API Request", description: "Calls an HTTP API", color: "text-cyan-600", iconBg: "bg-cyan-500/10" },
   { type: "plugin", icon: Code2, label: "JavaScript", description: "Transforms data safely", color: "text-amber-600", iconBg: "bg-amber-500/10" },
   { type: "condition", icon: GitBranch, label: "Condition", description: "Branches the workflow", color: "text-rose-500", iconBg: "bg-rose-500/10" },
   { type: "output", icon: Square, label: "Output", description: "Renders the final result", color: "text-emerald-600", iconBg: "bg-emerald-500/10" },
@@ -65,6 +68,7 @@ const NODE_LIBRARY = [
 const NODE_ACCENTS: Record<string, string> = {
   trigger: "border-l-violet-500",
   agent: "border-l-sky-500",
+  api: "border-l-cyan-500",
   plugin: "border-l-amber-500",
   condition: "border-l-rose-500",
   output: "border-l-emerald-500",
@@ -154,6 +158,19 @@ const pickDataPath = (value: unknown, path: string): unknown => {
   return current;
 };
 
+const listDataPaths = (value: unknown, prefix = "", depth = 0): string[] => {
+  if (depth > 4 || value === null || typeof value !== "object") return prefix ? [prefix] : [];
+  const entries = Array.isArray(value)
+    ? value.slice(0, 1).map((item, index) => [`[${index}]`, item] as const)
+    : Object.entries(value as Record<string, unknown>).slice(0, 40);
+  const paths: string[] = prefix ? [prefix] : [];
+  for (const [key, child] of entries) {
+    const next = Array.isArray(value) ? `${prefix}${key}` : prefix ? `${prefix}.${key}` : key;
+    paths.push(...listDataPaths(child, next, depth + 1));
+  }
+  return [...new Set(paths)].slice(0, 60);
+};
+
 // ─── Custom Node renderer ─────────────────────────────────────────────────────
 
 interface FlowNodeProps {
@@ -209,6 +226,11 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
       {type === "plugin" && (
         <p className="text-[10px] text-muted-foreground truncate">{(data as PluginNodeData).description || "Sandboxed JS transform"}</p>
       )}
+      {type === "api" && (
+        <p className="text-[10px] text-muted-foreground truncate">
+          {(data as ApiNodeData).method ?? "GET"} {(data as ApiNodeData).url || "URL not configured"}
+        </p>
+      )}
       {type === "condition" && (
         <p className="text-[10px] text-muted-foreground font-mono truncate">{(data as ConditionNodeData).expression}</p>
       )}
@@ -239,6 +261,7 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
 const nodeTypes = {
   trigger:   (p: FlowNodeProps) => <FlowNode {...p} type="trigger" />,
   agent:     (p: FlowNodeProps) => <FlowNode {...p} type="agent" />,
+  api:       (p: FlowNodeProps) => <FlowNode {...p} type="api" />,
   plugin:    (p: FlowNodeProps) => <FlowNode {...p} type="plugin" />,
   condition: (p: FlowNodeProps) => <FlowNode {...p} type="condition" />,
   output:    (p: FlowNodeProps) => <FlowNode {...p} type="output" />,
@@ -436,6 +459,117 @@ const AgentPanel = ({ node, agents, skills, onChange }: { node: WorkflowNode; ag
   );
 };
 
+const KeyValueEditor = ({ label, rows, onChange, secret = false }: {
+  label: string;
+  rows: ApiKeyValue[];
+  onChange: (rows: ApiKeyValue[]) => void;
+  secret?: boolean;
+}) => {
+  const patchRow = (id: string, patch: Partial<ApiKeyValue>) => onChange(rows.map((row) => row.id === id ? { ...row, ...patch } : row));
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <Label className="text-xs">{label}</Label>
+        <button type="button" className="text-[10px] font-medium text-primary hover:underline" onClick={() => onChange([...rows, { id: uid(), key: "", value: "", enabled: true }])}>+ Add</button>
+      </div>
+      {rows.length === 0 ? <p className="rounded-md border border-dashed p-2 text-[10px] text-muted-foreground">No {label.toLowerCase()} configured.</p> : rows.map((row) => (
+        <div key={row.id} className="grid grid-cols-[22px_minmax(0,1fr)_minmax(0,1fr)_22px] items-center gap-1">
+          <Switch checked={row.enabled} onCheckedChange={(enabled) => patchRow(row.id, { enabled })} className="scale-75" />
+          <Input className="h-7 px-2 font-mono text-[10px]" value={row.key} placeholder="Name" onChange={(event) => patchRow(row.id, { key: event.target.value })} />
+          <Input type={secret ? "password" : "text"} className="h-7 px-2 font-mono text-[10px]" value={row.value} placeholder="Value or {{prevOutput.id}}" onChange={(event) => patchRow(row.id, { value: event.target.value })} />
+          <button type="button" title="Remove" onClick={() => onChange(rows.filter((item) => item.id !== row.id))}><X className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" /></button>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const ApiPanel = ({ node, organizationId, onChange }: { node: WorkflowNode; organizationId?: string; onChange: (d: ApiNodeData) => void }) => {
+  const d = node.data as ApiNodeData;
+  const [testInput, setTestInput] = useState('{\n  "example": "value"\n}');
+  const [testing, setTesting] = useState(false);
+  const [testError, setTestError] = useState<string | null>(null);
+  const [testResponse, setTestResponse] = useState<Record<string, unknown> | null>(null);
+
+  const runTest = async () => {
+    setTesting(true);
+    setTestError(null);
+    setTestResponse(null);
+    try {
+      let input: unknown = testInput;
+      try { input = JSON.parse(testInput); } catch { /* plain text is valid test input */ }
+      const { data, error } = await supabase.functions.invoke("workflow-api-request", {
+        body: { mode: "test", config: d, input, result: input, userMessage: "API node test" },
+        headers: organizationId ? { "x-organization-id": organizationId } : undefined,
+      });
+      if (error) throw error;
+      const response = data as Record<string, unknown>;
+      setTestResponse(response);
+      if (response.ok === false) setTestError(String(response.error || `API returned status ${response.status ?? "unknown"}`));
+    } catch (error) {
+      setTestError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1"><Label className="text-xs">Label</Label><Input className="h-7 text-xs" value={d.label} onChange={(event) => onChange({ ...d, label: event.target.value })} /></div>
+      <div className="grid grid-cols-[92px_1fr] gap-2">
+        <div className="space-y-1">
+          <Label className="text-xs">Method</Label>
+          <Select value={d.method} onValueChange={(method) => onChange({ ...d, method: method as ApiNodeData["method"] })}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>{["GET", "POST", "PUT", "PATCH", "DELETE"].map((method) => <SelectItem key={method} value={method}>{method}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1"><Label className="text-xs">API URL</Label><Input className="h-8 font-mono text-xs" value={d.url} placeholder="https://api.example.com/items/{{prevOutput.id}}" onChange={(event) => onChange({ ...d, url: event.target.value })} /></div>
+      </div>
+      <p className="text-[10px] leading-relaxed text-muted-foreground">Dynamic values support <code className="rounded bg-muted px-1">{"{{prevOutput.path}}"}</code>, <code className="rounded bg-muted px-1">{"{{result.path}}"}</code>, and <code className="rounded bg-muted px-1">{"{{userMessage}}"}</code>.</p>
+
+      <KeyValueEditor label="Query parameters" rows={d.queryParams ?? []} onChange={(queryParams) => onChange({ ...d, queryParams })} />
+      <KeyValueEditor label="Headers" rows={d.headers ?? []} onChange={(headers) => onChange({ ...d, headers })} secret />
+
+      <div className="space-y-1">
+        <Label className="flex items-center gap-1 text-xs"><KeyRound className="h-3 w-3" /> Authentication</Label>
+        <Select value={d.authType ?? "none"} onValueChange={(authType) => onChange({ ...d, authType: authType as ApiNodeData["authType"] })}>
+          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="none">None</SelectItem><SelectItem value="bearer">Bearer token</SelectItem><SelectItem value="basic">Basic authentication</SelectItem><SelectItem value="api_key">API key</SelectItem></SelectContent>
+        </Select>
+        {d.authType === "bearer" && <Input type="password" className="h-8 font-mono text-xs" value={d.bearerToken ?? ""} placeholder={d.hasStoredCredentials ? "Stored server-side — enter to replace" : "Bearer token"} onChange={(event) => onChange({ ...d, bearerToken: event.target.value, hasStoredCredentials: undefined })} />}
+        {d.authType === "basic" && <div className="grid grid-cols-2 gap-2"><Input className="h-8 text-xs" value={d.basicUsername ?? ""} placeholder="Username" onChange={(event) => onChange({ ...d, basicUsername: event.target.value })} /><Input type="password" className="h-8 text-xs" value={d.basicPassword ?? ""} placeholder={d.hasStoredCredentials ? "Stored — enter to replace" : "Password"} onChange={(event) => onChange({ ...d, basicPassword: event.target.value, hasStoredCredentials: undefined })} /></div>}
+        {d.authType === "api_key" && <div className="space-y-2"><div className="grid grid-cols-2 gap-2"><Input className="h-8 font-mono text-xs" value={d.apiKeyName ?? ""} placeholder="X-API-Key" onChange={(event) => onChange({ ...d, apiKeyName: event.target.value })} /><Select value={d.apiKeyLocation ?? "header"} onValueChange={(apiKeyLocation) => onChange({ ...d, apiKeyLocation: apiKeyLocation as "header" | "query" })}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="header">Header</SelectItem><SelectItem value="query">Query parameter</SelectItem></SelectContent></Select></div><Input type="password" className="h-8 font-mono text-xs" value={d.apiKeyValue ?? ""} placeholder={d.hasStoredCredentials ? "Stored server-side — enter to replace" : "API key value"} onChange={(event) => onChange({ ...d, apiKeyValue: event.target.value, hasStoredCredentials: undefined })} /></div>}
+      </div>
+
+      <div className="space-y-1">
+        <Label className="text-xs">Request body</Label>
+        <Select value={d.bodyType ?? "none"} onValueChange={(bodyType) => onChange({ ...d, bodyType: bodyType as ApiNodeData["bodyType"] })}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">No body</SelectItem><SelectItem value="json">JSON</SelectItem><SelectItem value="text">Plain text</SelectItem><SelectItem value="form_urlencoded">Form URL encoded</SelectItem></SelectContent></Select>
+        {d.bodyType !== "none" && <Textarea className="min-h-[90px] font-mono text-[10px]" value={d.body ?? ""} placeholder={d.bodyType === "json" ? '{ "id": "{{prevOutput.id}}" }' : "value={{prevOutput.value}}"} onChange={(event) => onChange({ ...d, body: event.target.value })} />}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1"><Label className="text-xs">Parse response as</Label><Select value={d.responseType ?? "auto"} onValueChange={(responseType) => onChange({ ...d, responseType: responseType as ApiNodeData["responseType"] })}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="auto">Auto</SelectItem><SelectItem value="json">JSON</SelectItem><SelectItem value="text">Text</SelectItem></SelectContent></Select></div>
+        <div className="space-y-1"><Label className="text-xs">Output data path</Label><Input className="h-8 font-mono text-xs" value={d.outputPath ?? ""} placeholder="Entire body or data.items" onChange={(event) => onChange({ ...d, outputPath: event.target.value || undefined })} /></div>
+      </div>
+
+      <div className="rounded-lg border bg-muted/20 p-2.5 space-y-2">
+        <div><p className="text-[10px] font-semibold uppercase tracking-wide">Test this request</p><p className="text-[9px] text-muted-foreground">Runs a real request through the secure server proxy. Unsaved credentials are sent only for this admin test.</p></div>
+        <Textarea className="min-h-[70px] font-mono text-[10px]" value={testInput} onChange={(event) => setTestInput(event.target.value)} placeholder="Previous-node test input (JSON or text)" />
+        <Button type="button" size="sm" className="h-7 gap-1.5 text-xs" disabled={testing || !d.url.trim()} onClick={() => void runTest()}>{testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Test request</Button>
+        {testError && <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-[10px] text-destructive">{testError}</p>}
+        {testResponse && <>
+          <details open className="rounded-md border bg-background"><summary className="cursor-pointer px-2 py-1.5 text-[10px] font-semibold">Response · HTTP {String(testResponse.status ?? "?")}</summary><pre className="max-h-56 overflow-auto border-t p-2 whitespace-pre-wrap break-words font-mono text-[9px]">{debugJson(testResponse.data)}</pre></details>
+          {listDataPaths(testResponse.data).length > 0 && <div className="space-y-1"><p className="text-[10px] font-semibold">Choose node output</p><div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto"><button type="button" onClick={() => onChange({ ...d, outputPath: undefined })} className={`rounded border px-1.5 py-1 font-mono text-[9px] ${!d.outputPath ? "border-primary bg-primary/10 text-primary" : "bg-background"}`}>entire body</button>{listDataPaths(testResponse.data).map((path) => <button type="button" key={path} onClick={() => onChange({ ...d, outputPath: path })} className={`rounded border px-1.5 py-1 font-mono text-[9px] ${d.outputPath === path ? "border-primary bg-primary/10 text-primary" : "bg-background"}`}>{path}</button>)}</div></div>}
+          <div className="rounded-md border bg-background p-2"><p className="mb-1 text-[10px] font-semibold">Selected node output</p><pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[9px]">{debugJson(pickDataPath(testResponse.data, d.outputPath ?? ""))}</pre></div>
+        </>}
+      </div>
+
+      <SchemaRow inputSchema={d.inputSchema} outputSchema={d.outputSchema} onInputChange={(inputSchema) => onChange({ ...d, inputSchema: inputSchema || undefined })} onOutputChange={(outputSchema) => onChange({ ...d, outputSchema: outputSchema || undefined })} />
+    </div>
+  );
+};
+
 const PluginPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: PluginNodeData) => void }) => {
   const d = node.data as PluginNodeData;
   return (
@@ -482,9 +616,14 @@ const ConditionPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: 
         <p className="text-[10px] text-muted-foreground">
           Sandboxed JS expression on <code className="bg-muted px-0.5 rounded">prevOutput</code>. Truthy → <span className="text-emerald-600">true</span> edge, falsy → <span className="text-rose-500">false</span> edge.
         </p>
-        <Input className="h-7 text-xs font-mono" value={d.expression}
-          placeholder="Array.isArray(prevOutput) && prevOutput.length > 0"
-          onChange={(e) => onChange({ ...d, expression: e.target.value })} />
+        <Textarea
+          className="min-h-[96px] resize-y font-mono text-xs"
+          rows={5}
+          spellCheck={false}
+          value={d.expression}
+          placeholder={"Array.isArray(prevOutput) &&\nprevOutput.length > 0"}
+          onChange={(e) => onChange({ ...d, expression: e.target.value })}
+        />
       </div>
       <div className="rounded-lg border bg-muted/40 p-2 space-y-0.5">
         <div className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400">
@@ -943,6 +1082,7 @@ Return ONLY the HTML. No prose, no markdown fences, no DOCTYPE.`,
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface WorkflowBuilderProps {
+  workflowId: string;
   workflow: AgentWorkflow;
   agents: AgentStub[];
   skills: SkillStub[];
@@ -962,7 +1102,7 @@ const defaultWorkflow = (): AgentWorkflow => ({
   edges: [],
 });
 
-export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onChange }: WorkflowBuilderProps) => {
+export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, organizationId, onChange }: WorkflowBuilderProps) => {
   const wf = workflow.nodes.length === 0 ? defaultWorkflow() : workflow;
 
   const [nodes, setNodes] = useState<Node[]>(wf.nodes as Node[]);
@@ -991,6 +1131,11 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
   const canvasNodes = nodes.map((node) => ({
     ...node,
+    // React Flow ships a white built-in wrapper for the reserved `output`
+    // node class. Our output node is fully custom, so neutralize that wrapper.
+    ...(node.type === "output" ? {
+      style: { ...node.style, background: "transparent", border: "none", padding: 0, width: "auto" },
+    } : {}),
     data: { ...node.data, __testStatus: testRuns[node.id]?.status },
   }));
   const canvasEdges = edges.map((edge) => {
@@ -1087,6 +1232,7 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
     const defaults: Record<string, unknown> = {
       trigger:   { label: "Trigger", triggerType: "manual" } satisfies TriggerNodeData,
       agent:     { label: "Agent", mode: "existing", agentId: agents[0]?.id ?? "", passPrevOutput: true } satisfies AgentNodeData,
+      api:       { label: "API Request", url: "", method: "GET", queryParams: [], headers: [], authType: "none", bodyType: "none", responseType: "auto" } satisfies ApiNodeData,
       plugin:    { label: "Plugin", code: "return input.prevOutput;", description: "" } satisfies PluginNodeData,
       condition: { label: "Condition", expression: "prevOutput?.length > 0" } satisfies ConditionNodeData,
       output:    { label: "Output", renderAs: "auto" } satisfies OutputNodeData,
@@ -1185,6 +1331,7 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
       const run = await executeWorkflow({ nodes: nodes as WorkflowNode[], edges: edges as WorkflowEdge[] }, {
+        workflowId,
         resultData,
         docText: testInputMode === "text" ? testInput : null,
         userMessage: testPrompt,
@@ -1212,6 +1359,15 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
               visits: current[step.nodeId]?.visits ?? 1,
             },
           }));
+        },
+        onApiRequest: async (nodeId, config, input) => {
+          const { data, error } = await supabase.functions.invoke("workflow-api-request", {
+            body: { mode: "test", workflowId, nodeId, config, input, result: resultData, userMessage: testPrompt },
+            headers: organizationId ? { "x-organization-id": organizationId } : undefined,
+          });
+          if (error) throw error;
+          if (!data?.ok) throw new Error(data?.error || `API request failed (${data?.status ?? "unknown"})`);
+          return pickDataPath(data.data, config.outputPath ?? "");
         },
         onAgentStep: async (_nodeId, agentConfig, prompt, prevOutput) => {
           const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-with-result`, {
@@ -1446,7 +1602,7 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
             <Background gap={20} size={1} color="hsl(var(--border))" />
             <Controls showInteractive={false} className="!m-3 !overflow-hidden !rounded-lg !border !border-border !bg-background !shadow-sm" />
             <MiniMap
-              nodeColor={(node) => ({ trigger: "#7c3aed", agent: "#0ea5e9", plugin: "#f59e0b", condition: "#f43f5e", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+              nodeColor={(node) => ({ trigger: "#7c3aed", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
               maskColor="hsl(var(--background) / 0.65)"
               className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
             />
@@ -1482,6 +1638,7 @@ export const WorkflowBuilder = ({ workflow, agents, skills, organizationId, onCh
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
                 {selectedNode.type === "trigger" && <TriggerPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "agent" && <AgentPanel node={selectedNode} agents={agents} skills={skills} onChange={(data) => updateSelectedNodeData(data as never)} />}
+                {selectedNode.type === "api" && <ApiPanel node={selectedNode} organizationId={organizationId} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "plugin" && <PluginPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "condition" && <ConditionPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "output" && <OutputPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}

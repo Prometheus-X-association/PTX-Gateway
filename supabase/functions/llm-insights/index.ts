@@ -246,6 +246,35 @@ const toObject = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 
+const publicSafeWorkflows = (workflows: unknown[]): unknown[] => workflows.map((workflow) => {
+  const copy = structuredClone(workflow) as Record<string, unknown>;
+  const graph = toObject(copy.graph);
+  if (!Array.isArray(graph.nodes)) return copy;
+  graph.nodes = graph.nodes.map((rawNode) => {
+    const node = toObject(rawNode);
+    if (node.type !== "api") return node;
+    const savedData = toObject(node.data);
+    const hasStoredCredentials = Boolean(
+      savedData.bearerToken || savedData.basicPassword || savedData.apiKeyValue ||
+      (Array.isArray(savedData.headers) && savedData.headers.some((row) => Boolean(toObject(row).value))) ||
+      (Array.isArray(savedData.queryParams) && savedData.queryParams.some((row) => Boolean(toObject(row).value))) ||
+      savedData.body
+    );
+    // Runtime execution only needs the node identity. The complete saved request,
+    // including URL, headers, parameters, body, and credentials, stays server-side.
+    const data = {
+      label: typeof savedData.label === "string" ? savedData.label : "API Request",
+      method: typeof savedData.method === "string" ? savedData.method : "GET",
+      responseType: typeof savedData.responseType === "string" ? savedData.responseType : "auto",
+      outputPath: typeof savedData.outputPath === "string" ? savedData.outputPath : undefined,
+      hasStoredCredentials,
+    };
+    return { ...node, data };
+  });
+  copy.graph = graph;
+  return copy;
+});
+
 const parseJsonFromText = (raw: string): unknown => {
   const trimmed = raw.trim();
   if (!trimmed) return {};
@@ -504,7 +533,7 @@ serve(async (req) => {
           predefinedPrompts: Array.isArray(llmConfig.predefinedPrompts)
             ? llmConfig.predefinedPrompts.map(String).filter(Boolean)
             : [],
-          workflows: Array.isArray(llmConfig.workflows) ? llmConfig.workflows : [],
+          workflows: Array.isArray(llmConfig.workflows) ? publicSafeWorkflows(llmConfig.workflows) : [],
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

@@ -1,6 +1,6 @@
 // Agentic workflow graph — persisted inside llmInsights.workflows[] in global_configs.
 
-export type NodeType = "trigger" | "agent" | "plugin" | "condition" | "output";
+export type NodeType = "trigger" | "agent" | "api" | "plugin" | "condition" | "output";
 
 // ─── Node data payloads ───────────────────────────────────────────────────────
 
@@ -44,6 +44,37 @@ export interface PluginNodeData {
   outputSchema?: string;
 }
 
+export interface ApiKeyValue {
+  id: string;
+  key: string;
+  value: string;
+  enabled: boolean;
+}
+
+export interface ApiNodeData {
+  label: string;
+  url: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  queryParams: ApiKeyValue[];
+  headers: ApiKeyValue[];
+  authType: "none" | "bearer" | "basic" | "api_key";
+  bearerToken?: string;
+  basicUsername?: string;
+  basicPassword?: string;
+  apiKeyName?: string;
+  apiKeyValue?: string;
+  apiKeyLocation?: "header" | "query";
+  bodyType: "none" | "json" | "text" | "form_urlencoded";
+  body?: string;
+  responseType: "auto" | "json" | "text";
+  /** Dot/bracket path within the parsed response body to emit, e.g. data.items[0]. */
+  outputPath?: string;
+  inputSchema?: string;
+  outputSchema?: string;
+  /** Set on public-safe workflow copies when credentials exist only server-side. */
+  hasStoredCredentials?: boolean;
+}
+
 export interface ConditionNodeData {
   label: string;
   /** JS expression evaluated on prevOutput; truthy → "true" handle */
@@ -67,6 +98,7 @@ export interface OutputNodeData {
 export type AnyNodeData =
   | TriggerNodeData
   | AgentNodeData
+  | ApiNodeData
   | PluginNodeData
   | ConditionNodeData
   | OutputNodeData;

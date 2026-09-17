@@ -798,6 +798,7 @@ const ChatDrawer = ({
 
     try {
       const { results, aborted, error: workflowError } = await executeWorkflow(workflow, {
+        workflowId: workflowConfig.id,
         resultData,
         docText,
         userMessage: userMsg,
@@ -805,6 +806,33 @@ const ChatDrawer = ({
         orgExecutionToken: orgExecutionToken ?? null,
         supabaseUrl,
         signal: abortRef.current.signal,
+
+        onApiRequest: async (nodeId, _config, input) => {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const token = sessionData?.session?.access_token;
+          const response = await fetch(`${supabaseUrl}/functions/v1/workflow-api-request`, {
+            method: "POST",
+            signal: abortRef.current?.signal,
+            headers: {
+              "Content-Type": "application/json",
+              apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              ...(organizationId ? { "x-organization-id": organizationId } : {}),
+            },
+            body: JSON.stringify({
+              mode: "execute",
+              workflowId: workflowConfig.id,
+              nodeId,
+              input,
+              result: resultData,
+              userMessage: userMsg,
+              org_execution_token: orgExecutionToken,
+            }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || !payload.ok) throw new Error(payload.error || `API request failed (${response.status})`);
+          return payload.output;
+        },
 
         onAgentStep: async (nodeId, agentConfig, prompt, prevOutput) => {
           const { data: sessionData } = await supabase.auth.getSession();

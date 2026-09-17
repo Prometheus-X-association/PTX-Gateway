@@ -44,3 +44,6 @@ verify_jwt = false
 
 [functions.mcp-test]
 verify_jwt = false
+
+[functions.workflow-api-request]
+verify_jwt = false

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   Plus, Pencil, Trash2, Play, Square, ChevronDown, ChevronUp,
-  GitBranch, Code2, Bot, X, Copy,
+  GitBranch, Code2, Bot, Globe2, X, Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,7 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const NODE_TYPE_COLORS: Record<string, string> = {
   trigger:   "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30",
   agent:     "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30",
+  api:       "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border-cyan-500/30",
   plugin:    "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
   condition: "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30",
   output:    "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
@@ -28,6 +29,7 @@ const NODE_TYPE_COLORS: Record<string, string> = {
 const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
   trigger:   ({ className }) => <Play className={className} />,
   agent:     ({ className }) => <Bot className={className} />,
+  api:       ({ className }) => <Globe2 className={className} />,
   plugin:    ({ className }) => <Code2 className={className} />,
   condition: ({ className }) => <GitBranch className={className} />,
   output:    ({ className }) => <Square className={className} />,
@@ -95,6 +97,7 @@ const EditPanel = ({ config, agents, skills, organizationId, onChange, onClose }
     </div>
 
     <WorkflowBuilder
+      workflowId={config.id}
       workflow={config.graph}
       agents={agents}
       skills={skills}
