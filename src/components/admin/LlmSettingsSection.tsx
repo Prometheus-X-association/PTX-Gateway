@@ -19,6 +19,10 @@ import {
 } from "lucide-react";
 import { WorkflowsManagement } from "@/components/admin/WorkflowsManagement";
 import { AgentSkillsManagement } from "@/components/admin/AgentSkillsManagement";
+import {
+  ChatAvailabilitySelector,
+  type ChatAvailabilityTarget,
+} from "@/components/admin/ChatAvailabilitySelector";
 import type { WorkflowConfig } from "@/types/workflow";
 import type { AgentSkill } from "@/types/agentSkill";
 import { createSkillsFrameworkMapperTemplate } from "@/types/agentSkill";
@@ -60,6 +64,7 @@ interface LlmAgent {
   agentProviders: LlmProvider[];
   defaultPrompts: string[];
   skillIds: string[];
+  targetResources: string[];
   enabled: boolean;
   ragSources: "all" | "result" | "document" | "none";
   ragMode: "auto" | "chunks" | "none"; // auto = full doc if small, chunks if large
@@ -172,6 +177,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     fallbackOutput: "text",
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
+    targetResources: [],
     defaultPrompts: [
       "Summarize the key findings in 3 bullet points",
       "Which item has the highest value and why might that be?",
@@ -189,6 +195,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     fallbackOutput: "html",
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "html")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
+    targetResources: [],
     defaultPrompts: [
       "Show me a bar chart of the top 10 results",
       "Create a pie chart of the data distribution",
@@ -206,6 +213,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     fallbackOutput: "mixed",
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "mixed")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
+    targetResources: [],
     defaultPrompts: [
       "Generate a complete AI insight with visualization for this data",
       "Give me a business summary with a supporting chart",
@@ -223,6 +231,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     outputInstructions:
       'Return ONLY valid JSON. No markdown, no code fences.\n\nRequired keys:\n- "summary": string\n- "insights": string[]\n- "visualization": { "type": "bar"|"line"|"pie"|"scatter"|"area", "data": array, "labels"?: string[] }',
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
+    targetResources: [],
     defaultPrompts: [
       "Analyze this data and generate an interactive chart I can switch between types",
       "Generate a summary with insights and a switchable visualization",
@@ -278,6 +287,7 @@ const emptyAgent = (): LlmAgent => ({
   outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
   mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], defaultPrompts: [], enabled: true,
   skillIds: [],
+  targetResources: [],
   ragSources: "all", ragMode: "auto", ragTopK: 20,
 });
 
@@ -356,6 +366,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         : [],
       defaultPrompts: Array.isArray(a.defaultPrompts) ? (a.defaultPrompts as unknown[]).map(String).filter(Boolean) : [],
       skillIds: Array.isArray(a.skillIds) ? (a.skillIds as unknown[]).map(String) : [],
+      targetResources: Array.isArray(a.targetResources) ? (a.targetResources as unknown[]).map(String) : [],
       enabled: a.enabled !== false,
       ragSources: (["all", "result", "document", "none"].includes(String(a.ragSources ?? "")) ? a.ragSources : "all") as LlmAgent["ragSources"],
       ragMode: (["auto", "chunks", "none"].includes(String(a.ragMode ?? "")) ? a.ragMode : "auto") as LlmAgent["ragMode"],
@@ -430,6 +441,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       name: String(w.name || "Workflow"),
       description: String(w.description || ""),
       enabled: w.enabled !== false,
+      targetResources: Array.isArray(w.targetResources) ? w.targetResources.map(String) : [],
       graph: (w.graph && typeof w.graph === "object") ? w.graph : { nodes: [], edges: [] },
       createdAt: String(w.createdAt || new Date().toISOString()),
     }));
@@ -442,6 +454,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         name: "Workflow",
         description: "",
         enabled: true,
+        targetResources: [],
         graph: legacyGraph as WorkflowConfig["graph"],
         createdAt: new Date().toISOString(),
       }];
@@ -928,6 +941,7 @@ const AgentTableRow = ({ agent, index, total, isEditing, mcpServers, onToggleEdi
 
 interface AgentEditPanelProps {
   agent: LlmAgent;
+  availabilityTargets: ChatAvailabilityTarget[];
   skills: AgentSkill[];
   mcpServers: McpServer[];
   globalProviders: LlmProvider[];
@@ -937,7 +951,7 @@ interface AgentEditPanelProps {
   onClose: () => void;
 }
 
-const AgentEditPanel = ({ agent, skills, mcpServers, globalProviders, supabaseClient, organizationId, onChange, onClose }: AgentEditPanelProps) => {
+const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, globalProviders, supabaseClient, organizationId, onChange, onClose }: AgentEditPanelProps) => {
   const [showAgentProviderKey, setShowAgentProviderKey] = useState<string | null>(null);
   // per-server tool discovery state
   const [serverTools, setServerTools] = useState<Record<string, { loading: boolean; tools: McpTool[]; error?: string }>>({});
@@ -1042,6 +1056,12 @@ const AgentEditPanel = ({ agent, skills, mcpServers, globalProviders, supabaseCl
             value={agent.description} onChange={(e) => onChange({ ...agent, description: e.target.value })} />
         </div>
       </div>
+
+      <ChatAvailabilitySelector
+        targetIds={agent.targetResources}
+        targets={availabilityTargets}
+        onChange={(targetResources) => onChange({ ...agent, targetResources })}
+      />
 
       {/* System Prompt */}
       <div className="space-y-1.5">
@@ -1523,18 +1543,36 @@ const LlmSettingsSection = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [availabilityTargets, setAvailabilityTargets] = useState<ChatAvailabilityTarget[]>([]);
 
   useEffect(() => {
     const fetchConfig = async () => {
       if (!user?.organization?.id) return;
       setIsLoading(true);
       try {
-        const { data, error } = await supabase
-          .from("global_configs")
-          .select("id, app_name, app_version, environment, logging, features")
-          .eq("organization_id", user.organization.id)
-          .maybeSingle();
+        const [
+          { data, error },
+          { data: softwareData, error: softwareError },
+          { data: serviceChainData, error: serviceChainError },
+        ] = await Promise.all([
+          supabase
+            .from("global_configs")
+            .select("id, app_name, app_version, environment, logging, features")
+            .eq("organization_id", user.organization.id)
+            .maybeSingle(),
+          supabase
+            .from("dataspace_params")
+            .select("id, resource_name, resource_url")
+            .eq("organization_id", user.organization.id)
+            .eq("resource_type", "software"),
+          supabase
+            .from("service_chains")
+            .select("id, catalog_id, basis_information")
+            .eq("organization_id", user.organization.id),
+        ]);
         if (error && error.code !== "PGRST116") throw error;
+        if (softwareError) throw softwareError;
+        if (serviceChainError) throw serviceChainError;
 
         const rawFeatures = (data?.features as Record<string, unknown> | null) ?? {};
         const rawLlm = (rawFeatures.llmInsights as Record<string, unknown> | undefined) ?? {};
@@ -1542,6 +1580,23 @@ const LlmSettingsSection = () => {
         setFeaturesRest(rest);
         setLlm(migrateFromLegacy(rawLlm));
         setConfigId(data?.id);
+        setAvailabilityTargets([
+          ...(softwareData || []).map((item) => ({
+            id: `software:${item.id}`,
+            label: item.resource_name || item.resource_url || item.id,
+            type: "software" as const,
+          })),
+          ...(serviceChainData || []).map((item) => {
+            const basis = item.basis_information && typeof item.basis_information === "object" && !Array.isArray(item.basis_information)
+              ? item.basis_information as Record<string, unknown>
+              : {};
+            return {
+              id: `serviceChain:${item.id}`,
+              label: String(basis.name || item.catalog_id || item.id),
+              type: "serviceChain" as const,
+            };
+          }),
+        ]);
         setGlobalSnapshot({
           app_name: String(data?.app_name || DEFAULT_GLOBAL_SNAPSHOT.app_name),
           app_version: String(data?.app_version || DEFAULT_GLOBAL_SNAPSHOT.app_version),
@@ -1831,7 +1886,7 @@ const LlmSettingsSection = () => {
                   />
                   {editingAgentId === agent.id && (
                     <AgentEditPanel
-                      agent={agent} skills={llm.skills} mcpServers={llm.mcpServers} globalProviders={llm.providers}
+                      agent={agent} availabilityTargets={availabilityTargets} skills={llm.skills} mcpServers={llm.mcpServers} globalProviders={llm.providers}
                       supabaseClient={supabase} organizationId={user?.organization?.id}
                       onChange={(updated) => updateAgent(i, updated)}
                       onClose={() => setEditingAgentId(null)}
@@ -1912,6 +1967,7 @@ const LlmSettingsSection = () => {
           </p>
           <WorkflowsManagement
             workflows={llm.workflows ?? []}
+            availabilityTargets={availabilityTargets}
             organizationId={user?.organization?.id}
             skills={llm.skills.filter((skill) => skill.enabled)}
             agents={llm.agents.filter((a) => a.enabled).map((a) => ({

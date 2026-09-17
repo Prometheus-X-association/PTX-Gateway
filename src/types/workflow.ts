@@ -136,6 +136,8 @@ export interface WorkflowConfig {
   name: string;
   description: string;
   enabled: boolean;
+  /** Result-page services/service chains where this workflow is offered. Empty means all. */
+  targetResources?: string[];
   graph: AgentWorkflow;
   createdAt?: string;
 }

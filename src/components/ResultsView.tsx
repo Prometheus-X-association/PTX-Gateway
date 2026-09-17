@@ -2493,6 +2493,7 @@ const ResultsView = ({
   const [llmAgents, setLlmAgents] = useState<Array<{
     id: string; name: string; description: string;
     expectedOutput: string; fallbackOutput?: string; defaultPrompts: string[];
+    targetResources: string[];
     ragSources: "all" | "result" | "document" | "none";
     ragMode: "auto" | "chunks" | "none";
     ragTopK: number;
@@ -2508,6 +2509,15 @@ const ResultsView = ({
     }
     return selectedAnalyticsTargetId || null;
   }, [selectedAnalytics, selectedAnalyticsTargetId]);
+  const compatibleLlmAgents = useMemo(() => llmAgents.filter((agent) =>
+    agent.targetResources.length === 0 ||
+    (selectedTargetId ? agent.targetResources.includes(selectedTargetId) : false)
+  ), [llmAgents, selectedTargetId]);
+  const compatibleLlmWorkflows = useMemo(() => llmWorkflows.filter((workflow) => {
+    const targets = workflow.targetResources || [];
+    return targets.length === 0 || (selectedTargetId ? targets.includes(selectedTargetId) : false);
+  }), [llmWorkflows, selectedTargetId]);
+  const hasCompatibleChat = llmFreeChatEnabled || compatibleLlmAgents.length > 0 || compatibleLlmWorkflows.length > 0;
   const compatibleExportApiConfigs = useMemo(() => {
     return exportApiConfigs.filter((config) => {
       if (!(config.is_active ?? true)) {
@@ -2729,6 +2739,9 @@ const ResultsView = ({
               fallbackOutput: String(a.fallbackOutput || (a.expectedOutput === "auto" ? "text" : a.expectedOutput) || "text"),
               defaultPrompts: Array.isArray(a.defaultPrompts)
                 ? (a.defaultPrompts as unknown[]).map(String)
+                : [],
+              targetResources: Array.isArray(a.targetResources)
+                ? (a.targetResources as unknown[]).map(String).filter(Boolean)
                 : [],
               ragSources: (["all", "result", "document", "none"].includes(String(a.ragSources ?? ""))
                 ? a.ragSources
@@ -3879,7 +3892,7 @@ const ResultsView = ({
       </div>
 
       {/* Ask AI button and chat drawer — portalled to body to avoid ancestor transform/filter breaking fixed position */}
-      {llmInsightsEnabled && createPortal(
+      {llmInsightsEnabled && hasCompatibleChat && createPortal(
         <>
           {!isChatOpen && (
             <button
@@ -3895,7 +3908,7 @@ const ResultsView = ({
             resultData={resultData}
             organizationId={organizationId}
             orgExecutionToken={orgExecutionToken}
-            agents={llmAgents}
+            agents={compatibleLlmAgents}
             globalPrompts={llmGlobalPrompts}
             enabled={llmInsightsEnabled}
             freeChatEnabled={llmFreeChatEnabled}
@@ -3904,7 +3917,7 @@ const ResultsView = ({
             rag={rag}
             docText={docText}
             uploadConfig={uploadConfig}
-            workflows={llmWorkflows}
+            workflows={compatibleLlmWorkflows}
             onDocUploaded={(text) => {
               setStoredDocText(text);
               const key = buildRagDocStorageKey(resultUrlInfo, organizationId);

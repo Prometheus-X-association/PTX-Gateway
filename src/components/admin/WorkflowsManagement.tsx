@@ -10,6 +10,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { WorkflowBuilder } from "@/components/admin/WorkflowBuilder";
+import {
+  ChatAvailabilitySelector,
+  type ChatAvailabilityTarget,
+} from "@/components/admin/ChatAvailabilitySelector";
 import type { WorkflowConfig, AgentWorkflow } from "@/types/workflow";
 import type { AgentStub, SkillStub } from "@/components/admin/WorkflowBuilder";
 
@@ -40,6 +44,7 @@ const emptyWorkflow = (): WorkflowConfig => ({
   name: "New Workflow",
   description: "",
   enabled: true,
+  targetResources: [],
   graph: { nodes: [], edges: [] },
   createdAt: new Date().toISOString(),
 });
@@ -60,6 +65,7 @@ const NodePill = ({ type, label }: { type: string; label: string }) => {
 
 interface EditPanelProps {
   config: WorkflowConfig;
+  availabilityTargets: ChatAvailabilityTarget[];
   agents: AgentStub[];
   skills: SkillStub[];
   organizationId?: string;
@@ -67,7 +73,7 @@ interface EditPanelProps {
   onClose: () => void;
 }
 
-const EditPanel = ({ config, agents, skills, organizationId, onChange, onClose }: EditPanelProps) => (
+const EditPanel = ({ config, availabilityTargets, agents, skills, organizationId, onChange, onClose }: EditPanelProps) => (
   <div className="border-t bg-muted/20 p-4 space-y-4">
     <div className="flex items-center justify-between">
       <h4 className="text-sm font-semibold">Edit: {config.name}</h4>
@@ -96,6 +102,12 @@ const EditPanel = ({ config, agents, skills, organizationId, onChange, onClose }
       </div>
     </div>
 
+    <ChatAvailabilitySelector
+      targetIds={config.targetResources || []}
+      targets={availabilityTargets}
+      onChange={(targetResources) => onChange({ ...config, targetResources })}
+    />
+
     <WorkflowBuilder
       workflowId={config.id}
       workflow={config.graph}
@@ -114,6 +126,7 @@ interface RowProps {
   index: number;
   total: number;
   isEditing: boolean;
+  availabilityTargets: ChatAvailabilityTarget[];
   agents: AgentStub[];
   skills: SkillStub[];
   organizationId?: string;
@@ -125,7 +138,7 @@ interface RowProps {
 }
 
 const WorkflowRow = ({
-  config, index, total, isEditing, agents, skills, organizationId,
+  config, index, total, isEditing, availabilityTargets, agents, skills, organizationId,
   onToggleEdit, onChange, onDuplicate, onRemove, onMove,
 }: RowProps) => {
   const nodeCount = config.graph.nodes.length;
@@ -225,6 +238,7 @@ const WorkflowRow = ({
       {isEditing && (
         <EditPanel
           config={config}
+          availabilityTargets={availabilityTargets}
           agents={agents}
           skills={skills}
           organizationId={organizationId}
@@ -240,13 +254,14 @@ const WorkflowRow = ({
 
 interface WorkflowsManagementProps {
   workflows: WorkflowConfig[];
+  availabilityTargets: ChatAvailabilityTarget[];
   agents: AgentStub[];
   skills: SkillStub[];
   organizationId?: string;
   onChange: (workflows: WorkflowConfig[]) => void;
 }
 
-export const WorkflowsManagement = ({ workflows, agents, skills, organizationId, onChange }: WorkflowsManagementProps) => {
+export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, skills, organizationId, onChange }: WorkflowsManagementProps) => {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const update = (index: number, updated: WorkflowConfig) => {
@@ -325,6 +340,7 @@ export const WorkflowsManagement = ({ workflows, agents, skills, organizationId,
               index={i}
               total={workflows.length}
               isEditing={editingId === wf.id}
+              availabilityTargets={availabilityTargets}
               agents={agents}
               skills={skills}
               organizationId={organizationId}

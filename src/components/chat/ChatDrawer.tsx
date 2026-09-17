@@ -45,6 +45,7 @@ export interface LlmAgentInfo {
   expectedOutput: string;
   fallbackOutput?: string;
   defaultPrompts: string[];
+  targetResources?: string[];
   ragSources?: "all" | "result" | "document" | "none";
   ragMode?: "auto" | "chunks" | "none";
   ragTopK?: number;
@@ -383,43 +384,113 @@ const ImageGallery = ({ images }: { images: ChatImageRef[] }) => {
 
 const VizBubble = ({ html }: { html: string }) => {
   const [expanded, setExpanded] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
   // Floating window position (top-left corner)
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState({ w: 700, h: 480 });
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const resizeRef = useRef<{ pointerId: number; startX: number; startY: number; origW: number; origH: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  const keepPanelInViewport = useCallback((nextSize = size) => {
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const boundedSize = {
+      w: Math.min(nextSize.w, viewportWidth),
+      h: Math.min(nextSize.h, viewportHeight),
+    };
+    setSize(boundedSize);
+    setPos((current) => current ? {
+      x: Math.max(0, Math.min(current.x, viewportWidth - boundedSize.w)),
+      y: Math.max(0, Math.min(current.y, viewportHeight - boundedSize.h)),
+    } : current);
+  }, [size]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onViewportResize = () => keepPanelInViewport();
+    window.addEventListener("resize", onViewportResize);
+    return () => window.removeEventListener("resize", onViewportResize);
+  }, [expanded, keepPanelInViewport]);
 
   // Centre on first open
   const handleExpand = () => {
     if (!pos) {
+      const initialSize = {
+        w: Math.min(size.w, window.innerWidth),
+        h: Math.min(size.h, window.innerHeight),
+      };
+      setSize(initialSize);
       setPos({
-        x: Math.max(24, (window.innerWidth - size.w) / 2),
-        y: Math.max(24, (window.innerHeight - size.h) / 2),
+        x: Math.max(0, (window.innerWidth - initialSize.w) / 2),
+        y: Math.max(0, (window.innerHeight - initialSize.h) / 2),
       });
     }
     setExpanded(true);
   };
 
-  const onDragStart = (e: React.MouseEvent) => {
+  const onDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!pos || e.button !== 0) return;
     e.preventDefault();
-    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: pos!.x, origY: pos!.y };
-    const onMove = (ev: MouseEvent) => {
-      if (!dragRef.current) return;
-      const dx = ev.clientX - dragRef.current.startX;
-      const dy = ev.clientY - dragRef.current.startY;
-      setPos({
-        x: Math.max(0, Math.min(window.innerWidth - size.w, dragRef.current.origX + dx)),
-        y: Math.max(0, Math.min(window.innerHeight - size.h, dragRef.current.origY + dy)),
-      });
-    };
-    const onUp = () => {
-      dragRef.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
   };
+
+  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    setPos({
+      x: Math.max(0, Math.min(window.innerWidth - size.w, drag.origX + e.clientX - drag.startX)),
+      y: Math.max(0, Math.min(window.innerHeight - size.h, drag.origY + e.clientY - drag.startY)),
+    });
+  };
+
+  const onDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
+  const onResizeStart = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!pos || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resizeRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      origW: size.w,
+      origH: size.h,
+    };
+    setIsResizing(true);
+  };
+
+  const onResizeMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const resize = resizeRef.current;
+    if (!pos || !resize || resize.pointerId !== e.pointerId) return;
+    const maxWidth = Math.max(1, window.innerWidth - pos.x);
+    const maxHeight = Math.max(1, window.innerHeight - pos.y);
+    const minWidth = Math.min(320, maxWidth);
+    const minHeight = Math.min(260, maxHeight);
+    setSize({
+      w: Math.max(minWidth, Math.min(maxWidth, resize.origW + e.clientX - resize.startX)),
+      h: Math.max(minHeight, Math.min(maxHeight, resize.origH + e.clientY - resize.startY)),
+    });
+  };
+
+  const onResizeEnd = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (resizeRef.current?.pointerId !== e.pointerId) return;
+    resizeRef.current = null;
+    setIsResizing(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
+  const applySizePreset = (w: number, h: number) => keepPanelInViewport({ w, h });
 
   return (
     <>
@@ -443,37 +514,48 @@ const VizBubble = ({ html }: { html: string }) => {
         <div
           ref={panelRef}
           className="fixed flex flex-col bg-background border border-border rounded-2xl shadow-2xl overflow-hidden"
-          style={{ left: pos.x, top: pos.y, width: size.w, height: size.h, zIndex: 999999, minWidth: 320, minHeight: 260 }}
+          style={{
+            left: pos.x,
+            top: pos.y,
+            width: size.w,
+            height: size.h,
+            zIndex: 999999,
+            minWidth: "min(320px, 100vw)",
+            minHeight: "min(260px, 100vh)",
+          }}
         >
           {/* Drag handle / title bar */}
           <div
-            className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-muted/50 shrink-0 cursor-grab active:cursor-grabbing select-none"
-            onMouseDown={onDragStart}
+            className="flex touch-none items-center justify-between px-4 py-2.5 border-b border-border bg-muted/50 shrink-0 cursor-grab active:cursor-grabbing select-none"
+            onPointerDown={onDragStart}
+            onPointerMove={onDragMove}
+            onPointerUp={onDragEnd}
+            onPointerCancel={onDragEnd}
           >
             <span className="text-sm font-semibold text-foreground">AI Visualization</span>
             <div className="flex items-center gap-1">
               {/* Size presets */}
               <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={() => setSize({ w: 520, h: 380 })}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => applySizePreset(520, 380)}
                 className="text-[10px] px-2 py-0.5 rounded hover:bg-background transition-colors text-muted-foreground"
                 title="Small"
               >S</button>
               <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={() => setSize({ w: 700, h: 480 })}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => applySizePreset(700, 480)}
                 className="text-[10px] px-2 py-0.5 rounded hover:bg-background transition-colors text-muted-foreground"
                 title="Medium"
               >M</button>
               <button
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={() => setSize({ w: 960, h: 640 })}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => applySizePreset(960, 640)}
                 className="text-[10px] px-2 py-0.5 rounded hover:bg-background transition-colors text-muted-foreground"
                 title="Large"
               >L</button>
               <div className="w-px h-3 bg-border mx-1" />
               <button
-                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => setExpanded(false)}
                 className="p-1 rounded hover:bg-background transition-colors text-muted-foreground hover:text-foreground"
                 title="Close"
@@ -488,15 +570,31 @@ const VizBubble = ({ html }: { html: string }) => {
             <iframe
               srcDoc={buildSrcdoc(html)}
               sandbox="allow-scripts allow-popups"
-              style={{ width: "100%", height: "100%", border: "none", display: "block" }}
+              style={{ width: "100%", height: "100%", border: "none", display: "block", pointerEvents: isResizing ? "none" : "auto" }}
               title="AI Visualization (Expanded)"
             />
           </div>
 
           {/* Drag hint */}
           <div className="px-3 py-1 border-t border-border bg-muted/30 shrink-0 flex items-center justify-between">
-            <span className="text-[10px] text-muted-foreground/60">Drag title bar to move</span>
+            <span className="text-[10px] text-muted-foreground/60">Drag title bar to move · Drag corner to resize</span>
+            <span className="pr-3 text-[10px] tabular-nums text-muted-foreground/60">{Math.round(size.w)} × {Math.round(size.h)}</span>
           </div>
+
+          <button
+            type="button"
+            aria-label="Resize visualization"
+            title="Drag to resize"
+            className="absolute bottom-0 right-0 z-10 h-6 w-6 cursor-se-resize touch-none text-muted-foreground/70 hover:text-foreground"
+            onPointerDown={onResizeStart}
+            onPointerMove={onResizeMove}
+            onPointerUp={onResizeEnd}
+            onPointerCancel={onResizeEnd}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="h-full w-full fill-none stroke-current">
+              <path d="M10 20 20 10M15 20l5-5" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
       )}
     </>
@@ -711,9 +809,9 @@ const ChatDrawer = ({
   const hasDocument = Boolean(docText || localAttachment);
 
   useEffect(() => {
-    if (!freeChatEnabled && activeAgentId === "__free__" && agents[0]) {
-      setActiveAgentId(agents[0].id);
-    }
+    if (activeAgentId !== "__free__" && agents.some((agent) => agent.id === activeAgentId)) return;
+    if (activeAgentId === "__free__" && freeChatEnabled) return;
+    setActiveAgentId(freeChatEnabled ? "__free__" : (agents[0]?.id ?? "__free__"));
   }, [freeChatEnabled, activeAgentId, agents]);
 
   // Stable ref to rag so sendMessage doesn't need rag in its dep array

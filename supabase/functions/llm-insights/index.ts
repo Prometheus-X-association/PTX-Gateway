@@ -45,6 +45,7 @@ interface LlmAgent {
   fallbackOutput?: string;
   mcpServerIds?: string[];
   defaultPrompts?: string[];
+  targetResources?: string[];
   enabled?: boolean;
   agentProviders?: LlmProvider[];
   ragSources?: "all" | "result" | "document" | "none";
@@ -503,6 +504,9 @@ serve(async (req) => {
               fallbackOutput: String(a.fallbackOutput || (a.expectedOutput === "auto" ? "text" : a.expectedOutput) || "text"),
               defaultPrompts: Array.isArray(a.defaultPrompts)
                 ? a.defaultPrompts.map(String).filter(Boolean)
+                : [],
+              targetResources: Array.isArray(a.targetResources)
+                ? a.targetResources.map(String).filter(Boolean)
                 : [],
               ragSources: ["all", "result", "document", "none"].includes(String(a.ragSources))
                 ? a.ragSources
