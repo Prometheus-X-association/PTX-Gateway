@@ -1007,7 +1007,7 @@ serve(async (req: Request) => {
   //   2. Full mode: raw resultData — clip at 40K chars
   type DocContextPayload = {
     __doc_context: true;
-    result: unknown;
+    result?: unknown;
     docText?: string;                              // full document (small docs)
     docChunks?: Array<{ path: string; text: string }>; // RAG chunks (large docs)
   };
@@ -1033,7 +1033,11 @@ serve(async (req: Request) => {
   let contextBlock: string | null = null;
   if (body.result !== undefined) {
     if (isDocContextPayload(body.result)) {
-      const parts: string[] = [`\n---${formatDataContext("Result data", body.result.result)}`];
+      const parts: string[] = [];
+
+      if (body.result.result !== undefined) {
+        parts.push(`\n---${formatDataContext("Result data", body.result.result)}`);
+      }
 
       if (body.result.docText) {
         // Full document text — no chunking needed
@@ -1049,7 +1053,7 @@ serve(async (req: Request) => {
         parts.push(`\n---\nDocument context (relevant passages):\n${chunkStr}`);
       }
 
-      contextBlock = parts.join("");
+      contextBlock = parts.join("") || null;
     } else {
       // No document context — full result JSON only
       contextBlock = `\n---${formatDataContext("Result data", body.result)}`;

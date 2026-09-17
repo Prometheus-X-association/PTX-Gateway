@@ -16,6 +16,7 @@ const LOCAL_SUPABASE_JWT_FALLBACK = "super-secret-jwt-token-with-at-least-32-cha
 interface LlmInsightsRequest {
   action?: "status" | "generate";
   org_execution_token?: string;
+  target_resource_id?: string;
   result?: unknown;
   prompt_context?: string;
 }
@@ -492,10 +493,11 @@ serve(async (req) => {
     const providers = resolveProviders(llmConfig);
 
     if (body.action === "status") {
+      const requestedTargetId = String(body.target_resource_id || "").trim();
       // Build safe agent list (no systemPrompt / mcpServerIds exposed to client)
       const agentList = Array.isArray(llmConfig.agents)
         ? llmConfig.agents
-            .filter((a) => a.enabled !== false)
+            .filter((a) => a.enabled !== false && Boolean(requestedTargetId) && Array.isArray(a.targetResources) && a.targetResources.includes(requestedTargetId))
             .map((a) => ({
               id: String(a.id || ""),
               name: String(a.name || "Agent"),
@@ -542,7 +544,12 @@ serve(async (req) => {
           predefinedPrompts: Array.isArray(llmConfig.predefinedPrompts)
             ? llmConfig.predefinedPrompts.map(String).filter(Boolean)
             : [],
-          workflows: Array.isArray(llmConfig.workflows) ? publicSafeWorkflows(llmConfig.workflows) : [],
+          workflows: Array.isArray(llmConfig.workflows)
+            ? publicSafeWorkflows(llmConfig.workflows.filter((workflow) => {
+                const item = toObject(workflow);
+                return item.enabled !== false && Boolean(requestedTargetId) && Array.isArray(item.targetResources) && item.targetResources.map(String).includes(requestedTargetId);
+              }))
+            : [],
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useMemo, ReactNode } from "react";
 import { sanitizeParams, resolveParamValue } from "@/utils/paramSanitizer";
+import { clearSourceDocuments } from "@/utils/sourceDocumentStorage";
 
 const PROCESS_SESSION_STORAGE_KEY = "ptx_active_process_session_id";
 
@@ -63,10 +64,11 @@ export const ProcessSessionProvider: React.FC<ProcessSessionProviderProps> = ({ 
 
   // Reset session (generates a new session ID)
   const resetSession = useCallback(() => {
+    clearSourceDocuments(sessionId);
     const newSessionId = generateSessionId();
     setAndPersistSessionId(newSessionId);
     return newSessionId;
-  }, [setAndPersistSessionId]);
+  }, [sessionId, setAndPersistSessionId]);
 
   const value = useMemo(() => ({
     sessionId,

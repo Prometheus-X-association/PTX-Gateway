@@ -13,13 +13,14 @@ export interface ExecutorContext {
   workflowId?: string;
   resultData: unknown;
   docText: string | null;
+  hasDocument?: boolean;
   userMessage: string;
   organizationId: string | null;
   orgExecutionToken: string | null;
   supabaseUrl: string;
   onAgentStep: (
     nodeId: string,
-    agentConfig: { agentId?: string; inline?: InlineAgentConfig },
+    agentConfig: { agentId?: string; inline?: InlineAgentConfig; contextMode?: "combined" | "document_only"; includeResultData: boolean; includeDocument: boolean },
     prompt: string,
     prevOutput: unknown,
   ) => Promise<string>;
@@ -96,6 +97,11 @@ export async function executeWorkflow(
 
   const trigger = nodes.find((n) => n.type === "trigger");
   if (!trigger) throw new Error("Workflow has no trigger node");
+  const triggerData = trigger.data as TriggerNodeData;
+  const inputSources = triggerData.inputSources ?? ["result", "document"];
+  if (inputSources.length === 0) throw new Error("Workflow trigger has no input source selected");
+  const includeResultData = inputSources.includes("result");
+  const includeDocument = inputSources.includes("document");
 
   const results: WorkflowStepResult[] = [];
   const outputByNodeId = new Map<string, unknown>();
@@ -137,10 +143,20 @@ export async function executeWorkflow(
       }
       if (node.type === "trigger") {
         const d = node.data as TriggerNodeData;
-        output = { triggerType: d.triggerType, userMessage: ctx.userMessage, data: ctx.resultData };
+        output = {
+          triggerType: d.triggerType,
+          userMessage: ctx.userMessage,
+          ...(includeResultData ? { data: ctx.resultData } : {}),
+          ...(includeDocument ? { document: { available: ctx.hasDocument ?? Boolean(ctx.docText), text: ctx.docText ?? undefined } } : {}),
+        };
 
       } else if (node.type === "agent") {
         const d = node.data as AgentNodeData;
+        const contextMode = d.contextMode ?? (
+          /using only (?:the )?(?:uploaded|attached|raw) document/i.test(`${d.inlineSystemPrompt ?? ""}\n${d.promptOverride ?? ""}`)
+            ? "document_only"
+            : "combined"
+        );
         const prevStr = prevOutput === null ? "" : typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput, null, 2);
         const rawPrompt = d.promptOverride?.trim() || ctx.userMessage;
         const prompt = rawPrompt
@@ -160,8 +176,8 @@ export async function executeWorkflow(
                 outputType: d.inlineOutputType ?? "text",
                 fallbackOutputType: d.inlineFallbackOutputType ?? "text",
                 skillIds: d.skillIds ?? [],
-              } }
-            : { agentId: d.agentId };
+              }, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument }
+            : { agentId: d.agentId, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument };
         const agentOutput = await ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null);
         // Preserve structured responses as actual objects/arrays so downstream
         // nodes and edge data paths can address fields deterministically.
@@ -173,8 +189,8 @@ export async function executeWorkflow(
       } else if (node.type === "plugin") {
         const d = node.data as PluginNodeData;
         output = await runPlugin(d.code, {
-          result: ctx.resultData,
-          docText: ctx.docText,
+          result: includeResultData ? ctx.resultData : undefined,
+          docText: includeDocument ? ctx.docText : null,
           prevOutput,
         }, Object.fromEntries(outputByNodeId));
 

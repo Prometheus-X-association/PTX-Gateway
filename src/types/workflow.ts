@@ -7,6 +7,8 @@ export type NodeType = "trigger" | "agent" | "api" | "plugin" | "condition" | "o
 export interface TriggerNodeData {
   label: string;
   triggerType: "manual" | "on_load";
+  /** Data made available to this workflow. Undefined keeps the legacy default: both sources. */
+  inputSources?: Array<"result" | "document">;
   /** Pre-written prompt shown in the chat input when this workflow is selected */
   defaultPrompt?: string;
   /** What this node produces — shown in the canvas as documentation */
@@ -26,6 +28,10 @@ export interface AgentNodeData {
   inlineFallbackOutputType?: "text" | "json" | "html" | "mixed";
   /** Skills attached directly to an inline workflow agent. Existing agents inherit their saved skills. */
   skillIds?: string[];
+  /** Whether the chat must have an uploaded document before this node can run. */
+  requiresDocument?: boolean;
+  /** Controls whether this node can see the global result dataset or only the uploaded document. */
+  contextMode?: "combined" | "document_only";
   // ── shared ──
   promptOverride?: string;
   passPrevOutput: boolean;
@@ -136,7 +142,7 @@ export interface WorkflowConfig {
   name: string;
   description: string;
   enabled: boolean;
-  /** Result-page services/service chains where this workflow is offered. Empty means all. */
+  /** Result-page services/service chains where this workflow is offered. Empty means hidden everywhere. */
   targetResources?: string[];
   graph: AgentWorkflow;
   createdAt?: string;

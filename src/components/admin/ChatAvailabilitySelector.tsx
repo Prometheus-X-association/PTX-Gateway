@@ -25,11 +25,11 @@ export const ChatAvailabilitySelector = ({ targetIds, targets, onChange }: ChatA
       <div className="flex items-center justify-between gap-3">
         <Label className="text-xs">Show In Chat For</Label>
         <span className="text-[10px] text-muted-foreground">
-          {targetIds.length === 0 ? "All services and service chains" : `${targetIds.length} selected`}
+          {targetIds.length === 0 ? "Hidden from all targets" : `${targetIds.length} selected`}
         </span>
       </div>
       <p className="text-[10px] text-muted-foreground">
-        Select one or more result targets. Leave all unchecked to show this item on every result page.
+        Select the services or service chains where this item may appear. Leaving all targets unchecked hides it from every result page.
       </p>
       {targets.length === 0 ? (
         <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">

@@ -9,6 +9,8 @@ import { toast } from "@/hooks/use-toast";
 import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { getParamActionsMap } from "@/types/dataspace";
 import { sanitizeParams } from "@/utils/paramSanitizer";
+import { extractPdfText } from "@/lib/pdfTextExtractor";
+import { saveSourceDocuments } from "@/utils/sourceDocumentStorage";
 
 interface DocumentUploadZoneProps {
   resource: {
@@ -75,6 +77,23 @@ const getFilePreviewKind = (file: File): FilePreviewKind => {
     return "text";
   }
   return "download";
+};
+
+const extractRawSourceText = async (sourceFiles: File[]): Promise<string> => {
+  const documents: string[] = [];
+  for (const file of sourceFiles) {
+    const lowerName = file.name.toLowerCase();
+    const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
+    const isText = file.type.startsWith("text/") || file.type === "application/json" || /\.(txt|csv|json|jsonl|md|markdown|xml|html?|ya?ml)$/i.test(lowerName);
+    let text = "";
+    if (isPdf) {
+      try { text = await extractPdfText(file); } catch { text = ""; }
+    } else if (isText) {
+      try { text = await file.text(); } catch { text = ""; }
+    }
+    if (text.trim()) documents.push(`--- SOURCE DOCUMENT: ${file.name} ---\n${text.trim()}`);
+  }
+  return documents.join("\n\n");
 };
 
 const DocumentUploadZone = ({ 
@@ -263,12 +282,32 @@ const DocumentUploadZone = ({
       if (response.ok && upstreamStatus !== undefined && upstreamStatus >= 200 && upstreamStatus < 300) {
         setUploadProgress(100);
         setUploadStatus("success");
-        const extractedText =
+        const uploadResponseText =
           typeof result.body === "string" ? result.body : JSON.stringify(result.body ?? result);
-        setUploadResponse(extractedText);
+        setUploadResponse(uploadResponseText);
         console.log("Upload successful:", result);
         onUploadSuccess?.();
-        if (extractedText) onExtractedContent?.(extractedText);
+        // Only raw text read from the user's source files is document context.
+        // The upload endpoint response is processing/result metadata and must not
+        // be used as evidence by document-only workflows.
+        const rawSourceText = await extractRawSourceText(files);
+        onExtractedContent?.(rawSourceText);
+        try {
+          const storedDocuments = await saveSourceDocuments(effectiveSessionId, files);
+          if (storedDocuments.length < files.length) {
+            toast({
+              title: "Some source files were not retained",
+              description: "Workflow attachments are limited to 10 MB per document. Reattach larger source files from the result-page chat.",
+              variant: "destructive",
+            });
+          }
+        } catch (error) {
+          toast({
+            title: "Source document could not be retained",
+            description: `Browser storage is unavailable or full. Reattach the source document from the result-page chat. ${error instanceof Error ? error.message : ""}`.trim(),
+            variant: "destructive",
+          });
+        }
         if (isDebugMode) {
           toast({
             title: "Upload Successful",

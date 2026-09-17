@@ -33,6 +33,7 @@ interface ResultsViewProps {
   rag?: import("@/lib/useRagWorker").RagWorkerHandle;
   /** Full document text passed in-session (takes priority over localStorage restoration) */
   docText?: string | null;
+  processSessionId?: string | null;
   /** Upload config forwarded to the chatbox attachment button */
   uploadConfig?: import("@/components/DocumentUploadZone").UploadConfig | null;
 }
@@ -2466,6 +2467,7 @@ const ResultsView = ({
   showDebugApiExportConfig = false,
   rag,
   docText: propDocText,
+  processSessionId,
   uploadConfig,
 }: ResultsViewProps) => {
   const customVisualizationMountRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -2510,12 +2512,11 @@ const ResultsView = ({
     return selectedAnalyticsTargetId || null;
   }, [selectedAnalytics, selectedAnalyticsTargetId]);
   const compatibleLlmAgents = useMemo(() => llmAgents.filter((agent) =>
-    agent.targetResources.length === 0 ||
-    (selectedTargetId ? agent.targetResources.includes(selectedTargetId) : false)
+    selectedTargetId ? agent.targetResources.includes(selectedTargetId) : false
   ), [llmAgents, selectedTargetId]);
   const compatibleLlmWorkflows = useMemo(() => llmWorkflows.filter((workflow) => {
     const targets = workflow.targetResources || [];
-    return targets.length === 0 || (selectedTargetId ? targets.includes(selectedTargetId) : false);
+    return workflow.enabled !== false && (selectedTargetId ? targets.includes(selectedTargetId) : false);
   }), [llmWorkflows, selectedTargetId]);
   const hasCompatibleChat = llmFreeChatEnabled || compatibleLlmAgents.length > 0 || compatibleLlmWorkflows.length > 0;
   const compatibleExportApiConfigs = useMemo(() => {
@@ -2711,6 +2712,8 @@ const ResultsView = ({
       try {
         setLlmInsightsEnabled(false);
         setLlmFreeChatEnabled(false);
+        setLlmAgents([]);
+        setLlmWorkflows([]);
         const headers: Record<string, string> = {};
         if (organizationId) {
           headers["x-organization-id"] = organizationId;
@@ -2721,6 +2724,7 @@ const ResultsView = ({
           body: {
             action: "status",
             org_execution_token: orgExecutionToken || undefined,
+            target_resource_id: selectedTargetId || undefined,
           },
         });
 
@@ -2772,7 +2776,7 @@ const ResultsView = ({
     return () => {
       isMounted = false;
     };
-  }, [organizationId, orgExecutionToken]);
+  }, [organizationId, orgExecutionToken, selectedTargetId]);
 
   // Fetch result data automatically for normal flow.
   useEffect(() => {
@@ -3916,6 +3920,7 @@ const ResultsView = ({
             onClose={() => setIsChatOpen(false)}
             rag={rag}
             docText={docText}
+            processSessionId={processSessionId}
             uploadConfig={uploadConfig}
             workflows={compatibleLlmWorkflows}
             onDocUploaded={(text) => {

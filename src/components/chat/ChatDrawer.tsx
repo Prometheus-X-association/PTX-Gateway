@@ -9,6 +9,7 @@ import type { UploadConfig } from "@/components/DocumentUploadZone";
 import type { AgentWorkflow, WorkflowConfig } from "@/types/workflow";
 import { executeWorkflow, getWorkflowFinalOutput } from "@/lib/workflowExecutor";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
+import { loadSourceDocuments, saveSourceDocuments } from "@/utils/sourceDocumentStorage";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,8 @@ interface ChatDrawerProps {
   rag?: RagWorkerHandle;
   /** Full raw document text (from upload/selection) for "auto" and full-doc delivery */
   docText?: string | null;
+  /** Process-session key used to restore the original Data Selection upload. */
+  processSessionId?: string | null;
   /** Upload config from the selected data resource — enables the paperclip attachment button */
   uploadConfig?: UploadConfig | null;
   /** Called after a successful in-chat file upload so the parent can persist the extracted text */
@@ -760,6 +763,7 @@ const ChatDrawer = ({
   onClose,
   rag,
   docText: propDocText,
+  processSessionId,
   uploadConfig,
   onDocUploaded,
   workflows = [],
@@ -809,6 +813,17 @@ const ChatDrawer = ({
   const hasDocument = Boolean(docText || localAttachment);
 
   useEffect(() => {
+    const stored = loadSourceDocuments(processSessionId);
+    setLocalAttachment(stored[0] ? {
+      name: stored[0].name,
+      mimeType: stored[0].mimeType,
+      size: stored[0].size,
+      base64: stored[0].base64,
+    } : null);
+    setLocalDocText(null);
+  }, [processSessionId]);
+
+  useEffect(() => {
     if (activeAgentId !== "__free__" && agents.some((agent) => agent.id === activeAgentId)) return;
     if (activeAgentId === "__free__" && freeChatEnabled) return;
     setActiveAgentId(freeChatEnabled ? "__free__" : (agents[0]?.id ?? "__free__"));
@@ -827,6 +842,7 @@ const ChatDrawer = ({
       const attachment = await fileAsAttachment(file);
       setLocalAttachment(attachment);
       setLocalDocText(null);
+      if (processSessionId) await saveSourceDocuments(processSessionId, [file]);
 
       const isNativeDocument = /\.(pdf|txt|md|markdown|csv|json|jsonl|xml|html?|ya?ml|doc|docx|xls|xlsx)$/i.test(file.name);
       if (!uploadConfig?.uploadUrl || isNativeDocument) {
@@ -891,7 +907,7 @@ const ChatDrawer = ({
     } finally {
       setIsUploading(false);
     }
-  }, [uploadConfig, onDocUploaded]);
+  }, [uploadConfig, onDocUploaded, processSessionId]);
 
   const runWorkflow = useCallback(async (userMsg: string, workflowOverride?: WorkflowConfig) => {
     const workflowConfig = workflowOverride ?? selectedWorkflow;
@@ -900,14 +916,28 @@ const ChatDrawer = ({
 
     // Pre-flight checks before running the workflow.
     const workflow: AgentWorkflow = workflowConfig.graph;
+    const triggerNode = workflow.nodes.find((node) => node.type === "trigger");
+    const configuredTriggerSources = triggerNode
+      ? (triggerNode.data as import("@/types/workflow").TriggerNodeData).inputSources
+      : undefined;
+    const triggerSources = configuredTriggerSources ?? ["result", "document"];
+    const requiresResult = triggerSources.includes("result");
+    const legacyWorkflowNeedsDocument = workflow.nodes.some((node) => {
+      if (node.type !== "agent") return false;
+      const data = node.data as import("@/types/workflow").AgentNodeData;
+      return data.requiresDocument === true || /uploaded document|attached document|document text/i.test(
+        `${data.inlineSystemPrompt || ""}\n${data.promptOverride || ""}`
+      );
+    });
+    const requiresDocumentSource = configuredTriggerSources
+      ? triggerSources.includes("document")
+      : legacyWorkflowNeedsDocument;
     const hasResult = resultData !== null && resultData !== undefined;
     const hasDoc = !!docText?.trim() || Boolean(localAttachment);
-    const needsDoc = workflow.nodes.some(
-      (n) => n.type === "agent" && (n.data as import("@/types/workflow").AgentNodeData).mode === "inline"
-    );
+    const needsDoc = requiresDocumentSource;
 
     const preflight: string[] = [];
-    if (!hasResult) preflight.push("result data (load a dataset first)");
+    if (requiresResult && !hasResult) preflight.push("result data (load a dataset first)");
     if (!hasDoc && needsDoc) preflight.push("an uploaded document (attach one via the paperclip button)");
 
     if (preflight.length > 0) {
@@ -951,6 +981,7 @@ const ChatDrawer = ({
         workflowId: workflowConfig.id,
         resultData,
         docText,
+        hasDocument: hasDoc,
         userMessage: userMsg,
         organizationId: organizationId ?? null,
         orgExecutionToken: orgExecutionToken ?? null,
@@ -1000,9 +1031,14 @@ const ChatDrawer = ({
             void _dropped;
             return rest;
           })();
-          const contextPayload = docText && !localAttachment
-            ? { __doc_context: true, result: resultData, docText }
-            : resultData;
+          const attachedDocument = agentConfig.includeDocument ? localAttachment : null;
+          const contextPayload = agentConfig.includeDocument && docText && !attachedDocument
+            ? {
+                __doc_context: true,
+                ...(agentConfig.includeResultData ? { result: resultData } : {}),
+                docText,
+              }
+            : (agentConfig.includeResultData ? resultData : undefined);
           const agentId = isInline ? undefined : agentConfig.agentId;
           const systemPromptOverride = isInline ? agentConfig.inline!.systemPrompt : undefined;
           const outputType = isInline ? agentConfig.inline!.outputType : undefined;
@@ -1028,7 +1064,7 @@ const ChatDrawer = ({
               outputType,
               fallbackOutputType,
               skillIds,
-              attachment: localAttachment,
+              attachment: attachedDocument,
             }),
           });
 

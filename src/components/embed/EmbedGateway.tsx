@@ -616,6 +616,7 @@ const EmbedGatewayContent = () => {
               selectedDataResources={selectedData?.selectedDataResources || []}
               customVisualizations={customVisualizations}
               docText={sessionDocText}
+              processSessionId={activeProcessSessionId}
               uploadConfig={chatUploadConfig}
             />
           )}

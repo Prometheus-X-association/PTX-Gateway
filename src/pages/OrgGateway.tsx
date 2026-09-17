@@ -1041,6 +1041,7 @@ const OrgGatewayContent = ({
               showDebugApiExportConfig={isDebugMode}
               rag={rag}
               docText={sessionDocText}
+              processSessionId={activeProcessSessionId}
               uploadConfig={chatUploadConfig}
             />
           )}

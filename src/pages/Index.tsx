@@ -392,6 +392,7 @@ const IndexContent = () => {
                 customVisualizations={customVisualizations}
                 showDebugApiExportConfig={isDebugMode}
                 docText={sessionDocText}
+                processSessionId={activeProcessSessionId}
                 uploadConfig={chatUploadConfig}
               />
             )}
