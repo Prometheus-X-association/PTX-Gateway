@@ -1,17 +1,32 @@
 // Agentic workflow graph — persisted inside llmInsights.workflows[] in global_configs.
 
-export type NodeType = "trigger" | "agent" | "api" | "plugin" | "condition" | "output";
+export type NodeType = "trigger" | "document_context" | "agent" | "api" | "plugin" | "condition" | "output";
 
 // ─── Node data payloads ───────────────────────────────────────────────────────
 
 export interface TriggerNodeData {
   label: string;
   triggerType: "manual" | "on_load";
-  /** Data made available to this workflow. Undefined keeps the legacy default: both sources. */
-  inputSources?: Array<"result" | "document">;
+  /**
+   * Data made available to this workflow. `document` is the document selected
+   * during the gateway process; `user_upload` lets the result-page chat ask for
+   * a document when no gateway document is available.
+   */
+  inputSources?: Array<"result" | "document" | "user_upload">;
   /** Pre-written prompt shown in the chat input when this workflow is selected */
   defaultPrompt?: string;
   /** What this node produces — shown in the canvas as documentation */
+  outputSchema?: string;
+}
+
+export interface DocumentContextNodeData {
+  label: string;
+  /** The context is resolved once for a workflow run and reused downstream. */
+  source: "trigger_document" | "chat_upload_or_trigger";
+  /** Preserve source text when available; otherwise retain native file context for capable providers. */
+  delivery: "automatic" | "text" | "native_file";
+  reuseScope: "workflow_run";
+  inputSchema?: string;
   outputSchema?: string;
 }
 
@@ -30,6 +45,11 @@ export interface AgentNodeData {
   skillIds?: string[];
   /** Whether the chat must have an uploaded document before this node can run. */
   requiresDocument?: boolean;
+  /**
+   * Whether this agent can use the document/file attached by the end user in
+   * the result-page chat. Undefined inherits the workflow trigger setting.
+   */
+  useUploadedDocument?: boolean;
   /** Controls whether this node can see the global result dataset or only the uploaded document. */
   contextMode?: "combined" | "document_only";
   // ── shared ──
@@ -103,6 +123,7 @@ export interface OutputNodeData {
 
 export type AnyNodeData =
   | TriggerNodeData
+  | DocumentContextNodeData
   | AgentNodeData
   | ApiNodeData
   | PluginNodeData

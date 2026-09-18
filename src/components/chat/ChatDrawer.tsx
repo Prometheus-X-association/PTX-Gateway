@@ -838,23 +838,27 @@ const ChatDrawer = ({
     setIsUploading(true);
 
     try {
+      // Keep source text separate from an upload endpoint response.  The latter
+      // is processing metadata, not evidence from the document itself.
       let extracted = "";
       const attachment = await fileAsAttachment(file);
       setLocalAttachment(attachment);
       setLocalDocText(null);
       if (processSessionId) await saveSourceDocuments(processSessionId, [file]);
 
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const isTextFile = file.type.startsWith("text/") || file.type === "application/json" || LOCAL_TEXT_FILE_RE.test(file.name);
+      if (isPdf) {
+        // Native-capable providers still receive the file bytes.  This extracted
+        // text additionally makes source evidence available to workflow plugins.
+        try { extracted = await extractPdfText(file); } catch { extracted = ""; }
+      } else if (isTextFile) {
+        extracted = await file.text();
+      }
+
       const isNativeDocument = /\.(pdf|txt|md|markdown|csv|json|jsonl|xml|html?|ya?ml|doc|docx|xls|xlsx)$/i.test(file.name);
       if (!uploadConfig?.uploadUrl || isNativeDocument) {
-        const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-        const isTextFile = file.type.startsWith("text/") || file.type === "application/json" || LOCAL_TEXT_FILE_RE.test(file.name);
-        if (isPdf) {
-          // Optional local text powers RAG for text PDFs. Native providers still
-          // receive the original bytes, so scanned PDFs remain valid attachments.
-          try { extracted = await extractPdfText(file); } catch { extracted = ""; }
-        } else if (isTextFile) {
-          extracted = await file.text();
-        } else if (!/\.(docx?|xlsx?)$/i.test(file.name)) {
+        if (!isPdf && !isTextFile && !/\.(docx?|xlsx?)$/i.test(file.name)) {
           throw new Error("This file type requires a configured document-conversion endpoint. Attach a PDF, TXT, Markdown, CSV, JSON, XML, HTML, or YAML file instead.");
         }
       } else {
@@ -879,7 +883,8 @@ const ChatDrawer = ({
         if (!resp.ok || status < 200 || status >= 300) {
           throw new Error(String(result.error ?? result.message ?? "unknown upload error"));
         }
-        extracted = typeof result.body === "string" ? result.body : JSON.stringify(result.body ?? result);
+        // Do not assign result.body to `extracted`: it is the upload service's
+        // response and must never be presented as the user's document text.
       }
 
       if (!extracted.trim() && !attachment) {
@@ -896,7 +901,9 @@ const ChatDrawer = ({
         {
           id: uid(),
           role: "assistant",
-          content: `Document **"${file.name}"** attached (${Math.max(1, Math.round(file.size / 1024))} KB). You can now run the workflow again.`,
+          content: extracted.trim()
+            ? `Document **"${file.name}"** attached (${Math.max(1, Math.round(file.size / 1024))} KB). Its source text is available to the workflow.`
+            : `Document **"${file.name}"** attached (${Math.max(1, Math.round(file.size / 1024))} KB). Native-capable agents can use the file; exact-source evidence workflows need a text-readable document or a document-conversion service.`,
         },
       ]);
     } catch (err) {
@@ -929,17 +936,20 @@ const ChatDrawer = ({
         `${data.inlineSystemPrompt || ""}\n${data.promptOverride || ""}`
       );
     });
-    const requiresDocumentSource = configuredTriggerSources
-      ? triggerSources.includes("document")
-      : legacyWorkflowNeedsDocument;
+    // A node may independently make a document mandatory even if the trigger
+    // normally starts from result data alone.
+    const requestsChatUpload = triggerSources.includes("user_upload");
+    const requiresDocumentSource = triggerSources.includes("document") || requestsChatUpload || legacyWorkflowNeedsDocument;
     const hasResult = resultData !== null && resultData !== undefined;
     const hasDoc = !!docText?.trim() || Boolean(localAttachment);
     const needsDoc = requiresDocumentSource;
-
     const preflight: string[] = [];
     if (requiresResult && !hasResult) preflight.push("result data (load a dataset first)");
-    if (!hasDoc && needsDoc) preflight.push("an uploaded document (attach one via the paperclip button)");
-
+    if (!hasDoc && needsDoc) {
+      preflight.push(requestsChatUpload
+        ? "a document uploaded in this chat (attach one via the paperclip button)"
+        : "an uploaded document (attach one via the paperclip button)");
+    }
     if (preflight.length > 0) {
       setMessages((prev) => [
         ...prev,
@@ -1031,8 +1041,12 @@ const ChatDrawer = ({
             void _dropped;
             return rest;
           })();
-          const attachedDocument = agentConfig.includeDocument ? localAttachment : null;
-          const contextPayload = agentConfig.includeDocument && docText && !attachedDocument
+          const attachedDocument = agentConfig.includeDocument && agentConfig.documentDelivery !== "text" ? localAttachment : null;
+          // Send source text even when a native attachment is also present. The
+          // attachment lets provider-native models inspect the original file;
+          // docText gives the workflow's exact-evidence agent the same source
+          // and is passed to deterministic downstream plugins.
+          const contextPayload = agentConfig.includeDocument && agentConfig.documentDelivery !== "native_file" && docText
             ? {
                 __doc_context: true,
                 ...(agentConfig.includeResultData ? { result: resultData } : {}),
@@ -1300,7 +1314,7 @@ const ChatDrawer = ({
 
         let contextPayload: unknown = resultData;
 
-        if (includeDocument && ragMode !== "none" && docText && !localAttachment) {
+        if (includeDocument && ragMode !== "none" && docText) {
           const useFullDoc = ragMode === "auto" && docText.length <= DOC_FULL_LIMIT;
           if (useFullDoc) {
             // Small doc — send full text directly, most reliable for cross-referencing
@@ -1810,7 +1824,7 @@ const ChatDrawer = ({
                         fileInputRef.current?.click();
                       }}
                     >
-                      Replace with a different file
+                      Replace source document with a chat upload
                     </button>
                   </div>
               )}

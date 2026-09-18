@@ -1,5 +1,5 @@
 import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge } from "@/types/workflow";
-import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, TriggerNodeData } from "@/types/workflow";
+import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, TriggerNodeData, DocumentContextNodeData } from "@/types/workflow";
 import { executeSandboxedJavascript } from "@/lib/workflowSandbox";
 
 export interface InlineAgentConfig {
@@ -20,7 +20,7 @@ export interface ExecutorContext {
   supabaseUrl: string;
   onAgentStep: (
     nodeId: string,
-    agentConfig: { agentId?: string; inline?: InlineAgentConfig; contextMode?: "combined" | "document_only"; includeResultData: boolean; includeDocument: boolean },
+    agentConfig: { agentId?: string; inline?: InlineAgentConfig; contextMode?: "combined" | "document_only"; includeResultData: boolean; includeDocument: boolean; documentDelivery?: "automatic" | "text" | "native_file" },
     prompt: string,
     prevOutput: unknown,
   ) => Promise<string>;
@@ -101,11 +101,12 @@ export async function executeWorkflow(
   const inputSources = triggerData.inputSources ?? ["result", "document"];
   if (inputSources.length === 0) throw new Error("Workflow trigger has no input source selected");
   const includeResultData = inputSources.includes("result");
-  const includeDocument = inputSources.includes("document");
+  const includeDocument = inputSources.includes("document") || inputSources.includes("user_upload");
 
   const results: WorkflowStepResult[] = [];
   const outputByNodeId = new Map<string, unknown>();
   const conditionResults = new Map<string, boolean>();
+  let resolvedDocumentContext: Pick<DocumentContextNodeData, "source" | "delivery" | "reuseScope"> | null = null;
   let stopReason: string | undefined;
   let fatalStop = false;
   // Track visits per node to detect infinite loops
@@ -150,6 +151,27 @@ export async function executeWorkflow(
           ...(includeDocument ? { document: { available: ctx.hasDocument ?? Boolean(ctx.docText), text: ctx.docText ?? undefined } } : {}),
         };
 
+      } else if (node.type === "document_context") {
+        const d = node.data as DocumentContextNodeData;
+        const available = ctx.hasDocument ?? Boolean(ctx.docText);
+        if (!available) throw new Error("No uploaded document is available for this Document Context node.");
+        if (d.delivery === "text" && !ctx.docText?.trim()) {
+          throw new Error("Document Context is set to source text, but this upload has no readable text.");
+        }
+        resolvedDocumentContext = { source: d.source, delivery: d.delivery, reuseScope: "workflow_run" };
+        output = {
+          contextType: "document",
+          source: d.source,
+          delivery: d.delivery,
+          reuseScope: "workflow_run",
+          available: true,
+          textAvailable: Boolean(ctx.docText?.trim()),
+          // The source text is held once in this workflow-run context. Native
+          // files remain available to document-capable providers through the
+          // agent's document input, rather than being copied into node data.
+          ...(d.delivery !== "native_file" && ctx.docText ? { text: ctx.docText } : {}),
+        };
+
       } else if (node.type === "agent") {
         const d = node.data as AgentNodeData;
         const contextMode = d.contextMode ?? (
@@ -169,6 +191,11 @@ export async function executeWorkflow(
             }
             return "";
           });
+        // A node can opt into the file the end user attaches in chat even when
+        // the trigger itself is configured around result data only. Existing
+        // workflows keep inheriting the trigger setting.
+        const agentIncludesDocument = d.useUploadedDocument ?? includeDocument;
+        const documentDelivery = resolvedDocumentContext?.delivery ?? "automatic";
         const agentConfig =
           d.mode === "inline"
             ? { inline: {
@@ -176,8 +203,8 @@ export async function executeWorkflow(
                 outputType: d.inlineOutputType ?? "text",
                 fallbackOutputType: d.inlineFallbackOutputType ?? "text",
                 skillIds: d.skillIds ?? [],
-              }, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument }
-            : { agentId: d.agentId, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument };
+              }, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery }
+            : { agentId: d.agentId, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery };
         const agentOutput = await ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null);
         // Preserve structured responses as actual objects/arrays so downstream
         // nodes and edge data paths can address fields deterministically.
