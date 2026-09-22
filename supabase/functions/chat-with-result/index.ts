@@ -151,6 +151,9 @@ interface ChatRequest {
   result?: unknown;
   /** Immediate input received from the previous workflow node. */
   inputData?: unknown;
+  /** Workflow/node IDs let inline workflow providers be resolved server-side. */
+  workflowId?: string;
+  nodeId?: string;
   org_execution_token?: string;
   agentId?: string;
   /** Inline agent: system prompt provided directly, bypassing agent lookup */
@@ -161,6 +164,10 @@ interface ChatRequest {
   fallbackOutputType?: "text" | "json" | "html" | "mixed";
   /** Skills attached to an inline workflow agent. Saved agents use their configured skillIds. */
   skillIds?: string[];
+  /** Inline agent: global provider IDs in priority order. */
+  providerIds?: string[];
+  /** Inline agent: node-specific providers tried before selected global providers. */
+  agentProviders?: LlmProvider[];
   /** Original file bytes for provider-native document input. */
   attachment?: LlmAttachment;
 }
@@ -280,7 +287,9 @@ const resolveAgentProviders = (agent: LlmAgent, cfg: LlmInsightsConfig): LlmProv
   const agentSpecific = (agent.agentProviders ?? []).filter((p) => p.enabled !== false);
   const globalAll = resolveProviders(cfg);
   const globalSelected = (agent.providerIds ?? []).length > 0
-    ? globalAll.filter((p) => p.id && (agent.providerIds ?? []).includes(p.id))
+    ? (agent.providerIds ?? [])
+        .map((id) => globalAll.find((p) => p.id === id))
+        .filter((p): p is LlmProvider => Boolean(p))
     : globalAll;
   return [...agentSpecific, ...globalSelected];
 };
@@ -1178,9 +1187,35 @@ serve(async (req: Request) => {
   ];
 
   // Resolve providers — agent-specific first, then global (filtered or all)
+  const savedWorkflowNodeData = (() => {
+    if (!body.workflowId || !body.nodeId || !Array.isArray((llmConfig as { workflows?: unknown[] }).workflows)) return null;
+    for (const rawWorkflow of (llmConfig as { workflows?: unknown[] }).workflows ?? []) {
+      const workflow = toObject(rawWorkflow);
+      if (String(workflow.id || "") !== body.workflowId) continue;
+      const graph = toObject(workflow.graph);
+      const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+      const node = nodes.map(toObject).find((item) => String(item.id || "") === body.nodeId);
+      return node ? toObject(node.data) : null;
+    }
+    return null;
+  })();
+  const savedProviderIds = Array.isArray(savedWorkflowNodeData?.providerIds)
+    ? savedWorkflowNodeData.providerIds.map(String)
+    : undefined;
+  const savedAgentProviders = Array.isArray(savedWorkflowNodeData?.agentProviders)
+    ? savedWorkflowNodeData.agentProviders as LlmProvider[]
+    : undefined;
+  const inlineProviderAgent: LlmAgent | null = !activeAgent && (Array.isArray(savedAgentProviders) || Array.isArray(savedProviderIds) || Array.isArray(body.agentProviders) || Array.isArray(body.providerIds))
+    ? {
+        providerIds: Array.isArray(savedProviderIds) ? savedProviderIds : (Array.isArray(body.providerIds) ? body.providerIds.map(String) : []),
+        agentProviders: Array.isArray(savedAgentProviders) ? savedAgentProviders : (Array.isArray(body.agentProviders) ? body.agentProviders : []),
+      }
+    : null;
   const providers = activeAgent
     ? resolveAgentProviders(activeAgent, llmConfig)
-    : resolveProviders(llmConfig);
+    : inlineProviderAgent
+      ? resolveAgentProviders(inlineProviderAgent, llmConfig)
+      : resolveProviders(llmConfig);
   if (providers.length === 0) return sendError("No LLM providers configured", 400);
 
   // Discover MCP tools — filter to agent's assigned servers if agent specifies them

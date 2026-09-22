@@ -277,6 +277,21 @@ const publicSafeWorkflows = (workflows: unknown[]): unknown[] => workflows.map((
   if (!Array.isArray(graph.nodes)) return copy;
   graph.nodes = graph.nodes.map((rawNode) => {
     const node = toObject(rawNode);
+    if (node.type === "agent") {
+      const savedData = toObject(node.data);
+      if (!Array.isArray(savedData.agentProviders)) return node;
+      return {
+        ...node,
+        data: {
+          ...savedData,
+          agentProviders: savedData.agentProviders.map((provider) => ({
+            ...toObject(provider),
+            apiKey: "",
+          })),
+          hasStoredProviderCredentials: savedData.agentProviders.some((provider) => Boolean(toObject(provider).apiKey)),
+        },
+      };
+    }
     if (node.type !== "api") return node;
     const savedData = toObject(node.data);
     const hasStoredCredentials = Boolean(

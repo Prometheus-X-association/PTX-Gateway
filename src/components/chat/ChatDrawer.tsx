@@ -1009,12 +1009,18 @@ const ChatDrawer = ({
     abortRef.current = new AbortController();
 
     try {
+      const conversationHistory = messages
+        .filter((message) => !message.streaming)
+        .slice(-10)
+        .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
+        .join("\n\n");
       const { results, aborted, error: workflowError } = await executeWorkflow(workflow, {
         workflowId: workflowConfig.id,
         resultData,
         docText,
         hasDocument: hasDoc,
         userMessage: userMsg,
+        conversationHistory,
         organizationId: organizationId ?? null,
         orgExecutionToken: orgExecutionToken ?? null,
         supabaseUrl,
@@ -1080,6 +1086,8 @@ const ChatDrawer = ({
           const outputType = isInline ? agentConfig.inline!.outputType : undefined;
           const fallbackOutputType = isInline ? agentConfig.inline!.fallbackOutputType : undefined;
           const skillIds = isInline ? agentConfig.inline!.skillIds : undefined;
+          const providerIds = isInline ? agentConfig.inline!.providerIds : undefined;
+          const agentProviders = isInline ? agentConfig.inline!.agentProviders : undefined;
 
           const resp = await fetch(`${supabaseUrl}/functions/v1/chat-with-result`, {
             method: "POST",
@@ -1093,6 +1101,8 @@ const ChatDrawer = ({
               messages: [{ role: "user", content: prompt }],
               result: contextPayload,
               inputData: inlineResult,
+              workflowId: workflowConfig.id,
+              nodeId,
               organizationId,
               org_execution_token: orgExecutionToken,
               agentId,
@@ -1100,6 +1110,8 @@ const ChatDrawer = ({
               outputType,
               fallbackOutputType,
               skillIds,
+              providerIds,
+              agentProviders,
               attachment: attachedDocument,
             }),
           });

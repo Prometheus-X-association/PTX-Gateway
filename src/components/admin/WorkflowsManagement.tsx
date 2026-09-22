@@ -15,7 +15,7 @@ import {
   type ChatAvailabilityTarget,
 } from "@/components/admin/ChatAvailabilitySelector";
 import type { WorkflowConfig, AgentWorkflow } from "@/types/workflow";
-import type { AgentStub, SkillStub } from "@/components/admin/WorkflowBuilder";
+import type { AgentStub, ProviderStub, SkillStub } from "@/components/admin/WorkflowBuilder";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -68,12 +68,13 @@ interface EditPanelProps {
   availabilityTargets: ChatAvailabilityTarget[];
   agents: AgentStub[];
   skills: SkillStub[];
+  globalProviders: ProviderStub[];
   organizationId?: string;
   onChange: (updated: WorkflowConfig) => void;
   onClose: () => void;
 }
 
-const EditPanel = ({ config, availabilityTargets, agents, skills, organizationId, onChange, onClose }: EditPanelProps) => (
+const EditPanel = ({ config, availabilityTargets, agents, skills, globalProviders, organizationId, onChange, onClose }: EditPanelProps) => (
   <div className="border-t bg-muted/20 p-4 space-y-4">
     <div className="flex items-center justify-between">
       <h4 className="text-sm font-semibold">Edit: {config.name}</h4>
@@ -113,6 +114,7 @@ const EditPanel = ({ config, availabilityTargets, agents, skills, organizationId
       workflow={config.graph}
       agents={agents}
       skills={skills}
+      globalProviders={globalProviders}
       organizationId={organizationId}
       onChange={(graph: AgentWorkflow) => onChange({ ...config, graph })}
     />
@@ -129,6 +131,7 @@ interface RowProps {
   availabilityTargets: ChatAvailabilityTarget[];
   agents: AgentStub[];
   skills: SkillStub[];
+  globalProviders: ProviderStub[];
   organizationId?: string;
   onToggleEdit: () => void;
   onChange: (updated: WorkflowConfig) => void;
@@ -138,7 +141,7 @@ interface RowProps {
 }
 
 const WorkflowRow = ({
-  config, index, total, isEditing, availabilityTargets, agents, skills, organizationId,
+  config, index, total, isEditing, availabilityTargets, agents, skills, globalProviders, organizationId,
   onToggleEdit, onChange, onDuplicate, onRemove, onMove,
 }: RowProps) => {
   const nodeCount = config.graph.nodes.length;
@@ -241,6 +244,7 @@ const WorkflowRow = ({
           availabilityTargets={availabilityTargets}
           agents={agents}
           skills={skills}
+          globalProviders={globalProviders}
           organizationId={organizationId}
           onChange={onChange}
           onClose={onToggleEdit}
@@ -257,11 +261,12 @@ interface WorkflowsManagementProps {
   availabilityTargets: ChatAvailabilityTarget[];
   agents: AgentStub[];
   skills: SkillStub[];
+  globalProviders: ProviderStub[];
   organizationId?: string;
   onChange: (workflows: WorkflowConfig[]) => void;
 }
 
-export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, skills, organizationId, onChange }: WorkflowsManagementProps) => {
+export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, skills, globalProviders, organizationId, onChange }: WorkflowsManagementProps) => {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const update = (index: number, updated: WorkflowConfig) => {
@@ -343,6 +348,7 @@ export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, sk
               availabilityTargets={availabilityTargets}
               agents={agents}
               skills={skills}
+              globalProviders={globalProviders}
               organizationId={organizationId}
               onToggleEdit={() => setEditingId(editingId === wf.id ? null : wf.id)}
               onChange={(updated) => update(i, updated)}

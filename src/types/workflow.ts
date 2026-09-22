@@ -41,6 +41,18 @@ export interface AgentNodeData {
   inlineSystemPrompt?: string;
   inlineOutputType?: "auto" | "text" | "json" | "html" | "mixed";
   inlineFallbackOutputType?: "text" | "json" | "html" | "mixed";
+  /** Global LLM provider IDs selected for this inline agent, in priority order. */
+  providerIds?: string[];
+  /** Providers defined directly on this inline agent node, tried before selected global providers. */
+  agentProviders?: Array<{
+    id: string;
+    name: string;
+    providerType: "openai" | "anthropic" | "gemini" | "openai_compatible";
+    apiBaseUrl: string;
+    apiKey: string;
+    model: string;
+    enabled: boolean;
+  }>;
   /** Skills attached directly to an inline workflow agent. Existing agents inherit their saved skills. */
   skillIds?: string[];
   /** Whether the chat must have an uploaded document before this node can run. */

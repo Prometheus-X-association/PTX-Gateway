@@ -1036,9 +1036,13 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
       : [...agent.providerIds, providerId];
     onChange({ ...agent, providerIds: ids });
   };
+  const moveProviderId = (from: number, to: number) =>
+    onChange({ ...agent, providerIds: moveItem(agent.providerIds, from, to) });
 
   const updateAgentProvider = (i: number, updated: LlmProvider) =>
     onChange({ ...agent, agentProviders: agent.agentProviders.map((p, j) => (j === i ? updated : p)) });
+  const moveAgentProvider = (from: number, to: number) =>
+    onChange({ ...agent, agentProviders: moveItem(agent.agentProviders, from, to) });
   const removeAgentProvider = (i: number) => {
     const removed = agent.agentProviders[i];
     onChange({
@@ -1343,6 +1347,10 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
                   <Zap className="h-3 w-3 text-primary shrink-0" />
                   <Input className="h-7 text-xs font-medium flex-1" placeholder="Provider name"
                     value={p.name} onChange={(e) => updateAgentProvider(i, { ...p, name: e.target.value })} />
+                  <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" disabled={i === 0}
+                    onClick={() => moveAgentProvider(i, i - 1)}><ChevronUp className="h-3 w-3" /></Button>
+                  <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" disabled={i === agent.agentProviders.length - 1}
+                    onClick={() => moveAgentProvider(i, i + 1)}><ChevronDown className="h-3 w-3" /></Button>
                   <Switch className="scale-75" checked={p.enabled} onCheckedChange={(v) => updateAgentProvider(i, { ...p, enabled: v })} />
                   <Button type="button" variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
                     onClick={() => removeAgentProvider(i)}><Trash2 className="h-3 w-3" /></Button>
@@ -1403,6 +1411,27 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
           </div>
         )}
 
+        {agent.providerIds.length > 0 && (
+          <div className="space-y-1.5 rounded-md border bg-background p-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Selected global provider priority</p>
+            {agent.providerIds.map((id, i) => {
+              const provider = globalProviders.find((p) => p.id === id);
+              if (!provider) return null;
+              return (
+                <div key={id} className="flex items-center gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs">
+                  <span className="w-5 shrink-0 text-center tabular-nums text-muted-foreground">{i + 1}</span>
+                  <span className="min-w-0 flex-1 truncate">{provider.name || provider.model || "Provider"}</span>
+                  {provider.model && <span className="hidden text-[10px] text-muted-foreground sm:inline">{provider.model}</span>}
+                  <Button type="button" variant="ghost" size="icon" className="h-6 w-6" disabled={i === 0}
+                    onClick={() => moveProviderId(i, i - 1)}><ChevronUp className="h-3 w-3" /></Button>
+                  <Button type="button" variant="ghost" size="icon" className="h-6 w-6" disabled={i === agent.providerIds.length - 1}
+                    onClick={() => moveProviderId(i, i + 1)}><ChevronDown className="h-3 w-3" /></Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="flex items-center gap-2">
           <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7"
             onClick={() => {
@@ -1421,7 +1450,7 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
             </>
           ) : (
             <>
-              <span className="font-medium text-foreground">Provider order: </span>
+              <span className="font-medium text-foreground">Provider priority: </span>
               {agent.agentProviders.length > 0 && <span>agent-specific first</span>}
               {agent.agentProviders.length > 0 && agent.providerIds.length > 0 && <span>, then </span>}
               {agent.providerIds.length > 0 && <span>{agent.providerIds.length} selected global provider(s)</span>}
@@ -2062,6 +2091,7 @@ const LlmSettingsSection = () => {
             availabilityTargets={availabilityTargets}
             organizationId={user?.organization?.id}
             skills={llm.skills.filter((skill) => skill.enabled)}
+            globalProviders={llm.providers.filter((provider) => provider.enabled)}
             agents={llm.agents.filter((a) => a.enabled).map((a) => ({
               id: a.id,
               name: a.name,

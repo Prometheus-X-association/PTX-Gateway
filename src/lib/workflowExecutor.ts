@@ -7,6 +7,8 @@ export interface InlineAgentConfig {
   outputType: "auto" | "text" | "json" | "html" | "mixed";
   fallbackOutputType: "text" | "json" | "html" | "mixed";
   skillIds?: string[];
+  providerIds?: string[];
+  agentProviders?: AgentNodeData["agentProviders"];
 }
 
 export interface ExecutorContext {
@@ -15,6 +17,7 @@ export interface ExecutorContext {
   docText: string | null;
   hasDocument?: boolean;
   userMessage: string;
+  conversationHistory?: string;
   organizationId: string | null;
   orgExecutionToken: string | null;
   supabaseUrl: string;
@@ -147,6 +150,7 @@ export async function executeWorkflow(
         output = {
           triggerType: d.triggerType,
           userMessage: ctx.userMessage,
+          ...(ctx.conversationHistory ? { conversationHistory: ctx.conversationHistory } : {}),
           ...(includeResultData ? { data: ctx.resultData } : {}),
           ...(includeDocument ? { document: { available: ctx.hasDocument ?? Boolean(ctx.docText), text: ctx.docText ?? undefined } } : {}),
         };
@@ -203,6 +207,8 @@ export async function executeWorkflow(
                 outputType: d.inlineOutputType ?? "text",
                 fallbackOutputType: d.inlineFallbackOutputType ?? "text",
                 skillIds: d.skillIds ?? [],
+                providerIds: d.providerIds ?? [],
+                agentProviders: d.agentProviders ?? [],
               }, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery }
             : { agentId: d.agentId, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery };
         const agentOutput = await ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null);
