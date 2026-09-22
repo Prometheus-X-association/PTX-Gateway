@@ -47,6 +47,7 @@ export interface LlmAgentInfo {
   fallbackOutput?: string;
   defaultPrompts: string[];
   targetResources?: string[];
+  inputSources?: Array<"result" | "document" | "user_upload">;
   ragSources?: "all" | "result" | "document" | "none";
   ragMode?: "auto" | "chunks" | "none";
   ragTopK?: number;
@@ -79,6 +80,23 @@ interface ChatDrawerProps {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const uid = () => Math.random().toString(36).slice(2);
+type AgentInputSource = "result" | "document" | "user_upload";
+
+const normalizeAgentInputSources = (agent: LlmAgentInfo | null, freeChat: boolean): AgentInputSource[] => {
+  if (freeChat) return ["result", "document", "user_upload"];
+  if (Array.isArray(agent?.inputSources)) return agent.inputSources;
+  switch (agent?.ragSources ?? "all") {
+    case "result":
+      return ["result"];
+    case "document":
+      return ["document", "user_upload"];
+    case "none":
+      return [];
+    case "all":
+    default:
+      return ["result", "document", "user_upload"];
+  }
+};
 
 // Tags that indicate an HTML document or renderable fragment. Keep this explicit
 // so prose containing comparisons such as "x < y" is not treated as a page.
@@ -780,6 +798,7 @@ const ChatDrawer = ({
   // Local doc text overrides prop when the user uploads a file directly from the chatbox
   const [localDocText, setLocalDocText] = useState<string | null>(null);
   const [localAttachment, setLocalAttachment] = useState<LlmAttachment | null>(null);
+  const [localAttachmentSource, setLocalAttachmentSource] = useState<"gateway" | "chat" | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [showDocPopover, setShowDocPopover] = useState(false);
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false);
@@ -807,19 +826,24 @@ const ChatDrawer = ({
 
   const isFreeChatMode = activeAgentId === "__free__";
   const activeAgent = isFreeChatMode ? null : (agents.find((a) => a.id === activeAgentId) ?? agents[0] ?? null);
+  const activeInputSources = normalizeAgentInputSources(activeAgent, isFreeChatMode);
+  const activeUsesChatUpload = activeInputSources.includes("user_upload");
 
   // In-chat upload overrides prop doc text
   const docText = localDocText ?? propDocText ?? null;
   const hasDocument = Boolean(docText || localAttachment);
+  const hasChatUpload = Boolean(localDocText || (localAttachment && localAttachmentSource === "chat"));
 
   useEffect(() => {
     const stored = loadSourceDocuments(processSessionId);
-    setLocalAttachment(stored[0] ? {
+    const restored = stored[0] ? {
       name: stored[0].name,
       mimeType: stored[0].mimeType,
       size: stored[0].size,
       base64: stored[0].base64,
-    } : null);
+    } : null;
+    setLocalAttachment(restored);
+    setLocalAttachmentSource(restored ? "gateway" : null);
     setLocalDocText(null);
   }, [processSessionId]);
 
@@ -843,6 +867,7 @@ const ChatDrawer = ({
       let extracted = "";
       const attachment = await fileAsAttachment(file);
       setLocalAttachment(attachment);
+      setLocalAttachmentSource("chat");
       setLocalDocText(null);
       if (processSessionId) await saveSourceDocuments(processSessionId, [file]);
 
@@ -1300,7 +1325,7 @@ const ChatDrawer = ({
           .filter((m) => !m.streaming)
           .map((m) => ({ role: m.role, content: m.content }));
 
-        // Result data is always sent in full.
+        // Agent input settings decide which sources are sent.
         // Document context strategy depends on the agent's ragMode setting:
         //   "auto"   → send full doc text if < 30K chars, otherwise fall back to RAG chunks
         //   "chunks" → always use RAG semantic search (for very large documents)
@@ -1308,20 +1333,27 @@ const ChatDrawer = ({
         const currentRag = ragRef.current;
         const ragReady = currentRag && (currentRag.status === "ready" || currentRag.status === "syncing");
         const resolvedAgent = isFreeChatMode ? null : (agents.find((a) => a.id === (overrideAgentId ?? activeAgentId)) ?? agents[0] ?? null);
+        const inputSources = normalizeAgentInputSources(resolvedAgent, isFreeChatMode);
+        const includeResultData = inputSources.includes("result");
+        const includeGatewayUpload = inputSources.includes("document");
+        const includeChatUpload = inputSources.includes("user_upload");
         const ragMode = isFreeChatMode ? "auto" : (resolvedAgent?.ragMode ?? "auto");
-        const ragSources = isFreeChatMode ? "all" : (resolvedAgent?.ragSources ?? "all");
-        const includeDocument = ragSources === "all" || ragSources === "document";
+        const includeDocument = includeGatewayUpload || includeChatUpload;
+        const docParts: string[] = [];
+        if (includeGatewayUpload && propDocText?.trim()) docParts.push(`Gateway upload:\n${propDocText}`);
+        if (includeChatUpload && localDocText?.trim()) docParts.push(`Chatbox upload:\n${localDocText}`);
+        const selectedDocText = docParts.join("\n\n---\n\n");
 
-        let contextPayload: unknown = resultData;
+        let contextPayload: unknown = includeResultData ? resultData : undefined;
 
-        if (includeDocument && ragMode !== "none" && docText) {
-          const useFullDoc = ragMode === "auto" && docText.length <= DOC_FULL_LIMIT;
+        if (includeDocument && ragMode !== "none" && selectedDocText) {
+          const useFullDoc = ragMode === "auto" && selectedDocText.length <= DOC_FULL_LIMIT;
           if (useFullDoc) {
             // Small doc — send full text directly, most reliable for cross-referencing
             contextPayload = {
               __doc_context: true,
-              result: resultData,
-              docText,
+              ...(includeResultData ? { result: resultData } : {}),
+              docText: selectedDocText,
             };
           } else if (ragReady) {
             // Large doc or explicit chunks mode — use RAG search
@@ -1330,12 +1362,16 @@ const ChatDrawer = ({
             if (chunks.length > 0) {
               contextPayload = {
                 __doc_context: true,
-                result: resultData,
+                ...(includeResultData ? { result: resultData } : {}),
                 docChunks: chunks.map((c) => ({ path: c.path, text: c.text })),
               };
             }
           }
         }
+        const attachmentForAgent = localAttachment && (
+          (localAttachmentSource === "chat" && includeChatUpload) ||
+          (localAttachmentSource === "gateway" && includeGatewayUpload)
+        ) ? localAttachment : null;
 
         const { data: sessionData } = await supabase.auth.getSession();
         const token = sessionData?.session?.access_token;
@@ -1350,7 +1386,7 @@ const ChatDrawer = ({
             signal: abortRef.current.signal,
             body: JSON.stringify({
               messages: historyForApi,
-              attachment: localAttachment,
+              attachment: attachmentForAgent,
               result: contextPayload,
               org_execution_token: orgExecutionToken || undefined,
               agentId,
@@ -1424,7 +1460,7 @@ const ChatDrawer = ({
         abortRef.current = null;
       }
     },
-    [messages, isStreaming, resultData, orgExecutionToken, getAuthHeaders, activeAgentId, agents, docText, localAttachment, isFreeChatMode]
+    [messages, isStreaming, resultData, orgExecutionToken, getAuthHeaders, activeAgentId, agents, propDocText, localDocText, localAttachment, localAttachmentSource, isFreeChatMode]
   );
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1773,6 +1809,26 @@ const ChatDrawer = ({
               e.target.value = "";
             }}
           />
+          {activeUsesChatUpload && !hasChatUpload && (
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+              <span>
+                {activeAgent?.name ?? "This agent"} can use a document uploaded here. Attach one with the paperclip before asking document-specific questions.
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 gap-1.5 text-xs"
+                disabled={isUploading || isStreaming}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }}
+              >
+                <Paperclip className="h-3 w-3" /> Upload
+              </Button>
+            </div>
+          )}
           <div className="flex gap-2 items-end">
             <div className="relative shrink-0">
               <Button

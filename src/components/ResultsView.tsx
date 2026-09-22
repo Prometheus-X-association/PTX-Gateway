@@ -62,6 +62,25 @@ interface TemplateTagHelp {
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const normalizeAgentInputSources = (value: unknown, ragSources?: unknown): Array<"result" | "document" | "user_upload"> => {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map(String).filter((source): source is "result" | "document" | "user_upload" =>
+      source === "result" || source === "document" || source === "user_upload"
+    ))];
+  }
+  switch (String(ragSources ?? "all")) {
+    case "result":
+      return ["result"];
+    case "document":
+      return ["document", "user_upload"];
+    case "none":
+      return [];
+    case "all":
+    default:
+      return ["result", "document", "user_upload"];
+  }
+};
+
 const schemaTypeMatches = (schemaType: unknown, value: unknown): boolean => {
   const types = Array.isArray(schemaType) ? schemaType.map(String) : [String(schemaType)];
   return types.some((type) => {
@@ -2496,6 +2515,7 @@ const ResultsView = ({
     id: string; name: string; description: string;
     expectedOutput: string; fallbackOutput?: string; defaultPrompts: string[];
     targetResources: string[];
+    inputSources: Array<"result" | "document" | "user_upload">;
     ragSources: "all" | "result" | "document" | "none";
     ragMode: "auto" | "chunks" | "none";
     ragTopK: number;
@@ -2747,6 +2767,7 @@ const ResultsView = ({
               targetResources: Array.isArray(a.targetResources)
                 ? (a.targetResources as unknown[]).map(String).filter(Boolean)
                 : [],
+              inputSources: normalizeAgentInputSources(a.inputSources, a.ragSources),
               ragSources: (["all", "result", "document", "none"].includes(String(a.ragSources ?? ""))
                 ? a.ragSources
                 : "all") as "all" | "result" | "document" | "none",

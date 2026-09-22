@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -65,6 +66,7 @@ interface LlmAgent {
   defaultPrompts: string[];
   skillIds: string[];
   targetResources: string[];
+  inputSources: Array<"result" | "document" | "user_upload">;
   enabled: boolean;
   ragSources: "all" | "result" | "document" | "none";
   ragMode: "auto" | "chunks" | "none"; // auto = full doc if small, chunks if large
@@ -178,6 +180,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "text")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
     targetResources: [],
+    inputSources: ["result", "document", "user_upload"],
     defaultPrompts: [
       "Summarize the key findings in 3 bullet points",
       "Which item has the highest value and why might that be?",
@@ -196,6 +199,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "html")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
     targetResources: [],
+    inputSources: ["result", "document", "user_upload"],
     defaultPrompts: [
       "Show me a bar chart of the top 10 results",
       "Create a pie chart of the data distribution",
@@ -214,6 +218,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "mixed")!.defaultInstructions,
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
     targetResources: [],
+    inputSources: ["result", "document", "user_upload"],
     defaultPrompts: [
       "Generate a complete AI insight with visualization for this data",
       "Give me a business summary with a supporting chart",
@@ -232,6 +237,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       'Return ONLY valid JSON. No markdown, no code fences.\n\nRequired keys:\n- "summary": string\n- "insights": string[]\n- "visualization": { "type": "bar"|"line"|"pie"|"scatter"|"area", "data": array, "labels"?: string[] }',
     mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
     targetResources: [],
+    inputSources: ["result", "document", "user_upload"],
     defaultPrompts: [
       "Analyze this data and generate an interactive chart I can switch between types",
       "Generate a summary with insights and a switchable visualization",
@@ -262,6 +268,30 @@ const DEFAULT_GLOBAL_SNAPSHOT: GlobalConfigSnapshot = {
 
 const uid = () => crypto.randomUUID();
 
+type AgentInputSource = LlmAgent["inputSources"][number];
+
+const normalizeAgentInputSources = (value: unknown, ragSources?: unknown): LlmAgent["inputSources"] => {
+  if (Array.isArray(value)) {
+    return [...new Set(value
+      .map(String)
+      .filter((source): source is AgentInputSource =>
+        source === "result" || source === "document" || source === "user_upload"
+      ))];
+  }
+
+  switch (String(ragSources ?? "all")) {
+    case "result":
+      return ["result"];
+    case "document":
+      return ["document", "user_upload"];
+    case "none":
+      return [];
+    case "all":
+    default:
+      return ["result", "document", "user_upload"];
+  }
+};
+
 const moveItem = <T,>(arr: T[], from: number, to: number): T[] => {
   if (to < 0 || to >= arr.length) return arr;
   const next = [...arr];
@@ -288,7 +318,8 @@ const emptyAgent = (): LlmAgent => ({
   mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], defaultPrompts: [], enabled: true,
   skillIds: [],
   targetResources: [],
-  ragSources: "all", ragMode: "auto", ragTopK: 20,
+  inputSources: ["result"],
+  ragSources: "result", ragMode: "auto", ragTopK: 20,
 });
 
 const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
@@ -367,6 +398,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       defaultPrompts: Array.isArray(a.defaultPrompts) ? (a.defaultPrompts as unknown[]).map(String).filter(Boolean) : [],
       skillIds: Array.isArray(a.skillIds) ? (a.skillIds as unknown[]).map(String) : [],
       targetResources: Array.isArray(a.targetResources) ? (a.targetResources as unknown[]).map(String) : [],
+      inputSources: normalizeAgentInputSources((a as LlmAgent & { inputSources?: unknown }).inputSources, a.ragSources),
       enabled: a.enabled !== false,
       ragSources: (["all", "result", "document", "none"].includes(String(a.ragSources ?? "")) ? a.ragSources : "all") as LlmAgent["ragSources"],
       ragMode: (["auto", "chunks", "none"].includes(String(a.ragMode ?? "")) ? a.ragMode : "auto") as LlmAgent["ragMode"],
@@ -1030,6 +1062,22 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
     }
   };
 
+  const syncRagSources = (sources: LlmAgent["inputSources"]): LlmAgent["ragSources"] => {
+    const hasResult = sources.includes("result");
+    const hasDocument = sources.includes("document") || sources.includes("user_upload");
+    if (hasResult && hasDocument) return "all";
+    if (hasResult) return "result";
+    if (hasDocument) return "document";
+    return "none";
+  };
+
+  const toggleInputSource = (source: AgentInputSource, checked: boolean) => {
+    const next = checked
+      ? [...new Set([...agent.inputSources, source])]
+      : agent.inputSources.filter((item) => item !== source);
+    onChange({ ...agent, inputSources: next, ragSources: syncRagSources(next) });
+  };
+
   return (
     <div className="border-t border-primary/20 bg-muted/20 px-4 pt-4 pb-5 space-y-4">
       {/* Panel header */}
@@ -1189,11 +1237,55 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
         )}
       </div>
 
+      {/* Agent Inputs */}
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs">Input Settings</Label>
+          <span className="text-[10px] text-muted-foreground">Context sources this agent may receive</span>
+        </div>
+        <div className="grid gap-2 md:grid-cols-3">
+          {([
+            {
+              value: "result" as const,
+              label: "Result data",
+              desc: "Current analytics result JSON from the result page.",
+            },
+            {
+              value: "document" as const,
+              label: "Gateway upload",
+              desc: "Document uploaded earlier in the gateway process.",
+            },
+            {
+              value: "user_upload" as const,
+              label: "Chatbox upload",
+              desc: "Ask the user to attach a document in the AI chat.",
+            },
+          ]).map((item) => (
+            <label key={item.value} className="flex cursor-pointer gap-2 rounded-lg border bg-background p-3 text-left hover:border-primary/40">
+              <Checkbox
+                checked={agent.inputSources.includes(item.value)}
+                onCheckedChange={(checked) => toggleInputSource(item.value, checked === true)}
+                className="mt-0.5"
+              />
+              <span className="space-y-0.5">
+                <span className="block text-xs font-semibold">{item.label}</span>
+                <span className="block text-[10px] leading-relaxed text-muted-foreground">{item.desc}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {agent.inputSources.length === 0 && (
+          <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] text-amber-700 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300">
+            This agent will receive only the user's chat message, its system prompt, assigned skills, and tool access.
+          </p>
+        )}
+      </div>
+
       {/* Document Context */}
       <div className="space-y-2.5">
         <div className="flex items-center justify-between">
           <Label className="text-xs">Document Context</Label>
-          <span className="text-[10px] text-muted-foreground">How uploaded documents are included alongside the result data</span>
+          <span className="text-[10px] text-muted-foreground">How enabled document inputs are included</span>
         </div>
         <div className="flex flex-wrap gap-2">
           {(

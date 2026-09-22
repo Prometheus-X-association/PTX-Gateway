@@ -47,6 +47,7 @@ interface LlmAgent {
   mcpServerIds?: string[];
   defaultPrompts?: string[];
   targetResources?: string[];
+  inputSources?: Array<"result" | "document" | "user_upload">;
   enabled?: boolean;
   agentProviders?: LlmProvider[];
   ragSources?: "all" | "result" | "document" | "none";
@@ -85,6 +86,27 @@ const resolveProviders = (cfg: LlmInsightsConfig): LlmProvider[] => {
     }];
   }
   return [];
+};
+
+const normalizeAgentInputSources = (value: unknown, ragSources?: unknown): Array<"result" | "document" | "user_upload"> => {
+  if (Array.isArray(value)) {
+    return [...new Set(value
+      .map(String)
+      .filter((source): source is "result" | "document" | "user_upload" =>
+        source === "result" || source === "document" || source === "user_upload"
+      ))];
+  }
+  switch (String(ragSources ?? "all")) {
+    case "result":
+      return ["result"];
+    case "document":
+      return ["document", "user_upload"];
+    case "none":
+      return [];
+    case "all":
+    default:
+      return ["result", "document", "user_upload"];
+  }
 };
 
 const callWithFallback = async (
@@ -510,6 +532,7 @@ serve(async (req) => {
               targetResources: Array.isArray(a.targetResources)
                 ? a.targetResources.map(String).filter(Boolean)
                 : [],
+              inputSources: normalizeAgentInputSources(a.inputSources, a.ragSources),
               ragSources: ["all", "result", "document", "none"].includes(String(a.ragSources))
                 ? a.ragSources
                 : "all",

@@ -103,6 +103,7 @@ export interface GlobalConfig {
         }>;
         defaultPrompts: string[];
         skillIds: string[];
+        inputSources?: Array<'result' | 'document' | 'user_upload'>;
         enabled: boolean;
       }>;
       skills?: AgentSkill[];
