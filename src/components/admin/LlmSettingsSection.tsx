@@ -19,6 +19,7 @@ import {
   CheckCircle2, XCircle, ChevronRight, Wrench, Workflow, BookOpen,
 } from "lucide-react";
 import { WorkflowsManagement } from "@/components/admin/WorkflowsManagement";
+import { EXAMPLE_WORKFLOWS } from "@/components/admin/WorkflowBuilder";
 import { AgentSkillsManagement } from "@/components/admin/AgentSkillsManagement";
 import {
   ChatAvailabilitySelector,
@@ -84,6 +85,29 @@ interface LlmInsightsConfig {
   predefinedPrompts: string[];
   workflows: WorkflowConfig[];
 }
+
+const BUILT_IN_WORKFLOW_TEMPLATE_IDS = new Set([
+  "interactive-skill-description-refinement",
+]);
+
+const looksLikeInteractiveSkillRefinementWorkflow = (workflow: WorkflowConfig): boolean => {
+  if (BUILT_IN_WORKFLOW_TEMPLATE_IDS.has(workflow.id)) return true;
+  const nodeIds = new Set(workflow.graph?.nodes?.map((node) => node.id) ?? []);
+  return nodeIds.has("refine-trigger") && nodeIds.has("refine-ask-skill");
+};
+
+const upgradeBuiltInWorkflowTemplate = (workflow: WorkflowConfig): WorkflowConfig => {
+  if (!looksLikeInteractiveSkillRefinementWorkflow(workflow)) return workflow;
+  const template = EXAMPLE_WORKFLOWS.find((example) => example.id === workflow.id)
+    ?? EXAMPLE_WORKFLOWS.find((example) => example.id === "interactive-skill-description-refinement");
+  if (!template) return workflow;
+  return {
+    ...workflow,
+    name: workflow.name || template.name,
+    description: workflow.description || template.description,
+    graph: template.workflow,
+  };
+};
 
 interface GlobalConfigSnapshot {
   app_name: string;
@@ -483,7 +507,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
   // Workflows — migrate from old single `workflow` field if present, then use array
   let workflows: WorkflowConfig[] = [];
   if (Array.isArray(raw.workflows)) {
-    workflows = (raw.workflows as WorkflowConfig[]).map((w) => ({
+    workflows = (raw.workflows as WorkflowConfig[]).map((w) => upgradeBuiltInWorkflowTemplate({
       id: String(w.id || uid()),
       name: String(w.name || "Workflow"),
       description: String(w.description || ""),

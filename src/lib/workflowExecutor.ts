@@ -142,6 +142,7 @@ export async function executeWorkflow(
   let stopReason: string | undefined;
   let waiting: WorkflowWaitingState | undefined;
   let fatalStop = false;
+  let resumeAnswerConsumed = false;
   // Track visits per node to detect infinite loops
   const nodeVisitCount = new Map<string, number>();
 
@@ -198,12 +199,15 @@ export async function executeWorkflow(
         }
         resolvedDocumentContext = { source: d.source, delivery: d.delivery, reuseScope: "workflow_run" };
         output = {
+          ...(prevOutput && typeof prevOutput === "object" && !Array.isArray(prevOutput) ? prevOutput as Record<string, unknown> : {}),
           contextType: "document",
-          source: d.source,
-          delivery: d.delivery,
-          reuseScope: "workflow_run",
-          available: true,
-          textAvailable: Boolean(ctx.docText?.trim()),
+          documentContext: {
+            source: d.source,
+            delivery: d.delivery,
+            reuseScope: "workflow_run",
+            available: true,
+            textAvailable: Boolean(ctx.docText?.trim()),
+          },
           // The source text is held once in this workflow-run context. Native
           // files remain available to document-capable providers through the
           // agent's document input, rather than being copied into node data.
@@ -235,7 +239,8 @@ export async function executeWorkflow(
       } else if (node.type === "user_input") {
         const d = node.data as UserInputNodeData;
         const options = d.options?.split(/\r?\n/).map((option) => option.trim()).filter(Boolean);
-        const resumeAnswer = ctx.resume?.waiting.nodeId === node.id ? ctx.resume.answer.trim() : "";
+        const canUseResumeAnswer = !resumeAnswerConsumed && ctx.resume?.waiting.nodeId === node.id;
+        const resumeAnswer = canUseResumeAnswer ? ctx.resume.answer.trim() : "";
         const prevStr = prevOutput === null ? "" : typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput, null, 2);
         const question = (d.question || "Please provide the next input.")
           .replace(/\{\{prevOutput\}\}/g, prevStr)
@@ -305,6 +310,7 @@ export async function executeWorkflow(
           stopReason = `Waiting for a valid selection at "${String(d.label || node.id)}".`;
           fatalStop = true;
         } else {
+          if (canUseResumeAnswer) resumeAnswerConsumed = true;
           const value = d.inputType === "yes_no"
             ? ["yes", "y"].includes(normalize(resumeAnswer))
             : resumeAnswer;

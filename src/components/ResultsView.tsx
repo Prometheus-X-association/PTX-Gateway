@@ -13,6 +13,8 @@ import { isDebugMode } from "@/config/global.config";
 import { supabase } from "@/integrations/supabase/client";
 import { AnalyticsOption, CustomVisualizationConfig, DataResource, ExportApiConfig, ExportApiOidcConfig, OidcClientConfig } from "@/types/dataspace";
 import ChatDrawer from "@/components/chat/ChatDrawer";
+import { EXAMPLE_WORKFLOWS } from "@/components/admin/WorkflowBuilder";
+import type { WorkflowConfig } from "@/types/workflow";
 
 interface ResultsViewProps {
   analyticsType: string;
@@ -61,6 +63,29 @@ interface TemplateTagHelp {
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const BUILT_IN_WORKFLOW_TEMPLATE_IDS = new Set([
+  "interactive-skill-description-refinement",
+]);
+
+const looksLikeInteractiveSkillRefinementWorkflow = (workflow: WorkflowConfig): boolean => {
+  if (BUILT_IN_WORKFLOW_TEMPLATE_IDS.has(workflow.id)) return true;
+  const nodeIds = new Set(workflow.graph?.nodes?.map((node) => node.id) ?? []);
+  return nodeIds.has("refine-trigger") && nodeIds.has("refine-ask-skill");
+};
+
+const upgradeBuiltInWorkflowTemplate = (workflow: WorkflowConfig): WorkflowConfig => {
+  if (!looksLikeInteractiveSkillRefinementWorkflow(workflow)) return workflow;
+  const template = EXAMPLE_WORKFLOWS.find((example) => example.id === workflow.id)
+    ?? EXAMPLE_WORKFLOWS.find((example) => example.id === "interactive-skill-description-refinement");
+  if (!template) return workflow;
+  return {
+    ...workflow,
+    name: workflow.name || template.name,
+    description: workflow.description || template.description,
+    graph: template.workflow,
+  };
+};
 
 const normalizeAgentInputSources = (value: unknown, ragSources?: unknown): Array<"result" | "document" | "user_upload"> => {
   if (Array.isArray(value)) {
@@ -2523,7 +2548,7 @@ const ResultsView = ({
     resultChunkSize: number;
   }>>([]);
   const [llmGlobalPrompts, setLlmGlobalPrompts] = useState<string[]>([]);
-  const [llmWorkflows, setLlmWorkflows] = useState<import("@/types/workflow").WorkflowConfig[]>([]);
+  const [llmWorkflows, setLlmWorkflows] = useState<WorkflowConfig[]>([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const selectedTargetId = useMemo(() => {
     if (selectedAnalytics) {
@@ -2790,7 +2815,7 @@ const ResultsView = ({
           setLlmGlobalPrompts((data.predefinedPrompts as unknown[]).map(String).filter(Boolean));
         }
         if (Array.isArray(data?.workflows)) {
-          setLlmWorkflows(data.workflows as import("@/types/workflow").WorkflowConfig[]);
+          setLlmWorkflows((data.workflows as WorkflowConfig[]).map(upgradeBuiltInWorkflowTemplate));
         }
       } catch {
         if (isMounted) {

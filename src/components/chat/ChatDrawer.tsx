@@ -1263,10 +1263,23 @@ const ChatDrawer = ({
         ));
       } else if (waiting) {
         setPausedWorkflow({ workflowId: workflowConfig.id, waiting });
-        setMessages((prev) => prev.map((m) => m.id === statusId
-          ? { ...m, content: waiting.question, streaming: false }
-          : m
-        ));
+        const waitingInput = waiting.input && typeof waiting.input === "object"
+          ? waiting.input as Record<string, unknown>
+          : null;
+        const waitingHtml = typeof waitingInput?.tableHtml === "string" && looksLikeHtml(waitingInput.tableHtml)
+          ? waitingInput.tableHtml
+          : null;
+        const questionText = [
+          waiting.question,
+          ...(waiting.options?.length ? ["", `Options: ${waiting.options.join(", ")}`] : []),
+        ].join("\n");
+        setMessages((prev) => [
+          ...prev.map((m) => m.id === statusId
+            ? { ...m, content: "Workflow paused for your input.", streaming: false }
+            : m
+          ),
+          { id: uid(), role: "assistant", content: questionText, htmlViz: waitingHtml ?? undefined, streaming: false },
+        ]);
       } else {
         const { text: finalText, renderAs } = getWorkflowFinalOutput(results);
         const outputFormat = renderAs === "update_result" ? "json"
@@ -1281,10 +1294,10 @@ const ChatDrawer = ({
           ? {
               ...m,
               content: renderAs === "update_result" && json !== null && json !== undefined
-                ? "Result data updated from the workflow."
+                ? "Result page table updated."
                 : prose,
-              htmlViz: html ?? undefined,
-              jsonData: json ?? undefined,
+              htmlViz: renderAs === "update_result" ? undefined : html ?? undefined,
+              jsonData: renderAs === "update_result" ? undefined : json ?? undefined,
               streaming: false,
             }
           : m
