@@ -1083,8 +1083,9 @@ const ConditionPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: 
       </div>
       <SchemaRow
         inputSchema={d.inputSchema}
+        outputSchema={d.outputSchema}
         onInputChange={(v) => onChange({ ...d, inputSchema: v || undefined })}
-        onOutputChange={() => {}}
+        onOutputChange={(v) => onChange({ ...d, outputSchema: v || undefined })}
       />
     </div>
   );
@@ -1098,7 +1099,70 @@ const RENDER_OPTIONS: Array<{ value: OutputNodeData["renderAs"]; label: string; 
   { value: "update_result", label: "Update result", desc: "Replace the result data panel with this output" },
 ];
 
-const OutputPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: OutputNodeData) => void }) => {
+const IncomingDataPicker = ({
+  incomingEdges,
+  nodes,
+  testRuns,
+  onUpdateEdge,
+}: {
+  incomingEdges: Array<Edge & { dataPath?: string }>;
+  nodes: Node[];
+  testRuns: Record<string, TestNodeRun>;
+  onUpdateEdge: (edgeId: string, dataPath?: string) => void;
+}) => (
+  <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
+    <div>
+      <Label className="text-xs">Input from previous node</Label>
+      <p className="text-[10px] leading-relaxed text-muted-foreground">
+        By default the whole previous output is used. After running a test, choose a field path to pass only that value.
+      </p>
+    </div>
+    {incomingEdges.length === 0 ? (
+      <p className="rounded-md border border-amber-400/30 bg-amber-500/10 p-2 text-[10px] text-amber-700 dark:text-amber-300">
+        Connect a previous node to this output node.
+      </p>
+    ) : incomingEdges.map((edge) => {
+      const source = nodes.find((candidate) => candidate.id === edge.source);
+      const sourceLabel = String((source?.data as { label?: string } | undefined)?.label || edge.source);
+      const sourceOutput = testRuns[edge.source]?.output;
+      const selectedValue = sourceOutput === undefined ? undefined : pickDataPath(sourceOutput, edge.dataPath ?? "");
+      const pathOptions = sourceOutput === undefined ? [] : ["", ...listDataPaths(sourceOutput).slice(0, 24)];
+      return (
+        <div key={edge.id} className="space-y-2 rounded-md border bg-background p-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-xs font-medium">{sourceLabel}</span>
+            <Badge variant="outline" className="shrink-0 text-[9px]">{edge.dataPath ? edge.dataPath : "whole output"}</Badge>
+          </div>
+          {pathOptions.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {pathOptions.map((path) => (
+                <button key={path || "__whole"} type="button"
+                  onClick={() => onUpdateEdge(edge.id, path || undefined)}
+                  className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+                    (edge.dataPath ?? "") === path
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border text-muted-foreground hover:border-primary"
+                  }`}>
+                  {path || "whole output"}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[10px] text-muted-foreground">Run a test to see selectable output fields from this node.</p>
+          )}
+          {sourceOutput !== undefined && (
+            <details className="rounded border bg-muted/20">
+              <summary className="cursor-pointer px-2 py-1.5 text-[10px] font-semibold">Selected value preview</summary>
+              <pre className="max-h-40 overflow-auto border-t p-2 whitespace-pre-wrap break-words font-mono text-[9px] text-muted-foreground">{debugJson(selectedValue)}</pre>
+            </details>
+          )}
+        </div>
+      );
+    })}
+  </div>
+);
+
+const OutputPanel = ({ node, incomingEdges, nodes, testRuns, onChange, onUpdateEdge }: { node: WorkflowNode; incomingEdges: Array<Edge & { dataPath?: string }>; nodes: Node[]; testRuns: Record<string, TestNodeRun>; onChange: (d: OutputNodeData) => void; onUpdateEdge: (edgeId: string, dataPath?: string) => void }) => {
   const d = node.data as OutputNodeData;
   const renderAs = d.renderAs ?? "auto";
   return (
@@ -1126,6 +1190,7 @@ const OutputPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: Out
           ))}
         </div>
       </div>
+      <IncomingDataPicker incomingEdges={incomingEdges} nodes={nodes} testRuns={testRuns} onUpdateEdge={onUpdateEdge} />
       {renderAs === "update_result" && (
         <div className="space-y-1">
           <Label className="text-xs">Transform code <span className="text-muted-foreground">(optional sandboxed JS to reshape prevOutput before replacing result data)</span></Label>
@@ -1137,8 +1202,9 @@ const OutputPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: Out
       )}
       <SchemaRow
         inputSchema={d.inputSchema}
+        outputSchema={d.outputSchema}
         onInputChange={(v) => onChange({ ...d, inputSchema: v || undefined })}
-        onOutputChange={() => {}}
+        onOutputChange={(v) => onChange({ ...d, outputSchema: v || undefined })}
       />
     </div>
   );
@@ -2243,7 +2309,13 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     commit(nodes, next);
   };
 
-  const runWorkflowTest = async () => {
+  const updateEdgeDataPath = (edgeId: string, dataPath?: string) => {
+    const next = edges.map((edge) => edge.id === edgeId ? { ...edge, dataPath } : edge);
+    setEdges(next);
+    commit(nodes, next);
+  };
+
+  const runWorkflowTest = async (stopAfterNodeId?: string) => {
     if (isTesting) return;
     let resultData: unknown = testInput;
     if (testInputMode === "json") {
@@ -2278,6 +2350,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
         supabaseUrl: import.meta.env.VITE_SUPABASE_URL as string,
         signal: controller.signal,
         stopOnError: true,
+        stopAfterNodeId,
         onStepStart: (nodeId, input) => {
           setTestExecutionOrder((current) => current.includes(nodeId) ? current : [...current, nodeId]);
           setTestRuns((current) => ({
@@ -2931,6 +3004,22 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
                 <button type="button" onClick={() => setSelectedNodeId(null)}><X className="h-4 w-4 text-muted-foreground hover:text-foreground" /></button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
+                <div className="mb-3 flex items-center gap-2 rounded-lg border bg-muted/20 p-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 text-xs"
+                    disabled={isTesting}
+                    onClick={() => void runWorkflowTest(selectedNode.id)}
+                  >
+                    {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                    Run to this node
+                  </Button>
+                  <span className="text-[10px] leading-relaxed text-muted-foreground">
+                    Tests the workflow from the trigger through this node, then stops.
+                  </span>
+                </div>
                 {selectedNode.type === "trigger" && <TriggerPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "document_context" && <DocumentContextPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "agent" && <AgentPanel
@@ -2947,7 +3036,14 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
                 {selectedNode.type === "api" && <ApiPanel node={selectedNode} organizationId={organizationId} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "plugin" && <PluginPanel node={selectedNode} organizationId={organizationId} generationContext={pluginGenerationContext} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "condition" && <ConditionPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
-                {selectedNode.type === "output" && <OutputPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
+                {selectedNode.type === "output" && <OutputPanel
+                  node={selectedNode}
+                  incomingEdges={edges.filter((edge) => edge.target === selectedNode.id) as Array<Edge & { dataPath?: string }>}
+                  nodes={nodes}
+                  testRuns={testRuns}
+                  onUpdateEdge={updateEdgeDataPath}
+                  onChange={(data) => updateSelectedNodeData(data as never)}
+                />}
                 {testRuns[selectedNode.id] && (
                   <div className="mt-4 space-y-2 border-t pt-4">
                     <div className="flex items-center justify-between">

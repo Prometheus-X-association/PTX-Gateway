@@ -30,6 +30,7 @@ export interface ExecutorContext {
   onApiRequest: (nodeId: string, config: ApiNodeData, prevOutput: unknown) => Promise<unknown>;
   onStepDone: (step: WorkflowStepResult) => void;
   onStepStart?: (nodeId: string, input: unknown) => void;
+  stopAfterNodeId?: string;
   /** Test/debug runs can stop immediately at the first failed node. */
   stopOnError?: boolean;
   signal?: AbortSignal;
@@ -281,6 +282,10 @@ export async function executeWorkflow(
     if (error && ctx.stopOnError) {
       stopReason = `Stopped at "${String(node.data.label || node.id)}": ${error}`;
       fatalStop = true;
+      return;
+    }
+    if (ctx.stopAfterNodeId === node.id) {
+      stopReason = `Stopped after node "${String(node.data.label || node.id)}".`;
       return;
     }
 

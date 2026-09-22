@@ -131,6 +131,7 @@ export interface OutputNodeData {
   /** When renderAs = "update_result", optional JS expression to transform prevOutput into result data */
   transformCode?: string;
   inputSchema?: string;
+  outputSchema?: string;
 }
 
 export type AnyNodeData =
