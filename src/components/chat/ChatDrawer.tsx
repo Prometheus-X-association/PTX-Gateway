@@ -826,13 +826,10 @@ const ChatDrawer = ({
 
   const isFreeChatMode = activeAgentId === "__free__";
   const activeAgent = isFreeChatMode ? null : (agents.find((a) => a.id === activeAgentId) ?? agents[0] ?? null);
-  const activeInputSources = normalizeAgentInputSources(activeAgent, isFreeChatMode);
-  const activeUsesChatUpload = activeInputSources.includes("user_upload");
 
   // In-chat upload overrides prop doc text
   const docText = localDocText ?? propDocText ?? null;
   const hasDocument = Boolean(docText || localAttachment);
-  const hasChatUpload = Boolean(localDocText || (localAttachment && localAttachmentSource === "chat"));
 
   useEffect(() => {
     const stored = loadSourceDocuments(processSessionId);
@@ -1809,26 +1806,6 @@ const ChatDrawer = ({
               e.target.value = "";
             }}
           />
-          {activeUsesChatUpload && !hasChatUpload && (
-            <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-              <span>
-                {activeAgent?.name ?? "This agent"} can use a document uploaded here. Attach one with the paperclip before asking document-specific questions.
-              </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 shrink-0 gap-1.5 text-xs"
-                disabled={isUploading || isStreaming}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  fileInputRef.current?.click();
-                }}
-              >
-                <Paperclip className="h-3 w-3" /> Upload
-              </Button>
-            </div>
-          )}
           <div className="flex gap-2 items-end">
             <div className="relative shrink-0">
               <Button
