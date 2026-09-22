@@ -2015,7 +2015,9 @@ Rules:
 - Use the selected skill from input.skill.
 - Evidence must be sentences or self-contained bullets from the provided source file.
 - Sentences do not need to contain the full skill label, but they must clearly refer to the selected skill.
-- If evidence is weak, say so in the description and keep evidence empty.
+- The documentBasedDescription must be a direct capability/activity description only.
+- Do not include rationale, confidence wording, or source-quality comments in documentBasedDescription. Avoid phrases such as "the document gives weak evidence", "the document indicates", "it suggests", "it shows", or "based on the document".
+- If evidence is weak, put that caution in evidence, not in documentBasedDescription.
 - Do not invent document evidence.`,
             passPrevOutput: true,
             promptOverride: `Generate the document-based description for the selected skill.
@@ -2025,6 +2027,47 @@ Selected skill and compact skill list:
             inputSchema: "{ skill, selectedSkillInput } + uploaded document",
             outputSchema: "{ skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, evidence }",
           } satisfies AgentNodeData,
+        },
+        {
+          id: "refine-clean-document-description",
+          type: "plugin",
+          position: { x: 560, y: 810 },
+          data: {
+            label: "Clean Direct Description",
+            description: "Removes LLM rationale wording from the document-based description and keeps it as evidence context",
+            inputSchema: "{ documentBasedDescription, evidence }",
+            outputSchema: "{ documentBasedDescription, evidence }",
+            code: `const state = input.prevOutput || {};
+let description = String(state.documentBasedDescription || '').trim();
+const evidence = Array.isArray(state.evidence) ? [...state.evidence] : [];
+const rationaleNotes = [];
+
+const firstSentence = description.match(/^([^.!?]+[.!?])\\s+(.*)$/);
+if (firstSentence && /\\b(document|evidence|source|provided file|uploaded file)\\b/i.test(firstSentence[1]) && /\\b(weak|limited|indicates|suggests|shows|mentions|states|based on|gives)\\b/i.test(firstSentence[1])) {
+  rationaleNotes.push(firstSentence[1].trim());
+  description = firstSentence[2].trim();
+}
+
+const rationalePrefix = /^(?:the\\s+)?(?:document|evidence|source|provided file|uploaded file)\\s+(?:gives|provides|contains|offers|shows|suggests|indicates|mentions|states)\\s+(?:weak|limited|some|clear|direct)?\\s*(?:evidence|context)?\\s*(?:for\\s+this\\s+skill)?\\s*(?:that|because|:)?\\s*/i;
+const impersonalPrefix = /^(?:it|this)\\s+(?:indicates|suggests|shows|mentions|states|says|describes)\\s+(?:that\\s+)?/i;
+description = description
+  .replace(rationalePrefix, '')
+  .replace(impersonalPrefix, '')
+  .replace(/^the\\s+skill\\s+involves\\s+/i, '')
+  .trim();
+
+if (description) {
+  description = description.charAt(0).toLocaleLowerCase() + description.slice(1);
+}
+for (const note of rationaleNotes) {
+  if (note && !evidence.includes(note)) evidence.unshift(note);
+}
+return {
+  ...state,
+  documentBasedDescription: description || String(state.documentBasedDescription || '').trim(),
+  evidence,
+};`,
+          } satisfies PluginNodeData,
         },
         {
           id: "refine-ask-satisfied",
@@ -2069,7 +2112,7 @@ Are you satisfied with this document-based description?`,
             inlineFallbackOutputType: "json",
             useUploadedDocument: true,
             contextMode: "document_only",
-            inlineSystemPrompt: `You rewrite a document-based skill description using the same provided source file evidence. Return ONLY valid JSON with the same keys as the input: skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, evidence. Keep it concise and evidence-based.`,
+            inlineSystemPrompt: `You rewrite a document-based skill description using the same provided source file evidence. Return ONLY valid JSON with the same keys as the input: skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, evidence. Keep documentBasedDescription concise, direct, and evidence-based. Do not include rationale, confidence wording, or source-quality comments in documentBasedDescription; put any caution about weak or limited evidence in evidence instead.`,
             passPrevOutput: true,
             promptOverride: `The user was not satisfied. Generate an alternative description for the same skill using the same source-file context and evidence.
 
@@ -2345,11 +2388,13 @@ return {
           type: "plugin",
           position: { x: 20, y: 2535 },
           data: {
-            label: "Final HTML Table",
-            description: "Returns the final HTML table without updating resultData",
-            inputSchema: "{ tableHtml }",
-            outputSchema: "HTML table",
-            code: `return String(input.prevOutput?.tableHtml || '<p>No final table was produced.</p>');`,
+            label: "Final No Update Report",
+            description: "Returns a short report without repeating the table",
+            inputSchema: "{ skillLabel }",
+            outputSchema: "Text report",
+            code: `const state = input.prevOutput || {};
+const skill = String(state.skillLabel || state.skill?.label || state.skill?.display || 'selected skill');
+return 'No update applied. The generated descriptions for ' + skill + ' were shown above, and the result page data was left unchanged.';`,
           } satisfies PluginNodeData,
         },
         {
@@ -2388,9 +2433,9 @@ return result;`,
           type: "output",
           position: { x: 20, y: 2685 },
           data: {
-            label: "Show Final Table",
-            renderAs: "html",
-            inputSchema: "HTML table",
+            label: "Show No Update Report",
+            renderAs: "text",
+            inputSchema: "Text report",
           } satisfies OutputNodeData,
         },
         {
@@ -2412,11 +2457,12 @@ return result;`,
         { id: "refine-e6", source: "refine-skill-valid", target: "refine-document-context", sourceHandle: "true" },
         { id: "refine-e7", source: "refine-skill-valid", target: "refine-ask-skill", sourceHandle: "false" },
         { id: "refine-e8a", source: "refine-document-context", target: "refine-document-agent" },
-        { id: "refine-e8", source: "refine-document-agent", target: "refine-ask-satisfied" },
+        { id: "refine-e8b", source: "refine-document-agent", target: "refine-clean-document-description" },
+        { id: "refine-e8", source: "refine-clean-document-description", target: "refine-ask-satisfied" },
         { id: "refine-e9", source: "refine-ask-satisfied", target: "refine-satisfied-condition" },
         { id: "refine-e10", source: "refine-satisfied-condition", target: "refine-ask-frameworks", sourceHandle: "true" },
         { id: "refine-e11", source: "refine-satisfied-condition", target: "refine-alternative-agent", sourceHandle: "false" },
-        { id: "refine-e12", source: "refine-alternative-agent", target: "refine-ask-satisfied" },
+        { id: "refine-e12", source: "refine-alternative-agent", target: "refine-clean-document-description" },
         { id: "refine-e13", source: "refine-ask-frameworks", target: "refine-framework-condition" },
         { id: "refine-e14", source: "refine-framework-condition", target: "refine-ask-framework-name", sourceHandle: "true" },
         { id: "refine-e15", source: "refine-framework-condition", target: "refine-format-final", sourceHandle: "false" },

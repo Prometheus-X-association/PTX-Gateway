@@ -108,6 +108,21 @@ const serializeResultData = (value: unknown): { text: string; format: "json" | "
   return { text: serialized === undefined ? String(value) : serialized, format: "json" };
 };
 
+const findResultNodes = (value: unknown): unknown[] => {
+  if (!value || typeof value !== "object") return [];
+  const root = value as Record<string, unknown>;
+  if (Array.isArray(root.nodes)) return root.nodes;
+  const data = root.data;
+  if (data && typeof data === "object" && Array.isArray((data as Record<string, unknown>).nodes)) {
+    return (data as Record<string, unknown>).nodes as unknown[];
+  }
+  const result = root.result;
+  if (result && typeof result === "object" && Array.isArray((result as Record<string, unknown>).nodes)) {
+    return (result as Record<string, unknown>).nodes as unknown[];
+  }
+  return [];
+};
+
 const buildChunkedResultPayload = (value: unknown, requestedChunkSize?: number) => {
   const { text, format } = serializeResultData(value);
   const chunkSize = Math.min(Math.max(Math.round(requestedChunkSize || RESULT_CHUNK_SIZE_DEFAULT), 2000), 50000);
@@ -116,6 +131,30 @@ const buildChunkedResultPayload = (value: unknown, requestedChunkSize?: number) 
     const end = Math.min(start + chunkSize, text.length);
     chunks.push({ index: chunks.length + 1, start, end, text: text.slice(start, end) });
   }
+  const nodes = findResultNodes(value);
+  const nodeIndex = nodes.map((node, index) => {
+    const record = node && typeof node === "object" ? node as Record<string, unknown> : {};
+    const label = record.label === undefined || record.label === null ? undefined : String(record.label);
+    const id = record.id === undefined || record.id === null ? undefined : String(record.id);
+    const serializedNode = JSON.stringify(node, null, 2);
+    const labelNeedle = label ? `"label": ${JSON.stringify(label)}` : "";
+    const idNeedle = id ? `"id": ${JSON.stringify(id)}` : "";
+    const position = serializedNode && text.includes(serializedNode)
+      ? text.indexOf(serializedNode)
+      : labelNeedle && text.includes(labelNeedle)
+        ? text.indexOf(labelNeedle)
+        : idNeedle && text.includes(idNeedle)
+          ? text.indexOf(idNeedle)
+          : -1;
+    const chunkIndex = position >= 0 ? Math.floor(position / chunkSize) + 1 : undefined;
+    return {
+      index,
+      oneBasedIndex: index + 1,
+      id,
+      label,
+      ...(chunkIndex ? { chunkIndex } : {}),
+    };
+  }).filter((entry) => entry.id || entry.label);
 
   return {
     __chunked_result_context: true,
@@ -124,7 +163,11 @@ const buildChunkedResultPayload = (value: unknown, requestedChunkSize?: number) 
       totalChars: text.length,
       totalChunks: chunks.length,
       chunkSize,
-      instruction: "These chunks are ordered and together form one complete resultData payload. Reconstruct or inspect them as one dataset before answering.",
+      ...(nodeIndex.length > 0 ? {
+        nodeCount: nodeIndex.length,
+        nodeIndex,
+      } : {}),
+      instruction: "These chunks are ordered and together form one complete resultData payload. Use nodeIndex as the compact map of resultData nodes, labels, and chunk locations before deciding whether a node or label exists.",
     },
     chunks,
   };
@@ -1266,7 +1309,8 @@ const ChatDrawer = ({
         const waitingInput = waiting.input && typeof waiting.input === "object"
           ? waiting.input as Record<string, unknown>
           : null;
-        const waitingHtml = typeof waitingInput?.tableHtml === "string" && looksLikeHtml(waitingInput.tableHtml)
+        const waitingHtml = waiting.nodeId === "refine-ask-update-result" &&
+          typeof waitingInput?.tableHtml === "string" && looksLikeHtml(waitingInput.tableHtml)
           ? waitingInput.tableHtml
           : null;
         const questionText = [

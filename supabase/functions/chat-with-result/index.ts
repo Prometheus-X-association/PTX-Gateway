@@ -1159,6 +1159,7 @@ serve(async (req: Request) => {
     return [
       "\n## Result data (chunked)",
       "The manifest describes one complete resultData payload split into ordered chunks. Treat every chunk below as part of the same dataset.",
+      "If the manifest includes nodeIndex, use it as the compact authoritative index of resultData nodes and labels. For label or index lookup questions, check nodeIndex first, then inspect the referenced chunk if more detail is needed. Do not say a label is unavailable until both nodeIndex and the ordered chunks have been checked.",
       "",
       "### Manifest",
       manifestJson,
