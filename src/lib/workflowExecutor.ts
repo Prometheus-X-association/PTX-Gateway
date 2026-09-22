@@ -1,5 +1,5 @@
-import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge } from "@/types/workflow";
-import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, TriggerNodeData, DocumentContextNodeData } from "@/types/workflow";
+import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge, WorkflowWaitingState } from "@/types/workflow";
+import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData } from "@/types/workflow";
 import { executeSandboxedJavascript } from "@/lib/workflowSandbox";
 
 export interface InlineAgentConfig {
@@ -31,6 +31,10 @@ export interface ExecutorContext {
   onStepDone: (step: WorkflowStepResult) => void;
   onStepStart?: (nodeId: string, input: unknown) => void;
   stopAfterNodeId?: string;
+  resume?: {
+    waiting: WorkflowWaitingState;
+    answer: string;
+  };
   /** Test/debug runs can stop immediately at the first failed node. */
   stopOnError?: boolean;
   signal?: AbortSignal;
@@ -47,6 +51,26 @@ async function runPlugin(
     return await executeSandboxedJavascript({ operation: "plugin", code, input, nodeOutputs });
   } catch (e) {
     throw new Error(`Plugin error: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+async function runRetrieval(
+  data: RetrievalNodeData,
+  input: {
+    source: RetrievalNodeData["source"];
+    sourceData: unknown;
+    result: unknown;
+    docText: string | null;
+    prevOutput: unknown;
+    userMessage: string;
+    query: string;
+    maxItems: number;
+  },
+): Promise<unknown> {
+  try {
+    return await executeSandboxedJavascript({ operation: "retrieval", code: data.code, input, timeoutMs: 2_500 });
+  } catch (e) {
+    throw new Error(`Retrieval tool error: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -72,6 +96,7 @@ export interface WorkflowResult {
   aborted: boolean;
   error?: string;
   stopReason?: string;
+  waiting?: WorkflowWaitingState;
 }
 
 const selectDataPath = (value: unknown, path?: string): unknown => {
@@ -109,9 +134,13 @@ export async function executeWorkflow(
 
   const results: WorkflowStepResult[] = [];
   const outputByNodeId = new Map<string, unknown>();
+  if (ctx.resume?.waiting.nodeOutputs) {
+    Object.entries(ctx.resume.waiting.nodeOutputs).forEach(([nodeId, value]) => outputByNodeId.set(nodeId, value));
+  }
   const conditionResults = new Map<string, boolean>();
   let resolvedDocumentContext: Pick<DocumentContextNodeData, "source" | "delivery" | "reuseScope"> | null = null;
   let stopReason: string | undefined;
+  let waiting: WorkflowWaitingState | undefined;
   let fatalStop = false;
   // Track visits per node to detect infinite loops
   const nodeVisitCount = new Map<string, number>();
@@ -135,7 +164,11 @@ export async function executeWorkflow(
     // When called via a specific edge (including back-edges), use that edge's source output.
     // When called as the first node (trigger), prevOutput is null.
     const sourceOutput = fromEdge ? (outputByNodeId.get(fromEdge.source) ?? null) : null;
-    const prevOutput = fromEdge ? selectDataPath(sourceOutput, fromEdge.dataPath) : null;
+    const prevOutput = fromEdge
+      ? selectDataPath(sourceOutput, fromEdge.dataPath)
+      : ctx.resume?.waiting.nodeId === nodeId
+        ? ctx.resume.waiting.input
+        : null;
     ctx.onStepStart?.(node.id, prevOutput);
     const startedAt = performance.now();
 
@@ -176,6 +209,111 @@ export async function executeWorkflow(
           // agent's document input, rather than being copied into node data.
           ...(d.delivery !== "native_file" && ctx.docText ? { text: ctx.docText } : {}),
         };
+
+      } else if (node.type === "retrieval") {
+        const d = node.data as RetrievalNodeData;
+        const sourceData = d.source === "prev_output"
+          ? prevOutput
+          : d.source === "node_output" && d.sourceNodeId
+            ? outputByNodeId.get(d.sourceNodeId)
+            : ctx.resultData;
+        const prevStr = prevOutput === null ? "" : typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput, null, 2);
+        const query = (d.query?.trim() || "{{userMessage}}")
+          .replace(/\{\{userMessage\}\}/g, ctx.userMessage)
+          .replace(/\{\{prevOutput\}\}/g, prevStr);
+        output = await runRetrieval(d, {
+          source: d.source,
+          sourceData,
+          result: includeResultData ? ctx.resultData : undefined,
+          docText: includeDocument ? ctx.docText : null,
+          prevOutput,
+          userMessage: ctx.userMessage,
+          query,
+          maxItems: d.maxItems || 25,
+        });
+
+      } else if (node.type === "user_input") {
+        const d = node.data as UserInputNodeData;
+        const options = d.options?.split(/\r?\n/).map((option) => option.trim()).filter(Boolean);
+        const resumeAnswer = ctx.resume?.waiting.nodeId === node.id ? ctx.resume.answer.trim() : "";
+        const prevStr = prevOutput === null ? "" : typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput, null, 2);
+        const question = (d.question || "Please provide the next input.")
+          .replace(/\{\{prevOutput\}\}/g, prevStr)
+          .replace(/\{\{prevOutput\.([^}]+)\}\}/g, (_m, key) => {
+            const value = selectDataPath(prevOutput, String(key));
+            if (Array.isArray(value)) return value.join(", ");
+            if (value && typeof value === "object") return JSON.stringify(value);
+            return value === undefined || value === null ? "" : String(value);
+          });
+        const normalize = (value: string) => value.trim().toLocaleLowerCase();
+        if (!resumeAnswer) {
+          output = {
+            waiting: true,
+            question,
+            answerKey: d.answerKey,
+            inputType: d.inputType,
+            ...(options?.length ? { options } : {}),
+          };
+          waiting = {
+            workflowId: ctx.workflowId,
+            nodeId: node.id,
+            question,
+            answerKey: d.answerKey,
+            inputType: d.inputType,
+            ...(options?.length ? { options } : {}),
+            input: prevOutput,
+            nodeOutputs: Object.fromEntries(outputByNodeId),
+          };
+          stopReason = `Waiting for user input at "${String(d.label || node.id)}".`;
+          fatalStop = true;
+        } else if (d.inputType === "yes_no" && !["yes", "y", "no", "n"].includes(normalize(resumeAnswer))) {
+          output = {
+            waiting: true,
+            question: `${question}\n\nPlease answer yes or no.`,
+            answerKey: d.answerKey,
+            inputType: d.inputType,
+          };
+          waiting = {
+            workflowId: ctx.workflowId,
+            nodeId: node.id,
+            question: `${question}\n\nPlease answer yes or no.`,
+            answerKey: d.answerKey,
+            inputType: d.inputType,
+            input: prevOutput,
+            nodeOutputs: Object.fromEntries(outputByNodeId),
+          };
+          stopReason = `Waiting for a valid yes/no answer at "${String(d.label || node.id)}".`;
+          fatalStop = true;
+        } else if (d.inputType === "select" && options?.length && !options.some((option) => normalize(option) === normalize(resumeAnswer))) {
+          output = {
+            waiting: true,
+            question: `${question}\n\nPlease choose one of: ${options.join(", ")}`,
+            answerKey: d.answerKey,
+            inputType: d.inputType,
+            options,
+          };
+          waiting = {
+            workflowId: ctx.workflowId,
+            nodeId: node.id,
+            question: `${question}\n\nPlease choose one of: ${options.join(", ")}`,
+            answerKey: d.answerKey,
+            inputType: d.inputType,
+            options,
+            input: prevOutput,
+            nodeOutputs: Object.fromEntries(outputByNodeId),
+          };
+          stopReason = `Waiting for a valid selection at "${String(d.label || node.id)}".`;
+          fatalStop = true;
+        } else {
+          const value = d.inputType === "yes_no"
+            ? ["yes", "y"].includes(normalize(resumeAnswer))
+            : resumeAnswer;
+          output = {
+            ...(prevOutput && typeof prevOutput === "object" && !Array.isArray(prevOutput) ? prevOutput as Record<string, unknown> : { previous: prevOutput }),
+            [d.answerKey || "answer"]: value,
+            userAnswer: resumeAnswer,
+          };
+        }
 
       } else if (node.type === "agent") {
         const d = node.data as AgentNodeData;
@@ -279,6 +417,9 @@ export async function executeWorkflow(
     results.push(stepResult);
     ctx.onStepDone(stepResult);
 
+    if (fatalStop && waiting) {
+      return;
+    }
     if (error && ctx.stopOnError) {
       stopReason = `Stopped at "${String(node.data.label || node.id)}": ${error}`;
       fatalStop = true;
@@ -318,7 +459,7 @@ export async function executeWorkflow(
   let error: string | undefined;
 
   try {
-    await processNode(trigger.id);
+    await processNode(ctx.resume?.waiting.nodeId ?? trigger.id);
   } catch (e) {
     const err = e as Error;
     if (err.name === "AbortError" || err.message?.includes("AbortError")) {
@@ -331,7 +472,7 @@ export async function executeWorkflow(
   if (aborted) stopReason = "Test run was stopped by the user.";
   if (error) stopReason = `Execution failed: ${error}`;
   if (!stopReason && results.some((result) => result.nodeType === "output")) stopReason = "Workflow completed at an output node.";
-  return { results, aborted, error, stopReason };
+  return { results, aborted, error, stopReason, waiting };
 }
 
 export function getWorkflowFinalOutput(results: WorkflowStepResult[]): {

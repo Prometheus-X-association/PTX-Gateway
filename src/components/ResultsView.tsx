@@ -2519,6 +2519,8 @@ const ResultsView = ({
     ragSources: "all" | "result" | "document" | "none";
     ragMode: "auto" | "chunks" | "none";
     ragTopK: number;
+    resultContextMode: "full" | "chunked";
+    resultChunkSize: number;
   }>>([]);
   const [llmGlobalPrompts, setLlmGlobalPrompts] = useState<string[]>([]);
   const [llmWorkflows, setLlmWorkflows] = useState<import("@/types/workflow").WorkflowConfig[]>([]);
@@ -2775,6 +2777,12 @@ const ResultsView = ({
                 ? a.ragMode
                 : "auto") as "auto" | "chunks" | "none",
               ragTopK: typeof a.ragTopK === "number" && a.ragTopK > 0 ? a.ragTopK : 20,
+              resultContextMode: (["full", "chunked"].includes(String(a.resultContextMode ?? ""))
+                ? a.resultContextMode
+                : "full") as "full" | "chunked",
+              resultChunkSize: typeof a.resultChunkSize === "number" && a.resultChunkSize > 0
+                ? Math.min(Math.max(Math.round(a.resultChunkSize), 2000), 50000)
+                : 12000,
             }))
           );
         }
@@ -3931,6 +3939,7 @@ const ResultsView = ({
           )}
           <ChatDrawer
             resultData={resultData}
+            onResultDataChange={(nextData) => applyResultDataUpdate(nextData, { incrementVersion: true })}
             organizationId={organizationId}
             orgExecutionToken={orgExecutionToken}
             agents={compatibleLlmAgents}

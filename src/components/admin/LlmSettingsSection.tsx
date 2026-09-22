@@ -71,6 +71,8 @@ interface LlmAgent {
   ragSources: "all" | "result" | "document" | "none";
   ragMode: "auto" | "chunks" | "none"; // auto = full doc if small, chunks if large
   ragTopK: number;
+  resultContextMode: "full" | "chunked";
+  resultChunkSize: number;
 }
 
 interface LlmInsightsConfig {
@@ -188,6 +190,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       "What trends do you see?",
     ],
     enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
+    resultContextMode: "full", resultChunkSize: 12000,
   },
   {
     id: "chart-builder",
@@ -207,6 +210,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       "Visualize the top 5 items as a horizontal bar chart",
     ],
     enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
+    resultContextMode: "full", resultChunkSize: 12000,
   },
   {
     id: "ai-insight",
@@ -225,6 +229,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       "Analyze this data and show me the most important visualization",
     ],
     enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
+    resultContextMode: "full", resultChunkSize: 12000,
   },
   {
     id: "switchable-chart",
@@ -244,6 +249,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
       "What is the best chart type for this data? Show me the result",
     ],
     enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
+    resultContextMode: "full", resultChunkSize: 12000,
   },
 ];
 
@@ -320,6 +326,7 @@ const emptyAgent = (): LlmAgent => ({
   targetResources: [],
   inputSources: ["result"],
   ragSources: "result", ragMode: "auto", ragTopK: 20,
+  resultContextMode: "full", resultChunkSize: 12000,
 });
 
 const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
@@ -403,6 +410,14 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       ragSources: (["all", "result", "document", "none"].includes(String(a.ragSources ?? "")) ? a.ragSources : "all") as LlmAgent["ragSources"],
       ragMode: (["auto", "chunks", "none"].includes(String(a.ragMode ?? "")) ? a.ragMode : "auto") as LlmAgent["ragMode"],
       ragTopK: typeof a.ragTopK === "number" && a.ragTopK > 0 ? a.ragTopK : 20,
+      resultContextMode: (["full", "chunked"].includes(String((a as LlmAgent & { resultContextMode?: unknown }).resultContextMode ?? ""))
+        ? (a as LlmAgent & { resultContextMode?: "full" | "chunked" }).resultContextMode
+        : "full") as LlmAgent["resultContextMode"],
+      resultChunkSize: typeof (a as LlmAgent & { resultChunkSize?: unknown }).resultChunkSize === "number" &&
+        Number.isFinite((a as LlmAgent & { resultChunkSize?: number }).resultChunkSize) &&
+        ((a as LlmAgent & { resultChunkSize?: number }).resultChunkSize ?? 0) > 0
+          ? Math.min(Math.max(Math.round((a as LlmAgent & { resultChunkSize?: number }).resultChunkSize ?? 12000), 2000), 50000)
+          : 12000,
     })).map((agent) => agent.skillIds.length > 0 && agent.expectedOutput !== "auto"
       ? { ...agent, fallbackOutput: agent.expectedOutput, expectedOutput: "auto" as const }
       : agent);
@@ -1282,6 +1297,57 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
           <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] text-amber-700 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300">
             This agent will receive only the user's chat message, its system prompt, assigned skills, and tool access.
           </p>
+        )}
+      </div>
+
+      {/* Result Data Context */}
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs">Result Data Context</Label>
+          <span className="text-[10px] text-muted-foreground">How resultData is sent to this agent</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              { value: "full", label: "Full result", desc: "Current behavior; compacted by server limits if very large" },
+              { value: "chunked", label: "Chunk + manifest", desc: "Send manifest first, then all ordered resultData chunks" },
+            ] as Array<{ value: LlmAgent["resultContextMode"]; label: string; desc: string }>
+          ).map((opt) => (
+            <button key={opt.value} type="button"
+              disabled={!agent.inputSources.includes("result")}
+              onClick={() => onChange({ ...agent, resultContextMode: opt.value })}
+              className={`inline-flex flex-col items-start px-3 py-2 rounded-lg border text-xs transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+                (agent.resultContextMode ?? "full") === opt.value
+                  ? "bg-primary/10 text-primary border-primary/40 ring-1 ring-primary/20 font-medium"
+                  : "bg-background border-border text-muted-foreground hover:border-primary"
+              }`}>
+              <span className="font-semibold">{opt.label}</span>
+              <span className="text-[10px] opacity-75 leading-tight mt-0.5">{opt.desc}</span>
+            </button>
+          ))}
+        </div>
+        {!agent.inputSources.includes("result") && (
+          <p className="text-[10px] text-muted-foreground">
+            Enable Result data above to use resultData chunking.
+          </p>
+        )}
+        {agent.inputSources.includes("result") && (agent.resultContextMode ?? "full") === "chunked" && (
+          <div className="flex flex-wrap items-center gap-3">
+            <Label className="text-xs text-muted-foreground shrink-0">Chunk size</Label>
+            <Input
+              type="number" min={2000} max={50000} step={1000} className="h-7 w-24 text-xs"
+              value={agent.resultChunkSize ?? 12000}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!isNaN(v) && v > 0) {
+                  onChange({ ...agent, resultChunkSize: Math.min(Math.max(v, 2000), 50000) });
+                }
+              }}
+            />
+            <span className="text-[10px] text-muted-foreground">
+              Smaller chunks are easier to reference; all chunks are sent in order.
+            </span>
+          </div>
         )}
       </div>
 

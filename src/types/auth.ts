@@ -104,6 +104,8 @@ export interface GlobalConfig {
         defaultPrompts: string[];
         skillIds: string[];
         inputSources?: Array<'result' | 'document' | 'user_upload'>;
+        resultContextMode?: 'full' | 'chunked';
+        resultChunkSize?: number;
         enabled: boolean;
       }>;
       skills?: AgentSkill[];

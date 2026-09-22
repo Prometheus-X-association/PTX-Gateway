@@ -101,6 +101,8 @@ interface LlmAgent {
   defaultPrompts?: string[];
   skillIds?: string[];
   enabled?: boolean;
+  resultContextMode?: "full" | "chunked";
+  resultChunkSize?: number;
 }
 
 interface AgentSkillInputField {
@@ -1109,8 +1111,15 @@ serve(async (req: Request) => {
     docText?: string;                              // full document (small docs)
     docChunks?: Array<{ path: string; text: string }>; // RAG chunks (large docs)
   };
+  type ChunkedResultPayload = {
+    __chunked_result_context: true;
+    manifest?: Record<string, unknown>;
+    chunks?: Array<{ index?: number; start?: number; end?: number; text?: string }>;
+  };
   const isDocContextPayload = (x: unknown): x is DocContextPayload =>
     typeof x === "object" && x !== null && (x as Record<string, unknown>).__doc_context === true;
+  const isChunkedResultPayload = (x: unknown): x is ChunkedResultPayload =>
+    typeof x === "object" && x !== null && (x as Record<string, unknown>).__chunked_result_context === true;
 
   const clipJson = (v: unknown, limit = 40000): string => {
     const serialized = JSON.stringify(v, null, 2);
@@ -1128,13 +1137,46 @@ serve(async (req: Request) => {
       : `\n## ${label} (unstructured)\n${raw}`;
   };
 
+  const formatChunkedResultContext = (payload: ChunkedResultPayload): string => {
+    const manifest = payload.manifest && typeof payload.manifest === "object" && !Array.isArray(payload.manifest)
+      ? payload.manifest
+      : {};
+    const chunks = Array.isArray(payload.chunks) ? payload.chunks : [];
+    const manifestJson = JSON.stringify({
+      ...manifest,
+      totalChunks: typeof manifest.totalChunks === "number" ? manifest.totalChunks : chunks.length,
+    }, null, 2);
+    const chunkText = chunks
+      .map((chunk, idx) => {
+        const index = typeof chunk.index === "number" ? chunk.index : idx + 1;
+        const start = typeof chunk.start === "number" ? chunk.start : undefined;
+        const end = typeof chunk.end === "number" ? chunk.end : undefined;
+        const range = start !== undefined && end !== undefined ? ` chars ${start}-${end}` : "";
+        return `### Chunk ${index}/${chunks.length}${range}\n${String(chunk.text ?? "")}`;
+      })
+      .join("\n\n");
+
+    return [
+      "\n## Result data (chunked)",
+      "The manifest describes one complete resultData payload split into ordered chunks. Treat every chunk below as part of the same dataset.",
+      "",
+      "### Manifest",
+      manifestJson,
+      "",
+      "### Ordered chunks",
+      chunkText || "(no chunks supplied)",
+    ].join("\n");
+  };
+
   let contextBlock: string | null = null;
   if (body.result !== undefined) {
     if (isDocContextPayload(body.result)) {
       const parts: string[] = [];
 
       if (body.result.result !== undefined) {
-        parts.push(`\n---${formatDataContext("Result data", body.result.result)}`);
+        parts.push(`\n---${isChunkedResultPayload(body.result.result)
+          ? formatChunkedResultContext(body.result.result)
+          : formatDataContext("Result data", body.result.result)}`);
       }
 
       if (body.result.docText) {
@@ -1154,7 +1196,9 @@ serve(async (req: Request) => {
       contextBlock = parts.join("") || null;
     } else {
       // No document context — full result JSON only
-      contextBlock = `\n---${formatDataContext("Result data", body.result)}`;
+      contextBlock = `\n---${isChunkedResultPayload(body.result)
+        ? formatChunkedResultContext(body.result)
+        : formatDataContext("Result data", body.result)}`;
     }
   }
   if (body.inputData !== undefined && body.inputData !== null) {

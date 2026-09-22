@@ -12,7 +12,7 @@ import {
   Bot, Square, ChevronRight, ChevronUp, ChevronDown, BookOpen, RotateCcw, GripVertical, Workflow, Settings2, Link2, Maximize2, Minimize2,
   FlaskConical, Loader2, CircleStop, CheckCircle2, XCircle,
   Globe2, Send, KeyRound, FileText,
-  Sparkles,
+  Sparkles, Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type {
   AgentWorkflow, WorkflowNode, WorkflowEdge,
-  TriggerNodeData, DocumentContextNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, OutputNodeData, WorkflowStepResult,
+  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, OutputNodeData, WorkflowStepResult,
 } from "@/types/workflow";
 import { executeWorkflow } from "@/lib/workflowExecutor";
 import { supabase } from "@/integrations/supabase/client";
@@ -76,6 +76,8 @@ const moveItem = <T,>(arr: T[], from: number, to: number): T[] => {
 const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
   trigger:   ({ className }) => <Play className={className} />,
   document_context: ({ className }) => <FileText className={className} />,
+  retrieval: ({ className }) => <Search className={className} />,
+  user_input: ({ className }) => <Send className={className} />,
   agent:     ({ className }) => <Bot className={className} />,
   api:       ({ className }) => <Globe2 className={className} />,
   plugin:    ({ className }) => <Code2 className={className} />,
@@ -86,6 +88,8 @@ const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
 const NODE_LIBRARY = [
   { type: "trigger", icon: Play, label: "Trigger", description: "Starts the workflow", color: "text-violet-600", iconBg: "bg-violet-500/10" },
   { type: "document_context", icon: FileText, label: "Document Context", description: "Resolves one reusable document", color: "text-indigo-600", iconBg: "bg-indigo-500/10" },
+  { type: "retrieval", icon: Search, label: "Data Retrieval", description: "Query resultData outside the prompt", color: "text-lime-700", iconBg: "bg-lime-500/10" },
+  { type: "user_input", icon: Send, label: "Ask User", description: "Pause and wait for a chat reply", color: "text-fuchsia-600", iconBg: "bg-fuchsia-500/10" },
   { type: "agent", icon: Bot, label: "AI Agent", description: "Runs an agent or skill", color: "text-sky-600", iconBg: "bg-sky-500/10" },
   { type: "api", icon: Globe2, label: "API Request", description: "Calls an HTTP API", color: "text-cyan-600", iconBg: "bg-cyan-500/10" },
   { type: "plugin", icon: Code2, label: "JavaScript", description: "Transforms data safely", color: "text-amber-600", iconBg: "bg-amber-500/10" },
@@ -96,6 +100,8 @@ const NODE_LIBRARY = [
 const NODE_ACCENTS: Record<string, string> = {
   trigger: "border-l-violet-500",
   document_context: "border-l-indigo-500",
+  retrieval: "border-l-lime-500",
+  user_input: "border-l-fuchsia-500",
   agent: "border-l-sky-500",
   api: "border-l-cyan-500",
   plugin: "border-l-amber-500",
@@ -278,6 +284,16 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
           Reused for this workflow run
         </p>
       )}
+      {type === "retrieval" && (
+        <p className="text-[10px] text-muted-foreground truncate">
+          {(data as RetrievalNodeData).description || "Tool/RAG-style data lookup"}
+        </p>
+      )}
+      {type === "user_input" && (
+        <p className="text-[10px] text-muted-foreground truncate">
+          {(data as UserInputNodeData).question || "Wait for user reply"}
+        </p>
+      )}
       {isOutput && <p className="text-[10px] text-muted-foreground">Final workflow response</p>}
       </div>
 
@@ -300,6 +316,8 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
 const nodeTypes = {
   trigger:   (p: FlowNodeProps) => <FlowNode {...p} type="trigger" />,
   document_context: (p: FlowNodeProps) => <FlowNode {...p} type="document_context" />,
+  retrieval: (p: FlowNodeProps) => <FlowNode {...p} type="retrieval" />,
+  user_input: (p: FlowNodeProps) => <FlowNode {...p} type="user_input" />,
   agent:     (p: FlowNodeProps) => <FlowNode {...p} type="agent" />,
   api:       (p: FlowNodeProps) => <FlowNode {...p} type="api" />,
   plugin:    (p: FlowNodeProps) => <FlowNode {...p} type="plugin" />,
@@ -435,6 +453,56 @@ const DocumentContextPanel = ({ node, onChange }: { node: WorkflowNode; onChange
       onOutputChange={(outputSchema) => onChange({ ...d, outputSchema: outputSchema || undefined })}
     />
   </div>;
+};
+
+const UserInputPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: UserInputNodeData) => void }) => {
+  const d = node.data as UserInputNodeData;
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <Label className="text-xs">Label</Label>
+        <Input className="h-7 text-xs" value={d.label} onChange={(event) => onChange({ ...d, label: event.target.value })} />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Question shown in chat</Label>
+        <Textarea className="min-h-[72px] text-xs" value={d.question} onChange={(event) => onChange({ ...d, question: event.target.value })} />
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <div className="space-y-1">
+          <Label className="text-xs">Answer key</Label>
+          <Input className="h-7 text-xs font-mono" value={d.answerKey} placeholder="selectedSkill" onChange={(event) => onChange({ ...d, answerKey: event.target.value || "answer" })} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Input type</Label>
+          <Select value={d.inputType} onValueChange={(inputType: UserInputNodeData["inputType"]) => onChange({ ...d, inputType })}>
+            <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="text">Free text</SelectItem>
+              <SelectItem value="yes_no">Yes / No</SelectItem>
+              <SelectItem value="select">Select from options</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      {d.inputType === "select" && (
+        <div className="space-y-1">
+          <Label className="text-xs">Options</Label>
+          <Textarea className="min-h-[72px] text-xs font-mono" value={d.options ?? ""} placeholder={"Option A\nOption B\nOption C"} onChange={(event) => onChange({ ...d, options: event.target.value || undefined })} />
+          <p className="text-[10px] text-muted-foreground">One allowed option per line. The chat reply must match one option ignoring case.</p>
+        </div>
+      )}
+      <div className="space-y-1">
+        <Label className="text-xs">Description</Label>
+        <Input className="h-7 text-xs" value={d.description ?? ""} placeholder="Why this decision is needed" onChange={(event) => onChange({ ...d, description: event.target.value || undefined })} />
+      </div>
+      <SchemaRow
+        inputSchema={d.inputSchema}
+        outputSchema={d.outputSchema}
+        onInputChange={(inputSchema) => onChange({ ...d, inputSchema: inputSchema || undefined })}
+        onOutputChange={(outputSchema) => onChange({ ...d, outputSchema: outputSchema || undefined })}
+      />
+    </div>
+  );
 };
 
 const OUTPUT_TYPE_OPTIONS = [
@@ -854,6 +922,169 @@ const cleanGeneratedCode = (value: string): string => {
   const arrowWrapper = code.match(/^(?:(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*)?(?:async\s*)?\(?\s*input\s*\)?\s*=>\s*\{([\s\S]*)\}\s*;?$/);
   code = (functionWrapper?.[1] ?? arrowWrapper?.[1] ?? code).trim();
   return code;
+};
+
+const DEFAULT_RETRIEVAL_CODE = `const query = input.query || input.userMessage;
+const matches = tools.findNodes(query, { limit: input.maxItems });
+return {
+  retrieval: "result_nodes",
+  query,
+  manifest: tools.manifest(),
+  items: matches.map((item) => ({
+    index: item.index,
+    id: item.id,
+    label: String(item.label).replace(/_/g, " "),
+    data: item.data,
+  })),
+};`;
+
+const RetrievalPanel = ({ node, nodes, organizationId, generationContext, onChange }: {
+  node: WorkflowNode;
+  nodes: Node[];
+  organizationId?: string;
+  generationContext: PluginGenerationContext;
+  onChange: (d: RetrievalNodeData) => void;
+}) => {
+  const d = node.data as RetrievalNodeData;
+  const [generationPrompt, setGenerationPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+
+  const generateCode = async () => {
+    if (!generationPrompt.trim() || isGenerating) return;
+    setIsGenerating(true);
+    setGenerationError(null);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const workflowContext = {
+        currentNode: { id: node.id, label: d.label, description: d.description, source: d.source, query: d.query, maxItems: d.maxItems, inputSchema: d.inputSchema, outputSchema: d.outputSchema },
+        availableTools: ["tools.manifest()", "tools.listNodes({ start, limit })", "tools.findNodes(query, { limit })", "tools.getNode(idOrExactLabelOrIndex)", "tools.exactLabel(label)", "tools.sliceNodes(start, end)"],
+        ...generationContext,
+        existingCode: d.code || undefined,
+      };
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-with-result`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(organizationId ? { "x-organization-id": organizationId } : {}),
+        },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: `Task: ${generationPrompt.trim()}\n\nWorkflow context:\n${JSON.stringify(workflowContext, null, 2)}` }],
+          result: workflowContext,
+          systemPrompt: `You edit JavaScript bodies for a sandboxed workflow retrieval node. Return the complete updated JavaScript body only, without markdown fences, JSON wrapping, or explanation. The code receives input and tools. input has sourceData, result, docText, prevOutput, userMessage, query, maxItems. tools has manifest(), listNodes({start,limit}), findNodes(query,{limit}), getNode(idOrExactLabelOrIndex), exactLabel(label), and sliceNodes(start,end). Return compact data for the next AI agent. Do not return the entire sourceData unless explicitly requested; prefer manifest plus selected items. Do not use fetch, XMLHttpRequest, WebSocket, DOM, window, document, storage, imports, require, eval, Function, timers, or external libraries. Use defensive null/type checks and include a top-level return statement.`,
+          outputType: "text",
+        }),
+      });
+      if (!response.ok || !response.body) throw new Error(`Retrieval code generation failed (${response.status}): ${await response.text()}`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let generated = "";
+      const consumeEventLine = (line: string) => {
+        if (!line.startsWith("data:")) return;
+        try {
+          const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+          if (event.type === "token" && event.content) generated += event.content;
+          if (event.type === "error") throw new Error(event.message || "LLM retrieval code generation failed");
+        } catch (error) {
+          if (error instanceof SyntaxError) return;
+          throw error;
+        }
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        lines.forEach(consumeEventLine);
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) consumeEventLine(buffer.trim());
+      const code = cleanGeneratedCode(generated);
+      if (!code) throw new Error("The LLM returned an empty code response.");
+      if (!/\breturn\b/.test(code)) throw new Error(`The generated code did not contain a return statement. Response started with: ${generated.trim().slice(0, 180)}`);
+      if (/\b(fetch|XMLHttpRequest|WebSocket|document|window|localStorage|sessionStorage|indexedDB|importScripts|require|eval|Function|setTimeout|setInterval)\b/.test(code)) {
+        throw new Error("The generated code requested an API that is unavailable in the workflow sandbox.");
+      }
+      try {
+        new Function("input", "tools", `"use strict";\n${code}`);
+      } catch (error) {
+        throw new Error(`The generated JavaScript is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      onChange({ ...d, code });
+    } catch (error) {
+      setGenerationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <Label className="text-xs">Label</Label>
+        <Input className="h-7 text-xs" value={d.label} onChange={(e) => onChange({ ...d, label: e.target.value })} />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Description</Label>
+        <Input className="h-7 text-xs" value={d.description ?? ""} placeholder="What should this retrieval tool find?" onChange={(e) => onChange({ ...d, description: e.target.value || undefined })} />
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <div className="space-y-1">
+          <Label className="text-xs">Source data</Label>
+          <Select value={d.source} onValueChange={(source: RetrievalNodeData["source"]) => onChange({ ...d, source })}>
+            <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="result">Original resultData</SelectItem>
+              <SelectItem value="prev_output">Previous node output</SelectItem>
+              <SelectItem value="node_output">Specific node output</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Max items</Label>
+          <Input className="h-7 text-xs" type="number" min={1} max={1000} value={d.maxItems} onChange={(e) => {
+            const value = parseInt(e.target.value, 10);
+            if (!Number.isNaN(value)) onChange({ ...d, maxItems: Math.min(Math.max(value, 1), 1000) });
+          }} />
+        </div>
+      </div>
+      {d.source === "node_output" && (
+        <div className="space-y-1">
+          <Label className="text-xs">Source node</Label>
+          <Select value={d.sourceNodeId ?? ""} onValueChange={(sourceNodeId) => onChange({ ...d, sourceNodeId })}>
+            <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Choose a node" /></SelectTrigger>
+            <SelectContent>
+              {nodes.filter((item) => item.id !== node.id).map((item) => (
+                <SelectItem key={item.id} value={item.id}>{String(item.data.label || item.id)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <div className="space-y-1">
+        <Label className="text-xs">Query template</Label>
+        <Input className="h-7 text-xs font-mono" value={d.query ?? "{{userMessage}}"} placeholder="{{userMessage}}" onChange={(e) => onChange({ ...d, query: e.target.value || undefined })} />
+        <p className="text-[10px] text-muted-foreground">Supports <code className="rounded bg-muted px-0.5">{"{{userMessage}}"}</code> and <code className="rounded bg-muted px-0.5">{"{{prevOutput}}"}</code>.</p>
+      </div>
+      <div className="rounded-lg border border-lime-500/30 bg-lime-500/5 p-2.5 space-y-2">
+        <div className="flex items-start gap-2"><Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-lime-700" /><div><p className="text-[10px] font-semibold uppercase tracking-wide">Generate retrieval tool</p><p className="text-[9px] leading-relaxed text-muted-foreground">Creates sandboxed code that uses manifest, list, search, exact-label, and slice helpers.</p></div></div>
+        <Textarea className="min-h-[72px] text-xs" value={generationPrompt} disabled={isGenerating} placeholder="Return the exact skill selected by the user plus five neighboring nodes." onChange={(event) => setGenerationPrompt(event.target.value)} />
+        <Button type="button" size="sm" className="h-7 gap-1.5 text-xs" disabled={isGenerating || !generationPrompt.trim()} onClick={() => void generateCode()}>{isGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}{d.code.trim() ? "Regenerate tool" : "Generate tool"}</Button>
+        {generationError && <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-[10px] text-destructive">{generationError}</p>}
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Retrieval JavaScript</Label>
+        <p className="text-[10px] text-muted-foreground">Receives <code className="rounded bg-muted px-0.5">input</code> and <code className="rounded bg-muted px-0.5">tools</code>. Return compact context for the next node.</p>
+        <Textarea className="text-xs font-mono min-h-[150px]" rows={9} spellCheck={false} value={d.code} placeholder={DEFAULT_RETRIEVAL_CODE} onChange={(e) => onChange({ ...d, code: e.target.value })} />
+      </div>
+      <SchemaRow inputSchema={d.inputSchema} outputSchema={d.outputSchema} onInputChange={(v) => onChange({ ...d, inputSchema: v || undefined })} onOutputChange={(v) => onChange({ ...d, outputSchema: v || undefined })} />
+    </div>
+  );
 };
 
 const parseGeneratedWorkflowResponse = (value: string): { nodes: unknown[]; edges: unknown[] } => {
@@ -1701,9 +1932,25 @@ return {
           } satisfies PluginNodeData,
         },
         {
+          id: "refine-ask-skill",
+          type: "user_input",
+          position: { x: 260, y: 465 },
+          data: {
+            label: "Ask Skill Selection",
+            question: `I found {{prevOutput.totalSkills}} skills. Examples: {{prevOutput.examples}}.
+
+Which exact skill should be refined? Use the full skill label; underscores may be written as spaces.`,
+            answerKey: "selectedSkill",
+            inputType: "text",
+            description: "Pauses the workflow until the user chooses the skill to refine",
+            inputSchema: "{ totalSkills, examples, skills }",
+            outputSchema: "{ totalSkills, examples, skills, selectedSkill, userAnswer }",
+          } satisfies UserInputNodeData,
+        },
+        {
           id: "refine-agent",
           type: "agent",
-          position: { x: 260, y: 465 },
+          position: { x: 260, y: 630 },
           data: {
             label: "Interactive Description Refiner",
             mode: "inline",
@@ -1718,16 +1965,17 @@ Available data:
 - Current node input contains extracted skills from resultData.data.nodes[].label.
 - Each skill has label, display, and normalized. Exact matching uses normalized only.
 - The uploaded document is the only source for the document-based description.
+- selectedSkill is provided by a real Ask User workflow node and must be validated against skills.
 - conversationHistory may contain previous user choices and accepted/rejected descriptions from earlier turns.
 
 Rules:
 1. Always report totalSkills and the first three examples with underscores replaced by spaces when starting or when the selected skill is still unknown.
-2. Ask which skill should be refined and stop unless the latest user message or conversation history contains a selected skill with an exact normalized match.
+2. Validate selectedSkill. If it is missing, ask which skill should be refined.
 3. Exact normalized match means: replace underscores with spaces, collapse whitespace, ignore case. Do not use partial, substring, semantic, or fuzzy matching. "design" only matches "design"; it does not match "design engineer" or "project design". "project design" may match "project_design".
 4. If no exact normalized match exists, say the skill was not found and ask the user to select another extracted skill. Stop.
 5. For a valid selected skill, analyze only the uploaded document. Identify relevant industry/domain, tools or machines, tasks or activities, and sentences that mention or clearly refer to the skill. Sentences do not need to contain the complete skill label.
 6. Generate a concise document-based description using only the identified document context and sentence evidence.
-7. Present the proposed document-based description and ask whether the user is satisfied. Stop.
+7. Present the proposed document-based description and ask whether the user is satisfied.
 8. If conversationHistory shows the user rejected a proposed description, generate one alternative from the same document context and evidence. Ask again and stop. Repeat on future turns until accepted.
 9. Once accepted, save that document-based description as Result 1.
 10. Ask whether the user wants an additional description from a standardized or open skills framework such as ESCO, ROME, SFIA, or another framework. Stop.
@@ -1742,7 +1990,7 @@ When asking the next question, keep it concise and include the table only when f
             passPrevOutput: true,
             promptOverride: `Continue the interactive skill-description workflow for this turn.
 
-Current extracted skills and latest user message:
+Current extracted skills, selected skill, and latest user message:
 {{prevOutput}}`,
             inputSchema: "{ userMessage, conversationHistory, totalSkills, examples, skills } + uploaded document",
             outputSchema: "Markdown question, proposal, or final table",
@@ -1751,7 +1999,7 @@ Current extracted skills and latest user message:
         {
           id: "refine-output",
           type: "output",
-          position: { x: 260, y: 630 },
+          position: { x: 260, y: 795 },
           data: {
             label: "Show Next Step",
             renderAs: "text",
@@ -1762,8 +2010,9 @@ Current extracted skills and latest user message:
       edges: [
         { id: "refine-e1", source: "refine-trigger", target: "refine-document-context" },
         { id: "refine-e2", source: "refine-document-context", target: "refine-extract-skills" },
-        { id: "refine-e3", source: "refine-extract-skills", target: "refine-agent" },
-        { id: "refine-e4", source: "refine-agent", target: "refine-output" },
+        { id: "refine-e3", source: "refine-extract-skills", target: "refine-ask-skill" },
+        { id: "refine-e4", source: "refine-ask-skill", target: "refine-agent" },
+        { id: "refine-e5", source: "refine-agent", target: "refine-output" },
       ],
     },
   },
@@ -2227,6 +2476,8 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     const defaults: Record<string, unknown> = {
       trigger:   { label: "Trigger", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData,
       document_context: { label: "Document Context", source: "chat_upload_or_trigger", delivery: "automatic", reuseScope: "workflow_run", inputSchema: "Trigger document or chat upload", outputSchema: "{ contextType, available, textAvailable, text? }" } satisfies DocumentContextNodeData,
+      retrieval: { label: "Data Retrieval", source: "result", query: "{{userMessage}}", maxItems: 25, code: DEFAULT_RETRIEVAL_CODE, description: "Retrieve selected result nodes outside the prompt", inputSchema: "resultData or previous node output", outputSchema: "{ manifest, query, items[] }" } satisfies RetrievalNodeData,
+      user_input: { label: "Ask User", question: "Please provide the next input.", answerKey: "answer", inputType: "text", inputSchema: "Previous node output", outputSchema: "{ previous, answer, userAnswer }" } satisfies UserInputNodeData,
       agent:     { label: "Agent", mode: "existing", agentId: agents[0]?.id ?? "", passPrevOutput: true } satisfies AgentNodeData,
       api:       { label: "API Request", url: "", method: "GET", queryParams: [], headers: [], authType: "none", bodyType: "none", responseType: "auto" } satisfies ApiNodeData,
       plugin:    { label: "Plugin", code: "return input.prevOutput;", description: "" } satisfies PluginNodeData,
@@ -2480,12 +2731,14 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
         body: JSON.stringify({
           messages: [{ role: "user", content: `Create an agentic workflow for this goal:\n${workflowGoal.trim()}\n\nPreferences:\n- Composition: ${workflowComposition}\n- Total nodes: ${sizeRange}\n- Final output: ${workflowOutput}\n\nAvailable saved agents:\n${JSON.stringify(safeAgents, null, 2)}\n\nAvailable agent skills:\n${JSON.stringify(safeSkills, null, 2)}` }],
           result: { goal: workflowGoal.trim(), composition: workflowComposition, sizeRange, finalOutput: workflowOutput, agents: safeAgents, skills: safeSkills },
-          systemPrompt: `You design executable agentic workflows. Return JSON only with {"nodes":[],"edges":[]}.
-Allowed node types: trigger, document_context, agent, api, plugin, condition, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input.
+systemPrompt: `You design executable agentic workflows. Return JSON only with {"nodes":[],"edges":[]}.
+Allowed node types: trigger, document_context, retrieval, user_input, agent, api, plugin, condition, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision before continuing.
 Each node: {"id":"short-unique-id","type":"allowed type","data":{...}}. Do not include positions.
 All inputSchema and outputSchema values must be concise human-readable strings. Do not return schema objects in these fields.
 Trigger data: {label,triggerType:"manual",inputSources:["result","document","user_upload"],defaultPrompt,outputSchema}. inputSources may include any non-empty combination: result is result data, document is the earlier gateway-process upload, and user_upload asks the end user to attach a document in chat when necessary.
 Document Context data: {label,source:"trigger_document|chat_upload_or_trigger",delivery:"automatic|text|native_file",reuseScope:"workflow_run",inputSchema,outputSchema}.
+Retrieval data: {label,source:"result|prev_output|node_output",sourceNodeId optional,query,maxItems,description,code,inputSchema,outputSchema}. Code is a sandbox body receiving input and tools; tools has manifest(), listNodes({start,limit}), findNodes(query,{limit}), getNode(idOrExactLabelOrIndex), exactLabel(label), sliceNodes(start,end). It must return compact context for downstream agents and cannot use network, DOM, storage, imports, eval, Function, or timers.
+User Input data: {label,question,answerKey,inputType:"text|yes_no|select",options,inputSchema,outputSchema}. This pauses the chat workflow until the user replies. options is newline-separated and only used for select inputs.
 Agent data: prefer an available saved agent with {label,mode:"existing",agentId,promptOverride,passPrevOutput:true,inputSchema,outputSchema}; otherwise use {label,mode:"inline",inlineName,inlineSystemPrompt,inlineOutputType:"text|json|html|mixed",skillIds:[],promptOverride,passPrevOutput:true,inputSchema,outputSchema}. Omit useUploadedDocument to inherit the trigger's document setting; set it to true or false only to override that setting for this agent.
 API data: {label,url,method,queryParams:[],headers:[],authType:"none",bodyType:"none|json|text|form_urlencoded",body,responseType:"auto|json|text",outputPath,inputSchema,outputSchema}. Never invent credentials.
 Plugin data: {label,description,code,inputSchema,outputSchema}. Code is a sandbox function body receiving input.prevOutput, input.result, input.docText and input.getNodeOutput(id); it must return a value and cannot use network, DOM, storage, imports, eval, Function, or timers.
@@ -2530,10 +2783,12 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
       }
 
       const parsed = parseGeneratedWorkflowResponse(generated);
-      const allowedTypes = new Set(["trigger", "document_context", "agent", "api", "plugin", "condition", "output"]);
+      const allowedTypes = new Set(["trigger", "document_context", "retrieval", "user_input", "agent", "api", "plugin", "condition", "output"]);
       const typeAliases: Record<string, WorkflowNode["type"]> = {
         start: "trigger", input: "trigger", user_input: "trigger",
         document: "document_context", document_context: "document_context", file_context: "document_context",
+        rag: "retrieval", retrieval: "retrieval", search: "retrieval", browser: "retrieval", data_lookup: "retrieval", data_retrieval: "retrieval", tool: "retrieval",
+        ask: "user_input", question: "user_input", user_input: "user_input", wait: "user_input", pause: "user_input", human_input: "user_input",
         ai: "agent", llm: "agent", ai_agent: "agent",
         http: "api", request: "api", api_request: "api",
         javascript: "plugin", code: "plugin", transform: "plugin", function: "plugin",
@@ -2567,6 +2822,36 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
             reuseScope: "workflow_run",
             inputSchema: normalizeGeneratedSchema(rawData.inputSchema) || "Trigger document or chat upload",
             outputSchema: normalizeGeneratedSchema(rawData.outputSchema) || "{ contextType, available, textAvailable, text? }",
+          };
+        }
+        else if (type === "retrieval") {
+          let code = String(rawData.code || DEFAULT_RETRIEVAL_CODE).slice(0, 20000);
+          if (!/\breturn\b/.test(code) || /\b(fetch|XMLHttpRequest|WebSocket|document|window|localStorage|sessionStorage|indexedDB|importScripts|require|eval|Function|setTimeout|setInterval)\b/.test(code)) code = DEFAULT_RETRIEVAL_CODE;
+          data = {
+            label,
+            source: ["result", "prev_output", "node_output"].includes(String(rawData.source)) ? rawData.source : "result",
+            sourceNodeId: String(rawData.sourceNodeId || "").slice(0, 100) || undefined,
+            query: String(rawData.query || "{{userMessage}}").slice(0, 1000),
+            maxItems: typeof rawData.maxItems === "number" && rawData.maxItems > 0 ? Math.min(Math.round(rawData.maxItems), 1000) : 25,
+            description: String(rawData.description || "Generated data retrieval").slice(0, 500),
+            code,
+            inputSchema: normalizeGeneratedSchema(rawData.inputSchema) || "resultData or previous node output",
+            outputSchema: normalizeGeneratedSchema(rawData.outputSchema) || "{ manifest, query, items[] }",
+          };
+        }
+        else if (type === "user_input") {
+          data = {
+            label,
+            question: String(rawData.question || "Please provide the next input.").slice(0, 2000),
+            answerKey: String(rawData.answerKey || "answer").replace(/[^a-zA-Z0-9_$]/g, "").slice(0, 80) || "answer",
+            inputType: ["text", "yes_no", "select"].includes(String(rawData.inputType)) ? rawData.inputType : "text",
+            options: typeof rawData.options === "string"
+              ? rawData.options.slice(0, 2000)
+              : Array.isArray(rawData.options)
+                ? rawData.options.map(String).join("\n").slice(0, 2000)
+                : undefined,
+            inputSchema: normalizeGeneratedSchema(rawData.inputSchema),
+            outputSchema: normalizeGeneratedSchema(rawData.outputSchema) || "{ previous, answer, userAnswer }",
           };
         }
         else if (type === "agent") {
@@ -2970,7 +3255,7 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
               className="!m-3 !overflow-hidden !rounded-lg !border-2 !border-foreground/70 !bg-transparent !shadow-none [&_button]:!border-border [&_button]:!bg-transparent [&_button]:!text-foreground [&_button]:hover:!bg-muted/50 [&_svg]:!fill-current [&_svg]:!stroke-current"
             />
             <MiniMap
-      nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+      nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
               maskColor="hsl(var(--background) / 0.65)"
               className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
             />
@@ -3022,6 +3307,14 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
                 </div>
                 {selectedNode.type === "trigger" && <TriggerPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "document_context" && <DocumentContextPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
+                {selectedNode.type === "user_input" && <UserInputPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
+                {selectedNode.type === "retrieval" && <RetrievalPanel
+                  node={selectedNode}
+                  nodes={nodes}
+                  organizationId={organizationId}
+                  generationContext={pluginGenerationContext}
+                  onChange={(data) => updateSelectedNodeData(data as never)}
+                />}
                 {selectedNode.type === "agent" && <AgentPanel
                   node={selectedNode}
                   agents={agents}

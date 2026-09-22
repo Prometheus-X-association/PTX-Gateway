@@ -1,6 +1,6 @@
 // Agentic workflow graph — persisted inside llmInsights.workflows[] in global_configs.
 
-export type NodeType = "trigger" | "document_context" | "agent" | "api" | "plugin" | "condition" | "output";
+export type NodeType = "trigger" | "document_context" | "retrieval" | "user_input" | "agent" | "api" | "plugin" | "condition" | "output";
 
 // ─── Node data payloads ───────────────────────────────────────────────────────
 
@@ -26,6 +26,39 @@ export interface DocumentContextNodeData {
   /** Preserve source text when available; otherwise retain native file context for capable providers. */
   delivery: "automatic" | "text" | "native_file";
   reuseScope: "workflow_run";
+  inputSchema?: string;
+  outputSchema?: string;
+}
+
+export interface RetrievalNodeData {
+  label: string;
+  /**
+   * Keeps large data outside the LLM prompt, then lets this node retrieve a
+   * compact subset for downstream agent nodes.
+   */
+  source: "result" | "prev_output" | "node_output";
+  /** Used when source = "node_output". */
+  sourceNodeId?: string;
+  /** Optional query template. Supports {{userMessage}} and {{prevOutput}}. */
+  query?: string;
+  /** Maximum records the retrieval tool should return by default. */
+  maxItems: number;
+  /** JS body receiving input and tools; must return the compact context to pass onward. */
+  code: string;
+  description?: string;
+  inputSchema?: string;
+  outputSchema?: string;
+}
+
+export interface UserInputNodeData {
+  label: string;
+  question: string;
+  answerKey: string;
+  inputType: "text" | "yes_no" | "select";
+  /** Optional newline-separated options for select inputs. */
+  options?: string;
+  /** Optional helper text shown in the admin builder. */
+  description?: string;
   inputSchema?: string;
   outputSchema?: string;
 }
@@ -137,6 +170,8 @@ export interface OutputNodeData {
 export type AnyNodeData =
   | TriggerNodeData
   | DocumentContextNodeData
+  | RetrievalNodeData
+  | UserInputNodeData
   | AgentNodeData
   | ApiNodeData
   | PluginNodeData
@@ -193,4 +228,15 @@ export interface WorkflowStepResult {
   durationMs?: number;
   /** Only set for output nodes — carries the renderAs setting for final display routing */
   renderAs?: OutputNodeData["renderAs"];
+}
+
+export interface WorkflowWaitingState {
+  workflowId?: string;
+  nodeId: string;
+  question: string;
+  answerKey: string;
+  inputType: UserInputNodeData["inputType"];
+  options?: string[];
+  input: unknown;
+  nodeOutputs: Record<string, unknown>;
 }

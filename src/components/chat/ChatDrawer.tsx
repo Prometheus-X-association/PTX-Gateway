@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import type { RagWorkerHandle } from "@/lib/useRagWorker";
 import type { UploadConfig } from "@/components/DocumentUploadZone";
-import type { AgentWorkflow, WorkflowConfig } from "@/types/workflow";
+import type { AgentWorkflow, WorkflowConfig, WorkflowWaitingState } from "@/types/workflow";
 import { executeWorkflow, getWorkflowFinalOutput } from "@/lib/workflowExecutor";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
 import { loadSourceDocuments, saveSourceDocuments } from "@/utils/sourceDocumentStorage";
@@ -51,10 +51,13 @@ export interface LlmAgentInfo {
   ragSources?: "all" | "result" | "document" | "none";
   ragMode?: "auto" | "chunks" | "none";
   ragTopK?: number;
+  resultContextMode?: "full" | "chunked";
+  resultChunkSize?: number;
 }
 
 interface ChatDrawerProps {
   resultData: unknown;
+  onResultDataChange?: (nextData: unknown) => void;
   organizationId?: string | null;
   orgExecutionToken?: string | null;
   agents?: LlmAgentInfo[];
@@ -81,6 +84,7 @@ interface ChatDrawerProps {
 
 const uid = () => Math.random().toString(36).slice(2);
 type AgentInputSource = "result" | "document" | "user_upload";
+const RESULT_CHUNK_SIZE_DEFAULT = 12000;
 
 const normalizeAgentInputSources = (agent: LlmAgentInfo | null, freeChat: boolean): AgentInputSource[] => {
   if (freeChat) return ["result", "document", "user_upload"];
@@ -96,6 +100,34 @@ const normalizeAgentInputSources = (agent: LlmAgentInfo | null, freeChat: boolea
     default:
       return ["result", "document", "user_upload"];
   }
+};
+
+const serializeResultData = (value: unknown): { text: string; format: "json" | "text" } => {
+  if (typeof value === "string") return { text: value, format: "text" };
+  const serialized = JSON.stringify(value, null, 2);
+  return { text: serialized === undefined ? String(value) : serialized, format: "json" };
+};
+
+const buildChunkedResultPayload = (value: unknown, requestedChunkSize?: number) => {
+  const { text, format } = serializeResultData(value);
+  const chunkSize = Math.min(Math.max(Math.round(requestedChunkSize || RESULT_CHUNK_SIZE_DEFAULT), 2000), 50000);
+  const chunks: Array<{ index: number; start: number; end: number; text: string }> = [];
+  for (let start = 0; start < text.length; start += chunkSize) {
+    const end = Math.min(start + chunkSize, text.length);
+    chunks.push({ index: chunks.length + 1, start, end, text: text.slice(start, end) });
+  }
+
+  return {
+    __chunked_result_context: true,
+    manifest: {
+      format,
+      totalChars: text.length,
+      totalChunks: chunks.length,
+      chunkSize,
+      instruction: "These chunks are ordered and together form one complete resultData payload. Reconstruct or inspect them as one dataset before answering.",
+    },
+    chunks,
+  };
 };
 
 // Tags that indicate an HTML document or renderable fragment. Keep this explicit
@@ -771,6 +803,7 @@ const fileAsAttachment = async (file: File): Promise<LlmAttachment> => {
 
 const ChatDrawer = ({
   resultData,
+  onResultDataChange,
   organizationId,
   orgExecutionToken,
   agents = [],
@@ -802,6 +835,7 @@ const ChatDrawer = ({
   const [isUploading, setIsUploading] = useState(false);
   const [showDocPopover, setShowDocPopover] = useState(false);
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false);
+  const [pausedWorkflow, setPausedWorkflow] = useState<{ workflowId: string; waiting: WorkflowWaitingState } | null>(null);
   const workflowRunningRef = useRef(false);
   // Compact progress summary updated in chatbox text only
   const [workflowProgress, setWorkflowProgress] = useState<{
@@ -938,8 +972,12 @@ const ChatDrawer = ({
     }
   }, [uploadConfig, onDocUploaded, processSessionId]);
 
-  const runWorkflow = useCallback(async (userMsg: string, workflowOverride?: WorkflowConfig) => {
-    const workflowConfig = workflowOverride ?? selectedWorkflow;
+  const runWorkflow = useCallback(async (userMsg: string, workflowOverride?: WorkflowConfig, resumeWaiting?: WorkflowWaitingState) => {
+    const workflowConfig = workflowOverride ?? (
+      resumeWaiting?.workflowId
+        ? workflows.find((workflow) => workflow.id === resumeWaiting.workflowId)
+        : selectedWorkflow
+    );
     if (!workflowConfig || workflowConfig.graph.nodes.length === 0) return;
     if (workflowRunningRef.current) return;
 
@@ -987,6 +1025,7 @@ const ChatDrawer = ({
     workflowRunningRef.current = true;
     setIsWorkflowRunning(true);
     setWorkflowProgress(null);
+    if (!resumeWaiting) setPausedWorkflow(null);
     partialResultsRef.current = [];
 
     const progressMap = new Map<string, string>(
@@ -1014,7 +1053,7 @@ const ChatDrawer = ({
         .slice(-10)
         .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
         .join("\n\n");
-      const { results, aborted, error: workflowError } = await executeWorkflow(workflow, {
+      const { results, aborted, error: workflowError, waiting } = await executeWorkflow(workflow, {
         workflowId: workflowConfig.id,
         resultData,
         docText,
@@ -1025,6 +1064,7 @@ const ChatDrawer = ({
         orgExecutionToken: orgExecutionToken ?? null,
         supabaseUrl,
         signal: abortRef.current.signal,
+        resume: resumeWaiting ? { waiting: resumeWaiting, answer: userMsg } : undefined,
 
         onApiRequest: async (nodeId, _config, input) => {
           const { data: sessionData } = await supabase.auth.getSession();
@@ -1216,8 +1256,15 @@ const ChatDrawer = ({
           : m
         ));
       } else if (workflowError) {
+        setPausedWorkflow(null);
         setMessages((prev) => prev.map((m) => m.id === statusId
           ? { ...m, content: `*Workflow error: ${workflowError}*`, streaming: false }
+          : m
+        ));
+      } else if (waiting) {
+        setPausedWorkflow({ workflowId: workflowConfig.id, waiting });
+        setMessages((prev) => prev.map((m) => m.id === statusId
+          ? { ...m, content: waiting.question, streaming: false }
           : m
         ));
       } else {
@@ -1226,8 +1273,20 @@ const ChatDrawer = ({
           : renderAs === "auto" ? "mixed"
           : renderAs;
         const { prose, html, json } = routeResponse(finalText, outputFormat);
+        setPausedWorkflow(null);
+        if (renderAs === "update_result" && json !== null && json !== undefined) {
+          onResultDataChange?.(json);
+        }
         setMessages((prev) => prev.map((m) => m.id === statusId
-          ? { ...m, content: prose, htmlViz: html ?? undefined, jsonData: json ?? undefined, streaming: false }
+          ? {
+              ...m,
+              content: renderAs === "update_result" && json !== null && json !== undefined
+                ? "Result data updated from the workflow."
+                : prose,
+              htmlViz: html ?? undefined,
+              jsonData: json ?? undefined,
+              streaming: false,
+            }
           : m
         ));
       }
@@ -1241,7 +1300,7 @@ const ChatDrawer = ({
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, resultData, docText, localAttachment, organizationId, orgExecutionToken]);
+  }, [selectedWorkflow, workflows, resultData, docText, localAttachment, organizationId, orgExecutionToken, onResultDataChange]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -1348,12 +1407,15 @@ const ChatDrawer = ({
         const includeChatUpload = inputSources.includes("user_upload");
         const ragMode = isFreeChatMode ? "auto" : (resolvedAgent?.ragMode ?? "auto");
         const includeDocument = includeGatewayUpload || includeChatUpload;
+        const resultPayload = includeResultData && !isFreeChatMode && resolvedAgent?.resultContextMode === "chunked"
+          ? buildChunkedResultPayload(resultData, resolvedAgent.resultChunkSize)
+          : resultData;
         const docParts: string[] = [];
         if (includeGatewayUpload && propDocText?.trim()) docParts.push(`Gateway upload:\n${propDocText}`);
         if (includeChatUpload && localDocText?.trim()) docParts.push(`Chatbox upload:\n${localDocText}`);
         const selectedDocText = docParts.join("\n\n---\n\n");
 
-        let contextPayload: unknown = includeResultData ? resultData : undefined;
+        let contextPayload: unknown = includeResultData ? resultPayload : undefined;
 
         if (includeDocument && ragMode !== "none" && selectedDocText) {
           const useFullDoc = ragMode === "auto" && selectedDocText.length <= DOC_FULL_LIMIT;
@@ -1361,7 +1423,7 @@ const ChatDrawer = ({
             // Small doc — send full text directly, most reliable for cross-referencing
             contextPayload = {
               __doc_context: true,
-              ...(includeResultData ? { result: resultData } : {}),
+              ...(includeResultData ? { result: resultPayload } : {}),
               docText: selectedDocText,
             };
           } else if (ragReady) {
@@ -1371,7 +1433,7 @@ const ChatDrawer = ({
             if (chunks.length > 0) {
               contextPayload = {
                 __doc_context: true,
-                ...(includeResultData ? { result: resultData } : {}),
+                ...(includeResultData ? { result: resultPayload } : {}),
                 docChunks: chunks.map((c) => ({ path: c.path, text: c.text })),
               };
             }
@@ -1523,7 +1585,16 @@ const ChatDrawer = ({
         })();
         return;
       }
-      void sendMessage(input);
+      const trimmed = input.trim();
+      setInput("");
+      if (pausedWorkflow) {
+        const workflow = workflows.find((item) => item.id === pausedWorkflow.workflowId);
+        void runWorkflow(trimmed, workflow, pausedWorkflow.waiting);
+      } else if (selectedWorkflow && activeWorkflowId) {
+        void runWorkflow(trimmed);
+      } else {
+        void sendMessage(trimmed);
+      }
     }
     if (e.key === "Escape") {
       setShowAgentPicker(false);
@@ -1914,10 +1985,15 @@ const ChatDrawer = ({
                 size="icon" className="h-10 w-10 shrink-0"
                 disabled={!input.trim() || input === "/"}
                 onClick={() => {
-                  if (selectedWorkflow && activeWorkflowId) {
-                    void runWorkflow(input.trim());
+                  const trimmed = input.trim();
+                  setInput("");
+                  if (pausedWorkflow) {
+                    const workflow = workflows.find((item) => item.id === pausedWorkflow.workflowId);
+                    void runWorkflow(trimmed, workflow, pausedWorkflow.waiting);
+                  } else if (selectedWorkflow && activeWorkflowId) {
+                    void runWorkflow(trimmed);
                   } else {
-                    void sendMessage(input);
+                    void sendMessage(trimmed);
                   }
                 }}
               >

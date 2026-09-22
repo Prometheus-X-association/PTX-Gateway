@@ -39,6 +39,8 @@ export interface LlmAgentConfig {
   defaultPrompts: string[];
   skillIds: string[];
   inputSources?: Array<"result" | "document" | "user_upload">;
+  resultContextMode?: "full" | "chunked";
+  resultChunkSize?: number;
   enabled: boolean;
 }
 
@@ -124,6 +126,8 @@ export const globalConfig: GlobalConfig = {
           expectedOutput: "text",
           mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
           inputSources: ["result", "document", "user_upload"],
+          resultContextMode: "full",
+          resultChunkSize: 12000,
           defaultPrompts: [
             "Summarize the key findings in 3 bullet points",
             "Which item has the highest value and why might that be?",
@@ -140,6 +144,8 @@ export const globalConfig: GlobalConfig = {
           expectedOutput: "html",
           mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
           inputSources: ["result", "document", "user_upload"],
+          resultContextMode: "full",
+          resultChunkSize: 12000,
           defaultPrompts: [
             "Show me a bar chart of the top 10 results",
             "Create a pie chart of the data distribution",
@@ -156,6 +162,8 @@ export const globalConfig: GlobalConfig = {
           expectedOutput: "mixed",
           mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
           inputSources: ["result", "document", "user_upload"],
+          resultContextMode: "full",
+          resultChunkSize: 12000,
           defaultPrompts: [
             "Generate a complete AI insight with visualization for this data",
             "Give me a business summary with a supporting chart",
@@ -171,6 +179,8 @@ export const globalConfig: GlobalConfig = {
           expectedOutput: "json",
           mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
           inputSources: ["result", "document", "user_upload"],
+          resultContextMode: "full",
+          resultChunkSize: 12000,
           defaultPrompts: [
             "Analyze this data and generate an interactive chart I can switch between types",
             "Generate a summary with insights and a switchable visualization",

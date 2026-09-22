@@ -53,6 +53,8 @@ interface LlmAgent {
   ragSources?: "all" | "result" | "document" | "none";
   ragMode?: "auto" | "chunks" | "none";
   ragTopK?: number;
+  resultContextMode?: "full" | "chunked";
+  resultChunkSize?: number;
 }
 
 interface LlmInsightsConfig {
@@ -557,6 +559,12 @@ serve(async (req) => {
               ragTopK: typeof a.ragTopK === "number" && a.ragTopK > 0
                 ? Math.min(a.ragTopK, 100)
                 : 20,
+              resultContextMode: ["full", "chunked"].includes(String(a.resultContextMode))
+                ? a.resultContextMode
+                : "full",
+              resultChunkSize: typeof a.resultChunkSize === "number" && a.resultChunkSize > 0
+                ? Math.min(Math.max(Math.round(a.resultChunkSize), 2000), 50000)
+                : 12000,
             }))
         : [];
 
