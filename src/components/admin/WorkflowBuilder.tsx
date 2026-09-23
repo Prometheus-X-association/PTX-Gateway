@@ -1129,6 +1129,58 @@ const normalizeGeneratedSchema = (value: unknown): string | undefined => {
   }
 };
 
+const WORKFLOW_GENERATION_PATTERN_LIBRARY = `
+Advanced workflow design patterns:
+1. Retrieval-first ResultData: Trigger -> Retrieval -> Plugin/Agent. Use retrieval when resultData may be large. Return compact items, manifest, selected record JSON, or slices rather than full resultData.
+2. Stable document context: Trigger -> Document Context before document-aware agents. Downstream agents can inherit or explicitly set useUploadedDocument.
+3. Deterministic loop: Plugin initializes {items,index,accumulated}; Condition checks index < items.length; Plugin extracts one item; Agent(s) process it; Plugin validates/appends and increments index; edge returns to Condition; false branch extracts accumulated results.
+4. Evidence discipline: if evidence must come from an upload, only the first evidence-finder agent reads the document. Later description/level agents set useUploadedDocument:false and consume only verified excerpts. A plugin validates exact evidence against input.docText when available.
+5. Human-in-the-loop update: User Input asks confirmation/choice; Condition branches; Plugin selects/normalizes update value; Output renderAs:update_result applies JSON changes.
+6. API workflow: API node fetches data, outputPath selects the useful response section, Plugin normalizes it, Agent interprets compact normalized data.
+7. Formatter pattern: final HTML/JSON should usually be formatted by Plugin, not by a final LLM call, when deterministic layout is required.
+
+Reusable safe plugin snippets:
+- Parse agent JSON:
+function parseAgentJSON(val) {
+  if (typeof val !== 'string') return val;
+  const s = val.replace(/^\\\`\\\`\\\`(?:json)?\\n?/,'').replace(/\\n?\\\`\\\`\\\`$/,'').trim();
+  try { return JSON.parse(s); } catch(e) { return {}; }
+}
+- Loop init:
+const items = Array.isArray(input.prevOutput?.items) ? input.prevOutput.items : [];
+return { items, index: 0, accumulated: [] };
+- Loop condition expression:
+Array.isArray(prevOutput?.items) && typeof prevOutput.index === 'number' && prevOutput.index < prevOutput.items.length
+- Accumulate:
+const state = input.getNodeOutput('condition-node-id');
+const prevAcc = Array.isArray(state?.accumulated) ? state.accumulated : [];
+return { ...state, index: state.index + 1, accumulated: [...prevAcc, input.prevOutput] };
+`.trim();
+
+const WORKFLOW_GENERATION_EXAMPLE_SUMMARY = `
+Example architecture A, skill expertise analysis:
+trigger(result+document+user_upload) -> retrieval(compact ResultData skill list + manifest) -> document_context(stable upload) -> plugin(init loop) -> condition(more items?) -> plugin(get current skill with resultItemJson) -> agent(find uploaded-document evidence only) -> agent(write description from verified excerpts only, useUploadedDocument:false) -> agent(assess level from excerpts only, useUploadedDocument:false) -> plugin(validate evidence, accumulate, increment) -> condition loop back; false -> plugin(extract accumulated) -> plugin(render HTML) -> output(html).
+
+Example architecture B, interactive skill description refinement:
+trigger(result) -> retrieval(list result skills without sending full JSON) -> user_input(select exact skill) -> plugin(strip ResultData descriptions, keep selected skill identity) -> document_context -> agent(generate document-based description from upload only) -> plugin(clean/verify evidence) -> user_input(accept?) -> optional framework agent -> plugin(sanitize framework description) -> user_input(update result?) -> plugin(update resultData JSON) -> output(update_result).
+`.trim();
+
+const WORKFLOW_GENERATION_SYSTEM_PROMPT = `You design executable agentic workflows. Return JSON only with {"nodes":[],"edges":[]}.
+Allowed node types: trigger, document_context, retrieval, user_input, agent, api, plugin, condition, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision before continuing.
+Prefer deterministic plugin nodes for parsing, validation, looping, accumulation, formatting, evidence verification, and resultData updates. Use LLM agents only for semantic interpretation or generation.
+Each node: {"id":"short-unique-id","type":"allowed type","data":{...}}. Do not include positions.
+All inputSchema and outputSchema values must be concise human-readable strings. Do not return schema objects in these fields.
+Trigger data: {label,triggerType:"manual",inputSources:["result","document","user_upload"],defaultPrompt,outputSchema}. inputSources may include any non-empty combination: result is result data, document is the earlier gateway-process upload, and user_upload asks the end user to attach a document in chat when necessary.
+Document Context data: {label,source:"trigger_document|chat_upload_or_trigger",delivery:"automatic|text|native_file",reuseScope:"workflow_run",inputSchema,outputSchema}.
+Retrieval data: {label,source:"result|prev_output|node_output",sourceNodeId optional,query,maxItems,description,code,inputSchema,outputSchema}. Code is a sandbox body receiving input and tools. tools has manifest(), listNodes({start,limit}), findNodes(query,{limit}), getNode(idOrExactLabelOrIndex), exactLabel(label), sliceNodes(start,end). It must return compact context for downstream agents and cannot use network, DOM, storage, imports, eval, Function, or timers.
+User Input data: {label,question,answerKey,inputType:"text|yes_no|select",options,inputSchema,outputSchema}. This pauses the chat workflow until the user replies. options is newline-separated and only used for select inputs.
+Agent data: prefer an available saved agent with {label,mode:"existing",agentId,promptOverride,passPrevOutput:true,inputSchema,outputSchema}; otherwise use {label,mode:"inline",inlineName,inlineSystemPrompt,inlineOutputType:"text|json|html|mixed",inlineFallbackOutputType:"text|json|html|mixed",skillIds:[],promptOverride,passPrevOutput:true,inputSchema,outputSchema}. Preserve contextMode:"combined|document_only", requiresDocument, useUploadedDocument, providerIds, and agentProviders when relevant.
+API data: {label,url,method,queryParams:[],headers:[],authType:"none|bearer|basic|api_key",bodyType:"none|json|text|form_urlencoded",body,responseType:"auto|json|text",outputPath,inputSchema,outputSchema}. Never invent credential values; leave auth values empty.
+Plugin data: {label,description,code,inputSchema,outputSchema}. Code is a sandbox function body receiving input.prevOutput, input.result, input.docText and input.getNodeOutput(id); it must return a value and cannot use network, DOM, storage, imports, eval, Function, or timers.
+Condition data: {label,expression,inputSchema,loopStart optional,loopEnd optional}. Expression reads prevOutput and returns truthy/falsy.
+Output data: {label,renderAs:"auto|html|json|text|update_result",inputSchema}.
+Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional,"dataPath":"optional.path"}. Only condition edges may specify branch. Ensure schemas and data paths are compatible.`;
+
 const PluginPanel = ({ node, organizationId, generationContext, onChange }: {
   node: WorkflowNode;
   organizationId?: string;
@@ -2944,6 +2996,11 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [workflowComposition, setWorkflowComposition] = useState<"balanced" | "ai_heavy" | "data_processing" | "api_integration">("balanced");
   const [workflowSize, setWorkflowSize] = useState<"automatic" | "compact" | "standard" | "detailed">("automatic");
   const [workflowOutput, setWorkflowOutput] = useState<OutputNodeData["renderAs"]>("auto");
+  const [workflowUseAdvancedPatterns, setWorkflowUseAdvancedPatterns] = useState(true);
+  const [showWorkflowInstructionEditor, setShowWorkflowInstructionEditor] = useState(false);
+  const [workflowPatternLibrary, setWorkflowPatternLibrary] = useState(WORKFLOW_GENERATION_PATTERN_LIBRARY);
+  const [workflowExampleSummary, setWorkflowExampleSummary] = useState(WORKFLOW_GENERATION_EXAMPLE_SUMMARY);
+  const [workflowSystemPrompt, setWorkflowSystemPrompt] = useState(WORKFLOW_GENERATION_SYSTEM_PROMPT);
   const [isGeneratingWorkflow, setIsGeneratingWorkflow] = useState(false);
   const [workflowGenerationError, setWorkflowGenerationError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -3354,72 +3411,168 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
             : "6-8";
       const safeAgents = agents.map(({ id, name, description, expectedOutput }) => ({ id, name, description, expectedOutput }));
       const safeSkills = skills.map(({ id, name, description }) => ({ id, name, description }));
+      const activePatternLibrary = workflowPatternLibrary.trim() || WORKFLOW_GENERATION_PATTERN_LIBRARY;
+      const activeExampleSummary = workflowExampleSummary.trim() || WORKFLOW_GENERATION_EXAMPLE_SUMMARY;
+      const activeSystemPrompt = workflowSystemPrompt.trim() || WORKFLOW_GENERATION_SYSTEM_PROMPT;
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-with-result`, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...(organizationId ? { "x-organization-id": organizationId } : {}),
-        },
-        body: JSON.stringify({
-          messages: [{ role: "user", content: `Create an agentic workflow for this goal:\n${workflowGoal.trim()}\n\nPreferences:\n- Composition: ${workflowComposition}\n- Total nodes: ${sizeRange}\n- Final output: ${workflowOutput}\n\nAvailable saved agents:\n${JSON.stringify(safeAgents, null, 2)}\n\nAvailable agent skills:\n${JSON.stringify(safeSkills, null, 2)}` }],
-          result: { goal: workflowGoal.trim(), composition: workflowComposition, sizeRange, finalOutput: workflowOutput, agents: safeAgents, skills: safeSkills },
-systemPrompt: `You design executable agentic workflows. Return JSON only with {"nodes":[],"edges":[]}.
-Allowed node types: trigger, document_context, retrieval, user_input, agent, api, plugin, condition, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision before continuing.
-Each node: {"id":"short-unique-id","type":"allowed type","data":{...}}. Do not include positions.
-All inputSchema and outputSchema values must be concise human-readable strings. Do not return schema objects in these fields.
-Trigger data: {label,triggerType:"manual",inputSources:["result","document","user_upload"],defaultPrompt,outputSchema}. inputSources may include any non-empty combination: result is result data, document is the earlier gateway-process upload, and user_upload asks the end user to attach a document in chat when necessary.
-Document Context data: {label,source:"trigger_document|chat_upload_or_trigger",delivery:"automatic|text|native_file",reuseScope:"workflow_run",inputSchema,outputSchema}.
-Retrieval data: {label,source:"result|prev_output|node_output",sourceNodeId optional,query,maxItems,description,code,inputSchema,outputSchema}. Code is a sandbox body receiving input and tools; tools has manifest(), listNodes({start,limit}), findNodes(query,{limit}), getNode(idOrExactLabelOrIndex), exactLabel(label), sliceNodes(start,end). It must return compact context for downstream agents and cannot use network, DOM, storage, imports, eval, Function, or timers.
-User Input data: {label,question,answerKey,inputType:"text|yes_no|select",options,inputSchema,outputSchema}. This pauses the chat workflow until the user replies. options is newline-separated and only used for select inputs.
-Agent data: prefer an available saved agent with {label,mode:"existing",agentId,promptOverride,passPrevOutput:true,inputSchema,outputSchema}; otherwise use {label,mode:"inline",inlineName,inlineSystemPrompt,inlineOutputType:"text|json|html|mixed",skillIds:[],promptOverride,passPrevOutput:true,inputSchema,outputSchema}. Omit useUploadedDocument to inherit the trigger's document setting; set it to true or false only to override that setting for this agent.
-API data: {label,url,method,queryParams:[],headers:[],authType:"none",bodyType:"none|json|text|form_urlencoded",body,responseType:"auto|json|text",outputPath,inputSchema,outputSchema}. Never invent credentials.
-Plugin data: {label,description,code,inputSchema,outputSchema}. Code is a sandbox function body receiving input.prevOutput, input.result, input.docText and input.getNodeOutput(id); it must return a value and cannot use network, DOM, storage, imports, eval, Function, or timers.
-Condition data: {label,expression,inputSchema}. Expression reads prevOutput and returns truthy/falsy.
-Output data: {label,renderAs:"auto|html|json|text|update_result",inputSchema}.
-Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional,"dataPath":"optional.path"}. Only condition edges may specify branch. Ensure schemas and data paths are compatible.`,
-          outputType: "json",
-        }),
-      });
-      if (!response.ok || !response.body) {
-        const responseText = await response.text();
-        let detail = responseText;
-        try {
-          const responseJson = JSON.parse(responseText) as { error?: string };
-          detail = responseJson.error || responseText;
-        } catch {
-          // Keep the original response text.
-        }
-        throw new Error(`Workflow generation failed (${response.status})${detail ? `: ${detail}` : ""}`);
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let generated = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
+      const callWorkflowGenerator = async (content: string, systemPrompt: string, resultPayload: Record<string, unknown>) => {
+        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-with-result`, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(organizationId ? { "x-organization-id": organizationId } : {}),
+          },
+          body: JSON.stringify({
+            messages: [{ role: "user", content }],
+            result: resultPayload,
+            systemPrompt,
+            outputType: "json",
+          }),
+        });
+        if (!response.ok || !response.body) {
+          const responseText = await response.text();
+          let detail = responseText;
           try {
-            const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
-            if (event.type === "token" && event.content) generated += event.content;
-            if (event.type === "error") throw new Error(event.message || "LLM workflow generation failed");
-          } catch (error) {
-            if (error instanceof SyntaxError) continue;
-            throw error;
+            const responseJson = JSON.parse(responseText) as { error?: string };
+            detail = responseJson.error || responseText;
+          } catch {
+            // Keep the original response text.
+          }
+          throw new Error(`Workflow generation failed (${response.status})${detail ? `: ${detail}` : ""}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let accumulated = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            try {
+              const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+              if (event.type === "token" && event.content) accumulated += event.content;
+              if (event.type === "error") throw new Error(event.message || "LLM workflow generation failed");
+            } catch (error) {
+              if (error instanceof SyntaxError) continue;
+              throw error;
+            }
           }
         }
-      }
+        return accumulated;
+      };
+      const generationContextPayload = {
+        goal: workflowGoal.trim(),
+        composition: workflowComposition,
+        sizeRange,
+        finalOutput: workflowOutput,
+        useAdvancedPatterns: workflowUseAdvancedPatterns,
+        agents: safeAgents,
+        skills: safeSkills,
+      };
+      const planPrompt = `Plan an executable agentic workflow for this goal, but do not generate nodes yet.
 
-      const parsed = parseGeneratedWorkflowResponse(generated);
+Goal:
+${workflowGoal.trim()}
+
+Preferences:
+- Composition: ${workflowComposition}
+- Total nodes: ${sizeRange}
+- Final output: ${workflowOutput}
+- Advanced template patterns: ${workflowUseAdvancedPatterns ? "enabled" : "disabled"}
+
+Available saved agents:
+${JSON.stringify(safeAgents, null, 2)}
+
+Available agent skills:
+${JSON.stringify(safeSkills, null, 2)}
+
+Return JSON only with {"intent":"","inputSources":[],"patterns":[],"dataContracts":[],"nodePlan":[],"validationChecklist":[]}.`;
+      const plan = await callWorkflowGenerator(
+        planPrompt,
+        `You are a workflow architect. Return JSON only. Prefer concrete data contracts and reusable patterns. ${workflowUseAdvancedPatterns ? activePatternLibrary + "\n\n" + activeExampleSummary : ""}`,
+        generationContextPayload,
+      );
+      const graphPrompt = `Create the executable workflow graph from this plan.
+
+Plan:
+${plan}
+
+Goal:
+${workflowGoal.trim()}
+
+Preferences:
+- Composition: ${workflowComposition}
+- Total nodes: ${sizeRange}
+- Final output: ${workflowOutput}
+- Advanced template patterns: ${workflowUseAdvancedPatterns ? "enabled" : "disabled"}
+
+Available saved agents:
+${JSON.stringify(safeAgents, null, 2)}
+
+Available agent skills:
+${JSON.stringify(safeSkills, null, 2)}
+
+${workflowUseAdvancedPatterns ? `Use these proven patterns when relevant:\n${activePatternLibrary}\n\nTemplate benchmarks:\n${activeExampleSummary}` : ""}
+
+Return JSON only with {"nodes":[],"edges":[]}.`;
+      let generated = await callWorkflowGenerator(graphPrompt, activeSystemPrompt, { ...generationContextPayload, plan });
+
+      const validateGeneratedGraph = (graph: { nodes: unknown[]; edges: unknown[] }) => {
+        const issues: string[] = [];
+        const rawNodes = graph.nodes.map((raw) => raw && typeof raw === "object" ? raw as Record<string, unknown> : {});
+        const rawEdges = graph.edges.map((raw) => raw && typeof raw === "object" ? raw as Record<string, unknown> : {});
+        const ids = new Set(rawNodes.map((node) => String(node.id || "")).filter(Boolean));
+        const nodeTypes = rawNodes.map((node) => String(node.type || "").trim().toLowerCase().replace(/[\s-]+/g, "_"));
+        if (nodeTypes.filter((type) => type === "trigger" || type === "start").length !== 1) issues.push("Graph must have exactly one trigger/start node.");
+        if (!nodeTypes.some((type) => type === "output" || type === "end" || type === "result" || type === "final")) issues.push("Graph must have at least one output node.");
+        if (workflowUseAdvancedPatterns && (workflowComposition === "data_processing" || /result|json|large|many|loop|skill|evidence|document|upload/i.test(workflowGoal))) {
+          if (!nodeTypes.includes("retrieval") && !nodeTypes.includes("rag")) issues.push("Advanced pattern expected: add a retrieval/RAG node to compact ResultData before agents.");
+          if (/document|upload|file|evidence/i.test(workflowGoal) && !nodeTypes.includes("document_context")) issues.push("Advanced pattern expected: add a document_context node for stable uploaded document input.");
+          if (/each|every|loop|many|all skills|skills/i.test(workflowGoal) && (!nodeTypes.includes("condition") || !nodeTypes.includes("plugin"))) issues.push("Advanced pattern expected: use plugin + condition loop control for repeated items.");
+          if (/html|table|report|visual/i.test(workflowGoal) && !nodeTypes.includes("plugin")) issues.push("Advanced pattern expected: use a plugin formatter for deterministic final display.");
+        }
+        rawEdges.forEach((edge, index) => {
+          const source = String(edge.source || "");
+          const target = String(edge.target || "");
+          if (!ids.has(source) || !ids.has(target)) issues.push(`Edge ${index + 1} references missing source or target.`);
+          const sourceNode = rawNodes.find((node) => String(node.id || "") === source);
+          const sourceType = String(sourceNode?.type || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+          if ((edge.branch === "true" || edge.branch === "false") && sourceType !== "condition") issues.push(`Edge ${index + 1} uses branch but source is not a condition node.`);
+        });
+        if (rawEdges.length === 0 && rawNodes.length > 1) issues.push("Graph should include explicit edges between nodes.");
+        return issues;
+      };
+      let parsed = parseGeneratedWorkflowResponse(generated);
+      const validationIssues = validateGeneratedGraph(parsed);
+      if (validationIssues.length > 0) {
+        const repairPrompt = `Repair this generated workflow graph so it satisfies every validation issue. Preserve the original goal and use executable node data/code.
+
+Goal:
+${workflowGoal.trim()}
+
+Validation issues:
+${validationIssues.map((issue, index) => `${index + 1}. ${issue}`).join("\n")}
+
+Plan:
+${plan}
+
+Current graph:
+${JSON.stringify(parsed, null, 2)}
+
+${workflowUseAdvancedPatterns ? `Use the advanced patterns and template benchmarks:\n${activePatternLibrary}\n\n${activeExampleSummary}` : ""}
+
+Return JSON only with {"nodes":[],"edges":[]}.`;
+        generated = await callWorkflowGenerator(repairPrompt, activeSystemPrompt, { ...generationContextPayload, plan, validationIssues, graph: parsed });
+        parsed = parseGeneratedWorkflowResponse(generated);
+      }
       const allowedTypes = new Set(["trigger", "document_context", "retrieval", "user_input", "agent", "api", "plugin", "condition", "output"]);
       const typeAliases: Record<string, WorkflowNode["type"]> = {
         start: "trigger", input: "trigger", user_input: "trigger",
@@ -3433,7 +3586,19 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
         end: "output", result: "output", response: "output", final: "output",
       };
       const usedIds = new Set<string>();
-      const generatedNodes: WorkflowNode[] = parsed.nodes.slice(0, 12).map((raw, index) => {
+      const maxGeneratedNodes = workflowUseAdvancedPatterns || workflowSize === "detailed" || workflowSize === "automatic" ? 18 : 12;
+      const normalizeKeyValues = (value: unknown): ApiKeyValue[] => Array.isArray(value)
+        ? value.slice(0, 30).map((item) => {
+            const entry = item && typeof item === "object" ? item as Record<string, unknown> : {};
+            return {
+              id: String(entry.id || uid()),
+              key: String(entry.key || entry.name || "").slice(0, 200),
+              value: String(entry.value || "").slice(0, 2000),
+              enabled: entry.enabled !== false,
+            };
+          }).filter((item) => item.key)
+        : [];
+      const generatedNodes: WorkflowNode[] = parsed.nodes.slice(0, maxGeneratedNodes).map((raw, index) => {
         const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
         const requestedType = String(value.type || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
         const type = allowedTypes.has(requestedType)
@@ -3493,15 +3658,71 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
         }
         else if (type === "agent") {
           const requestedAgent = safeAgents.find((agent) => agent.id === rawData.agentId);
+          const sharedAgentData = {
+            promptOverride: String(rawData.promptOverride || "").slice(0, 8000) || undefined,
+            passPrevOutput: rawData.passPrevOutput !== false,
+            requiresDocument: typeof rawData.requiresDocument === "boolean" ? rawData.requiresDocument : undefined,
+            useUploadedDocument: typeof rawData.useUploadedDocument === "boolean" ? rawData.useUploadedDocument : undefined,
+            contextMode: rawData.contextMode === "document_only" ? "document_only" : rawData.contextMode === "combined" ? "combined" : undefined,
+            inputSchema: normalizeGeneratedSchema(rawData.inputSchema),
+            outputSchema: normalizeGeneratedSchema(rawData.outputSchema),
+          };
           data = requestedAgent
-            ? { label, mode: "existing", agentId: requestedAgent.id, promptOverride: String(rawData.promptOverride || "").slice(0, 4000) || undefined, passPrevOutput: rawData.passPrevOutput !== false, inputSchema: normalizeGeneratedSchema(rawData.inputSchema), outputSchema: normalizeGeneratedSchema(rawData.outputSchema) }
-            : { label, mode: "inline", inlineName: String(rawData.inlineName || label).slice(0, 100), inlineSystemPrompt: String(rawData.inlineSystemPrompt || "Process the supplied input accurately.").slice(0, 8000), inlineOutputType: ["text", "json", "html", "mixed"].includes(String(rawData.inlineOutputType)) ? rawData.inlineOutputType : "text", skillIds: Array.isArray(rawData.skillIds) ? rawData.skillIds.map(String).filter((id) => safeSkills.some((skill) => skill.id === id)) : [], promptOverride: String(rawData.promptOverride || "").slice(0, 4000) || undefined, passPrevOutput: rawData.passPrevOutput !== false, inputSchema: normalizeGeneratedSchema(rawData.inputSchema), outputSchema: normalizeGeneratedSchema(rawData.outputSchema) };
-        } else if (type === "api") data = { label, url: String(rawData.url || "").slice(0, 2000), method: ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(String(rawData.method)) ? rawData.method : "GET", queryParams: [], headers: [], authType: "none", bodyType: ["none", "json", "text", "form_urlencoded"].includes(String(rawData.bodyType)) ? rawData.bodyType : "none", body: String(rawData.body || "").slice(0, 10000) || undefined, responseType: ["auto", "json", "text"].includes(String(rawData.responseType)) ? rawData.responseType : "auto", outputPath: String(rawData.outputPath || "").slice(0, 500) || undefined, inputSchema: normalizeGeneratedSchema(rawData.inputSchema), outputSchema: normalizeGeneratedSchema(rawData.outputSchema) };
+            ? { label, mode: "existing", agentId: requestedAgent.id, ...sharedAgentData }
+            : {
+                label,
+                mode: "inline",
+                inlineName: String(rawData.inlineName || label).slice(0, 100),
+                inlineSystemPrompt: String(rawData.inlineSystemPrompt || "Process the supplied input accurately.").slice(0, 12_000),
+                inlineOutputType: ["auto", "text", "json", "html", "mixed"].includes(String(rawData.inlineOutputType)) ? rawData.inlineOutputType : "text",
+                inlineFallbackOutputType: ["text", "json", "html", "mixed"].includes(String(rawData.inlineFallbackOutputType)) ? rawData.inlineFallbackOutputType : undefined,
+                skillIds: Array.isArray(rawData.skillIds) ? rawData.skillIds.map(String).filter((id) => safeSkills.some((skill) => skill.id === id)) : [],
+                providerIds: Array.isArray(rawData.providerIds) ? rawData.providerIds.map(String).slice(0, 10) : [],
+                agentProviders: Array.isArray(rawData.agentProviders) ? rawData.agentProviders.slice(0, 5).map((provider) => {
+                  const rawProvider = provider && typeof provider === "object" ? provider as Record<string, unknown> : {};
+                  return {
+                    id: String(rawProvider.id || uid()),
+                    name: String(rawProvider.name || "").slice(0, 100),
+                    providerType: ["openai", "anthropic", "gemini", "openai_compatible"].includes(String(rawProvider.providerType)) ? rawProvider.providerType : "openai_compatible",
+                    apiBaseUrl: String(rawProvider.apiBaseUrl || "").slice(0, 500),
+                    apiKey: "",
+                    model: String(rawProvider.model || "").slice(0, 100),
+                    enabled: rawProvider.enabled !== false,
+                  };
+                }) : undefined,
+                ...sharedAgentData,
+              };
+        } else if (type === "api") data = {
+          label,
+          url: String(rawData.url || "").slice(0, 2000),
+          method: ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(String(rawData.method)) ? rawData.method : "GET",
+          queryParams: normalizeKeyValues(rawData.queryParams),
+          headers: normalizeKeyValues(rawData.headers).map((header) => ({ ...header, value: /authorization|api[-_ ]?key|token|secret/i.test(header.key) ? "" : header.value })),
+          authType: ["none", "bearer", "basic", "api_key"].includes(String(rawData.authType)) ? rawData.authType : "none",
+          bearerToken: "",
+          basicUsername: "",
+          basicPassword: "",
+          apiKeyName: String(rawData.apiKeyName || "").slice(0, 200) || undefined,
+          apiKeyValue: "",
+          apiKeyLocation: rawData.apiKeyLocation === "query" ? "query" : "header",
+          bodyType: ["none", "json", "text", "form_urlencoded"].includes(String(rawData.bodyType)) ? rawData.bodyType : "none",
+          body: String(rawData.body || "").slice(0, 10000) || undefined,
+          responseType: ["auto", "json", "text"].includes(String(rawData.responseType)) ? rawData.responseType : "auto",
+          outputPath: String(rawData.outputPath || "").slice(0, 500) || undefined,
+          inputSchema: normalizeGeneratedSchema(rawData.inputSchema),
+          outputSchema: normalizeGeneratedSchema(rawData.outputSchema),
+        };
         else if (type === "plugin") {
           let code = String(rawData.code || "return input.prevOutput;").slice(0, 20000);
           if (!/\breturn\b/.test(code) || /\b(fetch|XMLHttpRequest|WebSocket|document|window|localStorage|sessionStorage|indexedDB|importScripts|require|eval|Function|setTimeout|setInterval)\b/.test(code)) code = "return input.prevOutput;";
           data = { label, description: String(rawData.description || "Generated data transformation").slice(0, 500), code, inputSchema: normalizeGeneratedSchema(rawData.inputSchema), outputSchema: normalizeGeneratedSchema(rawData.outputSchema) };
-        } else if (type === "condition") data = { label, expression: String(rawData.expression || "Boolean(prevOutput)").slice(0, 4000), inputSchema: normalizeGeneratedSchema(rawData.inputSchema) };
+        } else if (type === "condition") data = {
+          label,
+          expression: String(rawData.expression || "Boolean(prevOutput)").slice(0, 4000),
+          inputSchema: normalizeGeneratedSchema(rawData.inputSchema),
+          loopStart: typeof rawData.loopStart === "number" ? Math.max(0, Math.round(rawData.loopStart)) : undefined,
+          loopEnd: typeof rawData.loopEnd === "number" ? Math.max(0, Math.round(rawData.loopEnd)) : undefined,
+        };
         else data = { label, renderAs: workflowOutput, inputSchema: normalizeGeneratedSchema(rawData.inputSchema) };
         return { id, type, position: { x: 240 + (index % 3) * 280, y: 40 + Math.floor(index / 3) * 170 }, data: data as WorkflowNode["data"] };
       });
@@ -3535,7 +3756,7 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
           data: { label: "Final output", renderAs: workflowOutput },
         });
       }
-      while (generatedNodes.length > 12) {
+      while (generatedNodes.length > maxGeneratedNodes) {
         const removableIndex = generatedNodes.findLastIndex((node) => node.type !== "trigger" && node.type !== "output");
         if (removableIndex < 0) break;
         generatedNodes.splice(removableIndex, 1);
@@ -3741,6 +3962,89 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
                   <SelectItem value="update_result">Update result data</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/20 p-2.5">
+              <div>
+                <Label className="text-[10px]">Use advanced template patterns</Label>
+                <p className="text-[9px] leading-relaxed text-muted-foreground">Bias generation toward retrieval, document context, deterministic plugins, loops, validation, and repairable data contracts.</p>
+              </div>
+              <Switch checked={workflowUseAdvancedPatterns} disabled={isGeneratingWorkflow} onCheckedChange={setWorkflowUseAdvancedPatterns} />
+            </div>
+            <div className="rounded-lg border bg-muted/20">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left"
+                onClick={() => setShowWorkflowInstructionEditor((value) => !value)}
+                disabled={isGeneratingWorkflow}
+              >
+                <div>
+                  <p className="text-[10px] font-medium">Generation instructions</p>
+                  <p className="text-[9px] leading-relaxed text-muted-foreground">Modify pattern library, examples, and system prompt for this generated workflow.</p>
+                </div>
+                {showWorkflowInstructionEditor ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+              </button>
+              {showWorkflowInstructionEditor && (
+                <div className="space-y-3 border-t p-2.5">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-[10px]">Pattern library</Label>
+                      <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={isGeneratingWorkflow} onClick={() => setWorkflowPatternLibrary(WORKFLOW_GENERATION_PATTERN_LIBRARY)}>
+                        Reset original
+                      </Button>
+                    </div>
+                    <Textarea
+                      className="min-h-[120px] font-mono text-[10px]"
+                      disabled={isGeneratingWorkflow}
+                      value={workflowPatternLibrary}
+                      onChange={(event) => setWorkflowPatternLibrary(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-[10px]">Example summary</Label>
+                      <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={isGeneratingWorkflow} onClick={() => setWorkflowExampleSummary(WORKFLOW_GENERATION_EXAMPLE_SUMMARY)}>
+                        Reset original
+                      </Button>
+                    </div>
+                    <Textarea
+                      className="min-h-[110px] font-mono text-[10px]"
+                      disabled={isGeneratingWorkflow}
+                      value={workflowExampleSummary}
+                      onChange={(event) => setWorkflowExampleSummary(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-[10px]">System prompt</Label>
+                      <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={isGeneratingWorkflow} onClick={() => setWorkflowSystemPrompt(WORKFLOW_GENERATION_SYSTEM_PROMPT)}>
+                        Reset original
+                      </Button>
+                    </div>
+                    <Textarea
+                      className="min-h-[160px] font-mono text-[10px]"
+                      disabled={isGeneratingWorkflow}
+                      value={workflowSystemPrompt}
+                      onChange={(event) => setWorkflowSystemPrompt(event.target.value)}
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-[10px]"
+                      disabled={isGeneratingWorkflow}
+                      onClick={() => {
+                        setWorkflowPatternLibrary(WORKFLOW_GENERATION_PATTERN_LIBRARY);
+                        setWorkflowExampleSummary(WORKFLOW_GENERATION_EXAMPLE_SUMMARY);
+                        setWorkflowSystemPrompt(WORKFLOW_GENERATION_SYSTEM_PROMPT);
+                      }}
+                    >
+                      Reset all originals
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="rounded-lg border bg-muted/20 p-2.5 text-[10px] leading-relaxed text-muted-foreground">
               The generated graph is checked for supported nodes, safe JavaScript, valid connections, one trigger, and a reachable output before it is applied.
