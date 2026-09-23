@@ -895,7 +895,7 @@ const ChatDrawer = ({
   const activeWorkflows = workflows.filter((w) => w.enabled);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
   const selectedWorkflow: WorkflowConfig | null =
-    (activeWorkflowId ? activeWorkflows.find((w) => w.id === activeWorkflowId) : activeWorkflows[0]) ?? null;
+    activeWorkflowId ? (activeWorkflows.find((w) => w.id === activeWorkflowId) ?? null) : null;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -1025,6 +1025,10 @@ const ChatDrawer = ({
     );
     if (!workflowConfig || workflowConfig.graph.nodes.length === 0) return;
     if (workflowRunningRef.current) return;
+    const exitWorkflowMode = () => {
+      setPausedWorkflow(null);
+      setActiveWorkflowId((current) => current === workflowConfig.id ? null : current);
+    };
 
     // Pre-flight checks before running the workflow.
     const workflow: AgentWorkflow = workflowConfig.graph;
@@ -1275,6 +1279,7 @@ const ChatDrawer = ({
       });
 
       if (aborted) {
+        exitWorkflowMode();
         // Extract partial accumulated results from collected steps
         const partialSteps = partialResultsRef.current;
         // Find last plugin step whose output has an `accumulated` array
@@ -1301,7 +1306,7 @@ const ChatDrawer = ({
           : m
         ));
       } else if (workflowError) {
-        setPausedWorkflow(null);
+        exitWorkflowMode();
         setMessages((prev) => prev.map((m) => m.id === statusId
           ? { ...m, content: `*Workflow error: ${workflowError}*`, streaming: false }
           : m
@@ -1343,7 +1348,7 @@ const ChatDrawer = ({
           : renderAs;
         const { prose, html, json } = routeResponse(finalText, outputFormat);
         const finalContent = prose || (html ? "" : finalText.trim() || "Workflow completed, but the output node returned no displayable data.");
-        setPausedWorkflow(null);
+        exitWorkflowMode();
         if (renderAs === "update_result" && json !== null && json !== undefined) {
           onResultDataChange?.(json);
         }
@@ -1371,6 +1376,7 @@ const ChatDrawer = ({
         ));
       }
     } catch (e) {
+      exitWorkflowMode();
       setMessages((prev) => prev.map((m) => m.id === statusId
         ? { ...m, content: `*Workflow failed: ${String(e)}*`, streaming: false }
         : m
