@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   ReactFlow, Background, Controls, MiniMap,
   addEdge, applyNodeChanges, applyEdgeChanges, reconnectEdge,
@@ -27,6 +27,7 @@ import type {
   TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, OutputNodeData, WorkflowStepResult,
 } from "@/types/workflow";
 import { executeWorkflow } from "@/lib/workflowExecutor";
+import { extractPdfText } from "@/lib/pdfTextExtractor";
 import { supabase } from "@/integrations/supabase/client";
 
 // ─── Agent stub (only what WorkflowBuilder needs from LlmAgent) ──────────────
@@ -406,11 +407,12 @@ const TriggerPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: Tr
           <Switch disabled={inputSources.length === 1 && inputSources.includes("user_upload")} checked={inputSources.includes("user_upload")} onCheckedChange={(enabled) => toggleSource("user_upload", enabled)} />
         </div>
       </div>
-      <SchemaRow
-        outputSchema={d.outputSchema}
-        onInputChange={() => {}}
-        onOutputChange={(v) => onChange({ ...d, outputSchema: v || undefined })}
-      />
+      <div className="rounded-lg border bg-muted/30 p-2.5 space-y-1">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Output contract</p>
+        <p className="text-[10px] text-muted-foreground">Trigger inputs are defined by the selected sources above. Provide test JSON or a document only when running the workflow in Test mode.</p>
+        <Textarea className="min-h-[52px] resize-y text-[10px] font-mono" value={d.outputSchema ?? ""} placeholder="e.g. { triggerType, userMessage, data }"
+          onChange={(event) => onChange({ ...d, outputSchema: event.target.value || undefined })} />
+      </div>
     </div>
   );
 };
@@ -1990,6 +1992,30 @@ return {
           } satisfies ConditionNodeData,
         },
         {
+          id: "refine-prepare-document-input",
+          type: "plugin",
+          position: { x: 560, y: 645 },
+          data: {
+            label: "Prepare Document Evidence Input",
+            description: "Passes only the selected skill identity to the document agent; removes ResultData descriptions so evidence can only come from the uploaded document",
+            inputSchema: "{ selectedSkillFound, selectedSkillInput, skill }",
+            outputSchema: "{ skill, selectedSkillInput, evidenceSource }",
+            code: `const state = input.prevOutput || {};
+const selected = state.skill && typeof state.skill === 'object' ? state.skill : {};
+const label = String(selected.label || selected.display || state.selectedSkillInput || '').trim();
+return {
+  selectedSkillInput: String(state.selectedSkillInput || state.selectedSkill || state.userAnswer || label).trim(),
+  skill: {
+    id: String(selected.id || ''),
+    label,
+    display: String(selected.display || label).trim(),
+    normalized: String(selected.normalized || label).trim(),
+  },
+  evidenceSource: 'uploaded_document_only',
+};`,
+          } satisfies PluginNodeData,
+        },
+        {
           id: "refine-document-agent",
           type: "agent",
           position: { x: 560, y: 720 },
@@ -2013,18 +2039,20 @@ Return ONLY valid JSON with:
 }
 Rules:
 - Use the selected skill from input.skill.
-- Evidence must be sentences or self-contained bullets from the provided source file.
-- Sentences do not need to contain the full skill label, but they must clearly refer to the selected skill.
+- Evidence must be sentences or self-contained bullets from the uploaded source document only.
+- Never use ResultData, existing skill descriptions, graph node descriptions, previous table values, or generated descriptions as evidence.
+- Sentences do not need to contain the full skill label, but they must clearly refer to the selected skill and must be copied from the uploaded document.
 - The documentBasedDescription must be a direct capability/activity description only.
+- The documentBasedDescription must be 4000 characters or fewer.
 - Do not include rationale, confidence wording, or source-quality comments in documentBasedDescription. Avoid phrases such as "the document gives weak evidence", "the document indicates", "it suggests", "it shows", or "based on the document".
 - If evidence is weak, put that caution in evidence, not in documentBasedDescription.
 - Do not invent document evidence.`,
             passPrevOutput: true,
             promptOverride: `Generate the document-based description for the selected skill.
 
-Selected skill and compact skill list:
+Selected skill only:
 {{prevOutput}}`,
-            inputSchema: "{ skill, selectedSkillInput } + uploaded document",
+            inputSchema: "{ skill, selectedSkillInput, evidenceSource: uploaded_document_only } + uploaded document",
             outputSchema: "{ skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, evidence }",
           } satisfies AgentNodeData,
         },
@@ -2039,8 +2067,18 @@ Selected skill and compact skill list:
             outputSchema: "{ documentBasedDescription, evidence }",
             code: `const state = input.prevOutput || {};
 let description = String(state.documentBasedDescription || '').trim();
-const evidence = Array.isArray(state.evidence) ? [...state.evidence] : [];
+let evidence = Array.isArray(state.evidence) ? [...state.evidence] : [];
 const rationaleNotes = [];
+const documentContext = input.getNodeOutput('refine-document-context') || {};
+const sourceText = String(documentContext.text || '');
+const normalizeEvidence = value => String(value ?? '').replace(/\\s+/g, ' ').trim();
+if (sourceText.trim()) {
+  const normalizedSource = normalizeEvidence(sourceText).toLocaleLowerCase();
+  evidence = evidence
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+    .filter((item) => normalizedSource.includes(normalizeEvidence(item).toLocaleLowerCase()));
+}
 
 const firstSentence = description.match(/^([^.!?]+[.!?])\\s+(.*)$/);
 if (firstSentence && /\\b(document|evidence|source|provided file|uploaded file)\\b/i.test(firstSentence[1]) && /\\b(weak|limited|indicates|suggests|shows|mentions|states|based on|gives)\\b/i.test(firstSentence[1])) {
@@ -2059,6 +2097,7 @@ description = description
 if (description) {
   description = description.charAt(0).toLocaleLowerCase() + description.slice(1);
 }
+description = description.slice(0, 4000);
 for (const note of rationaleNotes) {
   if (note && !evidence.includes(note)) evidence.unshift(note);
 }
@@ -2112,7 +2151,7 @@ Are you satisfied with this document-based description?`,
             inlineFallbackOutputType: "json",
             useUploadedDocument: true,
             contextMode: "document_only",
-            inlineSystemPrompt: `You rewrite a document-based skill description using the same provided source file evidence. Return ONLY valid JSON with the same keys as the input: skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, evidence. Keep documentBasedDescription concise, direct, and evidence-based. Do not include rationale, confidence wording, or source-quality comments in documentBasedDescription; put any caution about weak or limited evidence in evidence instead.`,
+            inlineSystemPrompt: `You rewrite a document-based skill description using only uploaded source-document evidence. Never use ResultData, existing skill descriptions, graph node descriptions, previous table values, or generated descriptions as evidence. Return ONLY valid JSON with the same keys as the input: skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, evidence. Keep documentBasedDescription concise, direct, evidence-based, and 4000 characters or fewer. Do not include rationale, confidence wording, or source-quality comments in documentBasedDescription; put any caution about weak or limited evidence in evidence instead.`,
             passPrevOutput: true,
             promptOverride: `The user was not satisfied. Generate an alternative description for the same skill using the same source-file context and evidence.
 
@@ -2173,15 +2212,17 @@ Previous proposal:
 Return ONLY valid JSON: {"framework": string, "description": string, "available": boolean, "note": string}
 Rules:
 - Use the selected skill label and requested frameworkName.
-- If you know the framework description, provide it concisely and set available true.
-- If you do not know or cannot identify a corresponding skill, set available false and explain what information the user could provide instead.
+- Use the accepted document-based description, agreed source evidence sentences, domain, tools, and activities as context to identify the closest relevant skill/concept in the requested framework.
+- If you know the direct framework skill description or can identify a close framework-aligned description from that context, provide only that description text and set available true.
+- The description field must contain only the importable skill description. Do not include explanation, rationale, labels, citations, or phrases like "This is the ESCO description", "In ESCO", "The framework says", or "Based on the context".
+- If you do not know or cannot identify a corresponding skill, set available false and explain what extra context would be needed in note.
 - Do not pretend to have searched live external databases.`,
             passPrevOutput: true,
-            promptOverride: `Selected skill and accepted document description:
+            promptOverride: `Selected skill, accepted document-based description, and agreed source evidence/context:
 {{prevOutput}}
 
-Provide the requested framework description.`,
-            inputSchema: "{ skillLabel, documentBasedDescription, frameworkName }",
+Provide the requested framework description. Return direct JSON only.`,
+            inputSchema: "{ skillLabel, documentBasedDescription, evidence, domain, toolsOrMachines, tasksOrActivities, frameworkName }",
             outputSchema: "{ framework, description, available, note }",
           } satisfies AgentNodeData,
         },
@@ -2198,9 +2239,32 @@ Provide the requested framework description.`,
 const previousAsk = input.getNodeOutput('refine-ask-framework-name') || {};
 const previousState = previousAsk && typeof previousAsk === 'object' ? previousAsk : {};
 const existing = Array.isArray(previousState.frameworkDescriptions) ? previousState.frameworkDescriptions : [];
+const requestedFramework = String(previousState.frameworkName || previousState.userAnswer || frameworkResult.framework || '').trim();
+const normalizeDescription = value => {
+  let text = String(value ?? '').trim();
+  text = text.replace(/^["'\\s]+|["'\\s]+$/g, '').trim();
+  const framework = requestedFramework.replace(/[-/\\\\^$*+?.()|[\\]{}]/g, '\\\\$&');
+  const prefixes = [
+    new RegExp('^(?:this\\\\s+is\\\\s+)?(?:the\\\\s+)?' + framework + '\\\\s+(?:description|skill description)\\\\s*(?:is|:|-)\\\\s*', 'i'),
+    /^(?:this\\s+is\\s+)?(?:the\\s+)?(?:framework|external framework|skill framework)\\s+(?:description|skill description)\\s*(?:is|:|-)\\s*/i,
+    /^(?:in|from|according to)\\s+(?:the\\s+)?(?:requested\\s+)?(?:framework|external framework|skill framework|[A-Z][A-Za-z0-9*.+ -]{1,40})\\s*,?\\s*/i,
+    /^(?:based on|using)\\s+(?:the\\s+)?(?:provided|agreed)\\s+(?:context|evidence|sentences)\\s*,?\\s*/i,
+  ];
+  prefixes.forEach((pattern) => { text = text.replace(pattern, '').trim(); });
+  text = text.replace(/^[:\\-–—\\s]+/, '').trim();
+  return text.slice(0, 4000);
+};
+const description = normalizeDescription(frameworkResult.description || frameworkResult.note || '');
+const normalizedFrameworkResult = {
+  ...frameworkResult,
+  framework: requestedFramework || frameworkResult.framework || 'Framework',
+  description,
+  available: Boolean(frameworkResult.available !== false && description),
+  note: frameworkResult.available === false ? String(frameworkResult.note || 'No corresponding framework description identified.') : String(frameworkResult.note || ''),
+};
 return {
   ...previousState,
-  frameworkDescriptions: [...existing, frameworkResult],
+  frameworkDescriptions: [...existing, normalizedFrameworkResult],
 };`,
           } satisfies PluginNodeData,
         },
@@ -2238,7 +2302,7 @@ return {
             outputSchema: "{ tableHtml, skill, documentBasedDescription, evidence, frameworkDescriptions, updateDescriptionOptions }",
             code: `const state = input.prevOutput || {};
 const skillLabel = String(state.skillLabel || state.skill?.label || state.skill?.display || state.selectedSkillInput || '');
-const docDescription = String(state.documentBasedDescription || '');
+const docDescription = String(state.documentBasedDescription || '').slice(0, 4000);
 const evidence = Array.isArray(state.evidence) ? state.evidence : [];
 const frameworks = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
 const esc = value => String(value ?? '')
@@ -2309,7 +2373,7 @@ return {
           position: { x: 260, y: 2235 },
           data: {
             label: "Ask Update ResultData",
-            question: `Review the generated table below.
+            question: `Review the generated table above.
 
 Do you want to update this selected skill description in the resultData visualization on the result page?`,
             answerKey: "updateResult",
@@ -2364,11 +2428,12 @@ const selected = options.find(item =>
   normalize(item.label) === choice ||
   (normalize(item.key) === 'document-based' && ['document', 'document based', 'document-based', 'document based description'].includes(choice))
 ) || null;
+const selectedDescription = String(selected?.description || '').slice(0, 4000);
 return {
   ...state,
   selectedUpdateSource: selected ? selected.label : '',
-  selectedUpdateDescription: selected ? selected.description : '',
-  updateDescriptionValid: Boolean(selected && String(selected.description || '').trim()),
+  selectedUpdateDescription: selected ? selectedDescription : '',
+  updateDescriptionValid: Boolean(selected && selectedDescription.trim()),
   updateDescriptionValidationMessage: selected ? '' : 'Description source not found. Choose document-based or one exact framework name.',
 };`,
           } satisfies PluginNodeData,
@@ -2410,21 +2475,49 @@ return 'No update applied. The generated descriptions for ' + skill + ' were sho
 const result = JSON.parse(JSON.stringify(input.result || {}));
 const normalize = value => String(value ?? '').replace(/_/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
 const wanted = normalize(state.skillLabel || state.skill?.label || state.selectedSkillInput);
+const selectedDescription = String(state.selectedUpdateDescription || state.documentBasedDescription || '').slice(0, 4000);
 const nodes = Array.isArray(result?.data?.nodes)
   ? result.data.nodes
   : Array.isArray(result?.nodes)
     ? result.nodes
     : [];
 const node = nodes.find(item => normalize(item?.label ?? item?.id) === wanted);
-if (!node) return result;
-node.description = state.selectedUpdateDescription || state.documentBasedDescription || node.description || '';
-node.document_based_description = {
-  description: state.documentBasedDescription || '',
-  evidence: Array.isArray(state.evidence) ? state.evidence : [],
-};
-node.framework_descriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
-node.selected_description_source = state.selectedUpdateSource || 'Document-based description';
-node.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement';
+if (node) {
+  node.description = selectedDescription || node.description || '';
+  node.document_based_description = {
+    description: String(state.documentBasedDescription || '').slice(0, 4000),
+    evidence: Array.isArray(state.evidence) ? state.evidence : [],
+  };
+  node.framework_descriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
+  node.selected_description_source = state.selectedUpdateSource || 'Document-based description';
+  node.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement';
+}
+const root =
+  result?.data?.content?.data?.result ||
+  result?.content?.data?.result ||
+  result?.data?.result ||
+  result?.result ||
+  null;
+if (root && typeof root === 'object' && !Array.isArray(root)) {
+  for (const [key, record] of Object.entries(root)) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+    const skillName = normalize(record.label || record.skill_name || key);
+    if (skillName !== wanted) continue;
+    if (!Array.isArray(record.skills)) record.skills = [{ description: { literal: '', mimetype: 'plain/text' } }];
+    if (!record.skills[0] || typeof record.skills[0] !== 'object') record.skills[0] = { description: { literal: '', mimetype: 'plain/text' } };
+    if (!record.skills[0].description || typeof record.skills[0].description !== 'object') record.skills[0].description = { literal: '', mimetype: 'plain/text' };
+    record.skills[0].description.literal = selectedDescription || String(record.skills[0].description.literal || '');
+    record.skills[0].description.mimetype = record.skills[0].description.mimetype || 'plain/text';
+    record.document_based_description = {
+      description: String(state.documentBasedDescription || '').slice(0, 4000),
+      evidence: Array.isArray(state.evidence) ? state.evidence : [],
+    };
+    record.framework_descriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
+    record.selected_description_source = state.selectedUpdateSource || 'Document-based description';
+    record.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement';
+    break;
+  }
+}
 return result;`,
           } satisfies PluginNodeData,
         },
@@ -2454,8 +2547,9 @@ return result;`,
         { id: "refine-e3", source: "refine-retrieve-skills", target: "refine-ask-skill" },
         { id: "refine-e4", source: "refine-ask-skill", target: "refine-validate-skill" },
         { id: "refine-e5", source: "refine-validate-skill", target: "refine-skill-valid" },
-        { id: "refine-e6", source: "refine-skill-valid", target: "refine-document-context", sourceHandle: "true" },
+        { id: "refine-e6", source: "refine-skill-valid", target: "refine-prepare-document-input", sourceHandle: "true" },
         { id: "refine-e7", source: "refine-skill-valid", target: "refine-ask-skill", sourceHandle: "false" },
+        { id: "refine-e7a", source: "refine-prepare-document-input", target: "refine-document-context" },
         { id: "refine-e8a", source: "refine-document-context", target: "refine-document-agent" },
         { id: "refine-e8b", source: "refine-document-agent", target: "refine-clean-document-description" },
         { id: "refine-e8", source: "refine-clean-document-description", target: "refine-ask-satisfied" },
@@ -2816,6 +2910,12 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) as WorkflowNode | undefined;
+  const triggerTestSources = useMemo(() => {
+    const trigger = nodes.find((node) => node.type === "trigger");
+    return (trigger?.data as TriggerNodeData | undefined)?.inputSources ?? ["result", "document"];
+  }, [nodes]);
+  const testNeedsResultData = triggerTestSources.includes("result");
+  const testNeedsDocument = triggerTestSources.includes("document") || triggerTestSources.includes("user_upload");
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
   const pluginGenerationContext: PluginGenerationContext = selectedNode ? {
     workflowNodes: nodes.map((workflowNode) => {
@@ -3034,6 +3134,19 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     setEdges(next);
     commit(nodes, next);
   };
+
+  const handleTestDocumentUpload = useCallback(async (file: File) => {
+    setTestError(null);
+    try {
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const isText = file.type.startsWith("text/") || /\.(txt|md|markdown|csv|json|jsonl|xml|html?|ya?ml)$/i.test(file.name);
+      const text = isPdf ? await extractPdfText(file) : isText ? await file.text() : "";
+      if (!text.trim()) throw new Error("This test accepts text-based files or PDFs with selectable text. Paste source text for other files.");
+      setTestDocumentText(text);
+    } catch (error) {
+      setTestError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
 
   const runWorkflowTest = async (stopAfterNodeId?: string) => {
     if (isTesting) return;
@@ -3617,20 +3730,28 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
               </div>
               <div className="space-y-1"><Label className="text-[10px]">Test prompt</Label><Input className="h-8 text-xs" disabled={isTesting} value={testPrompt} onChange={(event) => setTestPrompt(event.target.value)} /></div>
             </div>
-            <div className="space-y-1">
-              <Label className="text-[10px]">Input data</Label>
+            {testNeedsResultData && <div className="space-y-1">
+              <Label className="text-[10px]">Trigger result data</Label>
               <Textarea className="min-h-[110px] font-mono text-[10px]" disabled={isTesting} value={testInput} onChange={(event) => setTestInput(event.target.value)} placeholder={testInputMode === "json" ? '{ "items": [] }' : "Paste the text to process"} />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[10px]">Document text <span className="font-normal text-muted-foreground">(optional agent context)</span></Label>
+            </div>}
+            {testNeedsDocument && <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
+              <div>
+                <Label className="text-[10px]">Trigger document input</Label>
+                <p className="text-[9px] text-muted-foreground">Upload a text-based file or selectable-text PDF, or paste source text for this test run. It is not saved into the workflow.</p>
+              </div>
+              <Input type="file" className="h-8 text-[10px]" disabled={isTesting} accept=".txt,.md,.markdown,.csv,.json,.jsonl,.xml,.html,.yaml,.yml,.pdf,text/*,application/pdf" onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleTestDocumentUpload(file);
+                event.target.value = "";
+              }} />
               <Textarea
                 className="min-h-[90px] text-[10px]"
                 disabled={isTesting}
                 value={testDocumentText}
                 onChange={(event) => setTestDocumentText(event.target.value)}
-                placeholder="Paste the document content that document-aware agents should analyse"
+                placeholder="Or paste the document source text"
               />
-            </div>
+            </div>}
             <div className="flex items-center gap-2">
               {isTesting ? (
                 <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => testAbortRef.current?.abort()}><CircleStop className="h-3.5 w-3.5" /> Stop test</Button>
@@ -3669,10 +3790,12 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
           ? `190px minmax(420px, 1fr) 5px ${propertiesWidth}px`
           : "190px minmax(420px, 1fr) 300px" }}
       >
-        <aside className="border-r bg-muted/15 p-3">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Node library</p>
-          <p className="mb-3 text-[10px] leading-relaxed text-muted-foreground">Drag a block onto the canvas or click to add it.</p>
-          <div className="space-y-2">
+        <aside className="flex min-h-0 flex-col border-r bg-muted/15">
+          <div className="shrink-0 border-b bg-background/40 p-3">
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Node library</p>
+            <p className="text-[10px] leading-relaxed text-muted-foreground">Drag a block onto the canvas or click to add it.</p>
+          </div>
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
             {NODE_LIBRARY.map(({ type, icon: Icon, label, description, color, iconBg }) => (
               <button
                 key={type}
@@ -3687,9 +3810,9 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
                 <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 group-hover:text-muted-foreground" />
               </button>
             ))}
-          </div>
-          <div className="mt-4 rounded-lg border border-dashed bg-background/50 p-2.5 text-[10px] leading-relaxed text-muted-foreground">
-            Connect nodes by dragging between their circular ports. Select any node to configure it.
+            <div className="rounded-lg border border-dashed bg-background/50 p-2.5 text-[10px] leading-relaxed text-muted-foreground">
+              Connect nodes by dragging between their circular ports. Select any node to configure it.
+            </div>
           </div>
         </aside>
 
@@ -3765,10 +3888,18 @@ Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional
                     size="sm"
                     className="h-7 gap-1.5 text-xs"
                     disabled={isTesting}
-                    onClick={() => void runWorkflowTest(selectedNode.id)}
+                    onClick={() => {
+                      if (!showTestPanel) {
+                        setShowTestPanel(true);
+                        setShowWorkflowGenerator(false);
+                        setShowExamples(false);
+                        return;
+                      }
+                      void runWorkflowTest(selectedNode.id);
+                    }}
                   >
                     {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
-                    Run to this node
+                    {showTestPanel ? "Run to this node" : "Set up node test"}
                   </Button>
                   <span className="text-[10px] leading-relaxed text-muted-foreground">
                     Tests the workflow from the trigger through this node, then stops.

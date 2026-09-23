@@ -684,8 +684,9 @@ const TABULATOR_RENDER_CODE_EXAMPLE = `return (async () => {
       const previous = workingByKey.get(freshRow.original_key);
       if (!previous) return freshRow;
       const mergedFields = TRACKED_FIELDS.reduce((acc, f) => {
-        acc[f] = previous.visual_deleted ? "" : freshRow[f];
-        acc[changedKey(f)] = Boolean(previous[changedKey(f)]);
+        const value = previous.visual_deleted ? "" : freshRow[f];
+        acc[f] = value;
+        acc[changedKey(f)] = String(value ?? "").trim() !== String(freshRow[origKey(f)] ?? "").trim();
         return acc;
       }, {});
       return {

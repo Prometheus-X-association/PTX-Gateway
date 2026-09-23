@@ -25,6 +25,7 @@ interface ChatMessageData {
   role: MessageRole;
   content: string;
   htmlViz?: string;
+  htmlVizPlacement?: "before" | "after";
   jsonData?: Record<string, unknown>;
   toolEvents?: ToolEvent[];
   streaming?: boolean;
@@ -776,6 +777,7 @@ const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; output
           </div>
         )}
 
+        {!msg.streaming && msg.htmlViz && msg.htmlVizPlacement === "before" && <VizBubble html={msg.htmlViz} />}
         {(msg.streaming && !msg.content) || streamingVisual
           ? (
             <span className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -793,7 +795,7 @@ const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; output
               : null
         }
         {!msg.streaming && !msg.jsonData && <ImageGallery images={extracted.images} />}
-        {msg.htmlViz && <VizBubble html={msg.htmlViz} />}
+        {msg.htmlViz && msg.htmlVizPlacement !== "before" && <VizBubble html={msg.htmlViz} />}
       </div>
     </div>
   );
@@ -1313,8 +1315,11 @@ const ChatDrawer = ({
           typeof waitingInput?.tableHtml === "string" && looksLikeHtml(waitingInput.tableHtml)
           ? waitingInput.tableHtml
           : null;
+        const displayQuestion = waitingHtml
+          ? waiting.question.replace(/Review the generated table below\./i, "Review the generated table above.")
+          : waiting.question;
         const questionText = [
-          waiting.question,
+          displayQuestion,
           ...(waiting.options?.length ? ["", `Options: ${waiting.options.join(", ")}`] : []),
         ].join("\n");
         setMessages((prev) => [
@@ -1322,7 +1327,14 @@ const ChatDrawer = ({
             ? { ...m, content: "Workflow paused for your input.", streaming: false }
             : m
           ),
-          { id: uid(), role: "assistant", content: questionText, htmlViz: waitingHtml ?? undefined, streaming: false },
+          {
+            id: uid(),
+            role: "assistant",
+            content: questionText,
+            htmlViz: waitingHtml ?? undefined,
+            htmlVizPlacement: waitingHtml ? "before" : undefined,
+            streaming: false,
+          },
         ]);
       } else {
         const { text: finalText, renderAs } = getWorkflowFinalOutput(results);
@@ -1334,11 +1346,21 @@ const ChatDrawer = ({
         if (renderAs === "update_result" && json !== null && json !== undefined) {
           onResultDataChange?.(json);
         }
+        const updateSource = renderAs === "update_result"
+          ? (() => {
+              const selectedStep = [...results].reverse().find((step) => step.nodeId === "refine-select-update-description");
+              const output = selectedStep?.output && typeof selectedStep.output === "object"
+                ? selectedStep.output as Record<string, unknown>
+                : null;
+              const source = String(output?.selectedUpdateSource || "").trim();
+              return source ? ` using ${source}` : "";
+            })()
+          : "";
         setMessages((prev) => prev.map((m) => m.id === statusId
           ? {
               ...m,
               content: renderAs === "update_result" && json !== null && json !== undefined
-                ? "Result page table updated."
+                ? `Result page table updated${updateSource}.`
                 : prose,
               htmlViz: renderAs === "update_result" ? undefined : html ?? undefined,
               jsonData: renderAs === "update_result" ? undefined : json ?? undefined,
