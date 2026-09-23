@@ -431,6 +431,11 @@ export async function executeWorkflow(
       fatalStop = true;
       return;
     }
+    if (node.type === "output") {
+      stopReason = `Workflow completed at output node "${String(node.data.label || node.id)}".`;
+      fatalStop = true;
+      return;
+    }
     if (ctx.stopAfterNodeId === node.id) {
       stopReason = `Stopped after node "${String(node.data.label || node.id)}".`;
       return;

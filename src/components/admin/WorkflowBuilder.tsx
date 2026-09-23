@@ -3129,6 +3129,8 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   }, [nodes, commit]);
 
   const onConnect = useCallback((params: Connection) => {
+    const sourceNode = nodes.find((node) => node.id === params.source);
+    if (sourceNode?.type === "output") return;
     setEdges((eds) => {
       const branch = branchFromHandle(params.sourceHandle);
       const next = addEdge(
@@ -3141,6 +3143,8 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   }, [nodes, commit]);
 
   const onReconnect = useCallback((oldEdge: Edge, connection: Connection) => {
+    const sourceNode = nodes.find((node) => node.id === connection.source);
+    if (sourceNode?.type === "output") return;
     setEdges((currentEdges) => {
       const wasBranch = branchFromHandle(oldEdge.sourceHandle);
       const next = reconnectEdge(oldEdge, connection, currentEdges, { shouldReplaceId: false }).map((edge) => {
@@ -3775,6 +3779,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         const source = String(value.source || ""); const target = String(value.target || "");
         if (!nodeIds.has(source) || !nodeIds.has(target) || source === target) return [];
         const sourceNode = generatedNodes.find((node) => node.id === source);
+        if (sourceNode?.type === "output") return [];
         const branch = sourceNode?.type === "condition" && (value.branch === "true" || value.branch === "false") ? value.branch : undefined;
         return [{ id: `generated-edge-${index + 1}-${uid()}`, source, target, sourceHandle: branch, label: branch, type: "smoothstep" as const, dataPath: String(value.dataPath || "").slice(0, 500) || undefined }];
       });

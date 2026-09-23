@@ -1266,7 +1266,7 @@ const ChatDrawer = ({
               ? `Skill ${displayIter}/${next.knownTotal} · `
               : displayIter > 1 ? `Iter ${displayIter} · ` : "";
             setMessages((msgs) => msgs.map((m) => m.id === statusId
-              ? { ...m, content: `⚡ ${loopText}${label}${step.error ? " ❌" : "…"}` }
+              ? (m.streaming ? { ...m, content: `⚡ ${loopText}${label}${step.error ? " ❌" : "…"}` } : m)
               : m
             ));
             return next;
@@ -1342,6 +1342,7 @@ const ChatDrawer = ({
           : renderAs === "auto" ? "mixed"
           : renderAs;
         const { prose, html, json } = routeResponse(finalText, outputFormat);
+        const finalContent = prose || (html ? "" : finalText.trim() || "Workflow completed, but the output node returned no displayable data.");
         setPausedWorkflow(null);
         if (renderAs === "update_result" && json !== null && json !== undefined) {
           onResultDataChange?.(json);
@@ -1361,7 +1362,7 @@ const ChatDrawer = ({
               ...m,
               content: renderAs === "update_result" && json !== null && json !== undefined
                 ? `Result page table updated${updateSource}.`
-                : prose,
+                : finalContent,
               htmlViz: renderAs === "update_result" ? undefined : html ?? undefined,
               jsonData: renderAs === "update_result" ? undefined : json ?? undefined,
               streaming: false,
