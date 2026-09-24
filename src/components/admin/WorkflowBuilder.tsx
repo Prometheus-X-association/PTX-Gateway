@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type {
   AgentWorkflow, WorkflowNode, WorkflowEdge,
-  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, OutputNodeData, WorkflowStepResult,
+  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, OutputNodeData, WorkflowStepResult, WorkflowWaitingState,
 } from "@/types/workflow";
 import { executeWorkflow } from "@/lib/workflowExecutor";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
@@ -2959,6 +2959,200 @@ return '<section style="font-family:system-ui,sans-serif;max-width:900px;margin:
   },
 ];
 
+
+const NODE_USAGE_EXAMPLES: Record<string, ExampleWorkflow> = {
+  trigger: {
+    id: "node-example-trigger",
+    name: "Trigger example",
+    description: "Shows how a trigger packages the user's prompt and selected ResultData before handing it to the workflow.",
+    testFixture: {
+      inputMode: "json",
+      input: JSON.stringify({ requestId: "REQ-1001", topic: "customer churn", priority: "high" }, null, 2),
+      prompt: "Start the workflow for this request.",
+    },
+    workflow: {
+      nodes: [
+        { id: "ex-trigger", type: "trigger", position: { x: 80, y: 120 }, data: { label: "Manual start", triggerType: "manual", inputSources: ["result"], defaultPrompt: "Start the workflow.", outputSchema: "{ triggerType, userMessage, data }" } satisfies TriggerNodeData },
+        { id: "ex-trigger-output", type: "output", position: { x: 380, y: 120 }, data: { label: "Show trigger payload", renderAs: "json", inputSchema: "Trigger payload" } satisfies OutputNodeData },
+      ],
+      edges: [{ id: "ex-trigger-e1", source: "ex-trigger", target: "ex-trigger-output" }],
+    },
+  },
+  document_context: {
+    id: "node-example-document-context",
+    name: "Document Context example",
+    description: "Resolves the uploaded document once so downstream nodes can reuse the same source for a run.",
+    testFixture: {
+      inputMode: "json",
+      input: JSON.stringify({ documentPurpose: "source evidence" }, null, 2),
+      documentText: "Candidate has strong C++ programming skills and created a desktop application using C++.",
+      prompt: "Use the uploaded source document.",
+    },
+    workflow: {
+      nodes: [
+        { id: "ex-doc-trigger", type: "trigger", position: { x: 60, y: 120 }, data: { label: "Start with document", triggerType: "manual", inputSources: ["document"], outputSchema: "{ document }" } satisfies TriggerNodeData },
+        { id: "ex-doc-context", type: "document_context", position: { x: 330, y: 120 }, data: { label: "Resolve document", source: "chat_upload_or_trigger", delivery: "automatic", reuseScope: "workflow_run", inputSchema: "Uploaded document", outputSchema: "{ documentContext, text? }" } satisfies DocumentContextNodeData },
+        { id: "ex-doc-output", type: "output", position: { x: 620, y: 120 }, data: { label: "Show document context", renderAs: "json", inputSchema: "Document context payload" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-doc-e1", source: "ex-doc-trigger", target: "ex-doc-context" },
+        { id: "ex-doc-e2", source: "ex-doc-context", target: "ex-doc-output" },
+      ],
+    },
+  },
+  retrieval: {
+    id: "node-example-retrieval",
+    name: "Data Retrieval example",
+    description: "Compacts large ResultData into only the rows the next node needs.",
+    testFixture: {
+      inputMode: "json",
+      input: JSON.stringify({ customers: [
+        { id: "c-1", name: "Acme", churnRisk: 91, plan: "enterprise" },
+        { id: "c-2", name: "Beta", churnRisk: 42, plan: "starter" },
+        { id: "c-3", name: "Cygnus", churnRisk: 83, plan: "business" },
+      ] }, null, 2),
+      prompt: "Find high-risk customers.",
+    },
+    workflow: {
+      nodes: [
+        { id: "ex-ret-trigger", type: "trigger", position: { x: 60, y: 120 }, data: { label: "Start with ResultData", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData },
+        { id: "ex-ret", type: "retrieval", position: { x: 330, y: 120 }, data: { label: "Retrieve high risk", source: "result", query: "{{userMessage}}", maxItems: 10, description: "Return only customers with churnRisk >= 80", inputSchema: "{ customers[] }", outputSchema: "{ query, count, items[] }", code: `const customers = Array.isArray(input.sourceData?.customers) ? input.sourceData.customers : [];
+const items = customers.filter((row) => Number(row.churnRisk || 0) >= 80).slice(0, input.maxItems || 10);
+return { query: input.query, count: items.length, items };` } satisfies RetrievalNodeData },
+        { id: "ex-ret-output", type: "output", position: { x: 620, y: 120 }, data: { label: "Show retrieved rows", renderAs: "json", inputSchema: "{ query, count, items[] }" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-ret-e1", source: "ex-ret-trigger", target: "ex-ret" },
+        { id: "ex-ret-e2", source: "ex-ret", target: "ex-ret-output" },
+      ],
+    },
+  },
+  user_input: {
+    id: "node-example-user-input",
+    name: "Ask User example",
+    description: "Pauses the workflow and asks the end user which path or value should be used next.",
+    testFixture: {
+      inputMode: "json",
+      input: JSON.stringify({ proposedAction: "update descriptions", affectedRows: 3 }, null, 2),
+      prompt: "Ask the user before continuing.",
+    },
+    workflow: {
+      nodes: [
+        { id: "ex-user-trigger", type: "trigger", position: { x: 60, y: 120 }, data: { label: "Start approval", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData },
+        { id: "ex-user-ask", type: "user_input", position: { x: 330, y: 120 }, data: { label: "Ask for approval", question: "Update {{prevOutput.data.affectedRows}} rows now?", answerKey: "approved", inputType: "yes_no", description: "The test run pauses here until a chat reply resumes it.", inputSchema: "Trigger payload", outputSchema: "{ previous, approved, userAnswer }" } satisfies UserInputNodeData },
+        { id: "ex-user-output", type: "output", position: { x: 620, y: 120 }, data: { label: "Show answer", renderAs: "json" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-user-e1", source: "ex-user-trigger", target: "ex-user-ask" },
+        { id: "ex-user-e2", source: "ex-user-ask", target: "ex-user-output" },
+      ],
+    },
+  },
+  agent: {
+    id: "node-example-agent",
+    name: "AI Agent example",
+    description: "Sends selected node input to an inline agent and asks for structured JSON output.",
+    testFixture: {
+      inputMode: "json",
+      input: JSON.stringify({ ticket: { id: "T-42", text: "The upload works, but the final workflow status never completes.", severity: "medium" } }, null, 2),
+      prompt: "Classify this support ticket.",
+    },
+    workflow: {
+      nodes: [
+        { id: "ex-agent-trigger", type: "trigger", position: { x: 60, y: 120 }, data: { label: "Start ticket", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData },
+        { id: "ex-agent", type: "agent", position: { x: 330, y: 120 }, data: { label: "Classify ticket", mode: "inline", inlineName: "Ticket classifier", inlineOutputType: "json", inlineFallbackOutputType: "json", passPrevOutput: true, inlineSystemPrompt: "Return only JSON. Classify the ticket into category, severity, and next_action.", promptOverride: "Classify this ticket payload:\n{{prevOutput}}", inputSchema: "Trigger payload", outputSchema: "{ category, severity, next_action }" } satisfies AgentNodeData },
+        { id: "ex-agent-output", type: "output", position: { x: 620, y: 120 }, data: { label: "Show classification", renderAs: "json" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-agent-e1", source: "ex-agent-trigger", target: "ex-agent" },
+        { id: "ex-agent-e2", source: "ex-agent", target: "ex-agent-output" },
+      ],
+    },
+  },
+  api: {
+    id: "node-example-api",
+    name: "API Request example",
+    description: "Calls a public JSON API and emits a selected response path for the next node.",
+    testFixture: { inputMode: "json", input: JSON.stringify({ todoId: 1 }, null, 2), prompt: "Fetch a public sample todo." },
+    workflow: {
+      nodes: [
+        { id: "ex-api-trigger", type: "trigger", position: { x: 60, y: 120 }, data: { label: "Start API call", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData },
+        { id: "ex-api", type: "api", position: { x: 330, y: 120 }, data: { label: "Fetch todo", url: "https://jsonplaceholder.typicode.com/todos/1", method: "GET", queryParams: [], headers: [], authType: "none", bodyType: "none", responseType: "json", outputPath: "", inputSchema: "Trigger payload", outputSchema: "{ userId, id, title, completed }" } satisfies ApiNodeData },
+        { id: "ex-api-output", type: "output", position: { x: 620, y: 120 }, data: { label: "Show API response", renderAs: "json" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-api-e1", source: "ex-api-trigger", target: "ex-api" },
+        { id: "ex-api-e2", source: "ex-api", target: "ex-api-output" },
+      ],
+    },
+  },
+  plugin: {
+    id: "node-example-plugin",
+    name: "JavaScript node example",
+    description: "Transforms previous node data with sandboxed JavaScript and returns structured output.",
+    testFixture: {
+      inputMode: "json",
+      input: JSON.stringify({ items: [{ name: "A", score: 78 }, { name: "B", score: 94 }, { name: "C", score: 88 }] }, null, 2),
+      prompt: "Calculate score summary.",
+    },
+    workflow: {
+      nodes: [
+        { id: "ex-plugin-trigger", type: "trigger", position: { x: 60, y: 120 }, data: { label: "Start transform", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData },
+        { id: "ex-plugin", type: "plugin", position: { x: 330, y: 120 }, data: { label: "Summarize scores", description: "Compute average and top item", inputSchema: "{ data: { items[] } }", outputSchema: "{ count, average, top }", code: `const items = Array.isArray(input.prevOutput?.data?.items) ? input.prevOutput.data.items : [];
+const scores = items.map((item) => Number(item.score || 0));
+const average = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0;
+const top = [...items].sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null;
+return { count: items.length, average: Math.round(average * 10) / 10, top };` } satisfies PluginNodeData },
+        { id: "ex-plugin-output", type: "output", position: { x: 620, y: 120 }, data: { label: "Show summary", renderAs: "json" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-plugin-e1", source: "ex-plugin-trigger", target: "ex-plugin" },
+        { id: "ex-plugin-e2", source: "ex-plugin", target: "ex-plugin-output" },
+      ],
+    },
+  },
+  condition: {
+    id: "node-example-condition",
+    name: "Condition example",
+    description: "Routes the workflow to different outputs based on an expression evaluated against previous output.",
+    testFixture: { inputMode: "json", input: JSON.stringify({ order: { id: "O-100", amount: 125 } }, null, 2), prompt: "Route this order." },
+    workflow: {
+      nodes: [
+        { id: "ex-cond-trigger", type: "trigger", position: { x: 60, y: 160 }, data: { label: "Start order", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData },
+        { id: "ex-cond", type: "condition", position: { x: 330, y: 160 }, data: { label: "Amount >= 100?", expression: "Number(prevOutput?.data?.order?.amount || 0) >= 100", inputSchema: "{ data: { order: { amount } } }" } satisfies ConditionNodeData },
+        { id: "ex-cond-high", type: "plugin", position: { x: 620, y: 70 }, data: { label: "High value path", code: "return { route: 'manager_review', order: input.prevOutput?.data?.order };", outputSchema: "{ route, order }" } satisfies PluginNodeData },
+        { id: "ex-cond-low", type: "plugin", position: { x: 620, y: 250 }, data: { label: "Standard path", code: "return { route: 'standard_processing', order: input.prevOutput?.data?.order };", outputSchema: "{ route, order }" } satisfies PluginNodeData },
+        { id: "ex-cond-output", type: "output", position: { x: 900, y: 160 }, data: { label: "Show selected route", renderAs: "json" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-cond-e1", source: "ex-cond-trigger", target: "ex-cond" },
+        { id: "ex-cond-e2", source: "ex-cond", target: "ex-cond-high", sourceHandle: "true" },
+        { id: "ex-cond-e3", source: "ex-cond", target: "ex-cond-low", sourceHandle: "false" },
+        { id: "ex-cond-e4", source: "ex-cond-high", target: "ex-cond-output" },
+        { id: "ex-cond-e5", source: "ex-cond-low", target: "ex-cond-output" },
+      ],
+    },
+  },
+  output: {
+    id: "node-example-output",
+    name: "Output example",
+    description: "Formats the final node response and stops the workflow at the output node.",
+    testFixture: { inputMode: "json", input: JSON.stringify({ result: "approved", reviewer: "Mia", confidence: 0.92 }, null, 2), prompt: "Render the final answer." },
+    workflow: {
+      nodes: [
+        { id: "ex-output-trigger", type: "trigger", position: { x: 60, y: 120 }, data: { label: "Start final render", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData },
+        { id: "ex-output-format", type: "plugin", position: { x: 330, y: 120 }, data: { label: "Create HTML", code: `const data = input.prevOutput?.data || {};
+return '<div style="font-family:system-ui;padding:12px;border:1px solid #bbf7d0;border-radius:10px;background:#f0fdf4"><strong>Status: ' + String(data.result || 'unknown') + '</strong><p>Reviewer: ' + String(data.reviewer || '-') + '</p><p>Confidence: ' + String(data.confidence || '-') + '</p></div>';`, outputSchema: "HTML string" } satisfies PluginNodeData },
+        { id: "ex-output", type: "output", position: { x: 620, y: 120 }, data: { label: "Show final HTML", renderAs: "html", inputSchema: "HTML string" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-output-e1", source: "ex-output-trigger", target: "ex-output-format" },
+        { id: "ex-output-e2", source: "ex-output-format", target: "ex-output" },
+      ],
+    },
+  },
+};
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface WorkflowBuilderProps {
@@ -2991,6 +3185,19 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [showExamples, setShowExamples] = useState(false);
+  const [nodeExample, setNodeExample] = useState<ExampleWorkflow | null>(null);
+  const [exampleInputMode, setExampleInputMode] = useState<"json" | "text">("json");
+  const [exampleInput, setExampleInput] = useState('');
+  const [exampleDocumentText, setExampleDocumentText] = useState("");
+  const [examplePrompt, setExamplePrompt] = useState("");
+  const [exampleRuns, setExampleRuns] = useState<Record<string, TestNodeRun>>({});
+  const [exampleExecutionOrder, setExampleExecutionOrder] = useState<string[]>([]);
+  const [exampleStopReason, setExampleStopReason] = useState<string | null>(null);
+  const [exampleError, setExampleError] = useState<string | null>(null);
+  const [exampleWaiting, setExampleWaiting] = useState<WorkflowWaitingState | null>(null);
+  const [exampleReply, setExampleReply] = useState("");
+  const [exampleSelectedNodeId, setExampleSelectedNodeId] = useState<string | null>(null);
+  const [isExampleTesting, setIsExampleTesting] = useState(false);
   const [showWorkflowGenerator, setShowWorkflowGenerator] = useState(false);
   const [workflowGoal, setWorkflowGoal] = useState("");
   const [workflowComposition, setWorkflowComposition] = useState<"balanced" | "ai_heavy" | "data_processing" | "api_integration">("balanced");
@@ -3019,6 +3226,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const propertiesResizeOrigin = useRef({ pointerX: 0, width: 320 });
   const testAbortRef = useRef<AbortController | null>(null);
+  const exampleAbortRef = useRef<AbortController | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) as WorkflowNode | undefined;
@@ -3029,6 +3237,30 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const testNeedsResultData = triggerTestSources.includes("result");
   const testNeedsDocument = triggerTestSources.includes("document") || triggerTestSources.includes("user_upload");
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
+  const exampleNodes = useMemo(() => nodeExample ? (nodeExample.workflow.nodes as Node[]) : [], [nodeExample]);
+  const exampleEdges = useMemo(() => nodeExample ? normalizeEdgeHandles(nodeExample.workflow.nodes as Node[], nodeExample.workflow.edges as Edge[]) : [], [nodeExample]);
+  const exampleTriggerSources = useMemo(() => {
+    const trigger = exampleNodes.find((node) => node.type === "trigger");
+    return (trigger?.data as TriggerNodeData | undefined)?.inputSources ?? ["result"];
+  }, [exampleNodes]);
+  const exampleNeedsResultData = exampleTriggerSources.includes("result");
+  const exampleNeedsDocument = exampleTriggerSources.includes("document") || exampleTriggerSources.includes("user_upload");
+  const exampleSelectedNode = exampleNodes.find((node) => node.id === exampleSelectedNodeId) as WorkflowNode | undefined;
+  const exampleCanvasNodes = exampleNodes.map((node) => ({
+    ...node,
+    ...(node.type === "output" ? {
+      style: { ...node.style, background: "transparent", border: "none", padding: 0, width: "auto" },
+    } : {}),
+    data: { ...node.data, __testStatus: exampleRuns[node.id]?.status },
+  }));
+  const exampleCanvasEdges = exampleEdges.map((edge) => {
+    const sourceRun = exampleRuns[edge.source];
+    const targetRun = exampleRuns[edge.target];
+    const active = sourceRun?.status === "success" && Boolean(targetRun);
+    return active
+      ? { ...edge, animated: targetRun.status === "running", style: { ...EDGE_STYLE, stroke: targetRun.status === "error" ? "#ef4444" : "#10b981", strokeWidth: 2.2 } }
+      : edge;
+  });
   const pluginGenerationContext: PluginGenerationContext = selectedNode ? {
     workflowNodes: nodes.map((workflowNode) => {
       const data = workflowNode.data as { label?: string; inputSchema?: string; outputSchema?: string };
@@ -3231,6 +3463,199 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       setTestPrompt(ex.testFixture.prompt);
     }
     setShowExamples(false);
+  };
+
+  const openNodeUsageExample = (type: string) => {
+    const example = NODE_USAGE_EXAMPLES[type];
+    if (!example) return;
+    const fixture = example.testFixture;
+    setNodeExample(example);
+    setExampleInputMode(fixture?.inputMode ?? "json");
+    setExampleInput(fixture?.input ?? '{\n  "example": "value"\n}');
+    setExampleDocumentText(fixture?.documentText ?? "");
+    setExamplePrompt(fixture?.prompt ?? "Run this node example.");
+    setExampleRuns({});
+    setExampleExecutionOrder([]);
+    setExampleStopReason(null);
+    setExampleError(null);
+    setExampleWaiting(null);
+    setExampleReply("");
+    setExampleSelectedNodeId(example.workflow.nodes.find((node) => node.type === type)?.id ?? example.workflow.nodes[0]?.id ?? null);
+    setShowExamples(false);
+    setShowWorkflowGenerator(false);
+    setShowTestPanel(false);
+  };
+
+  const closeNodeUsageExample = () => {
+    exampleAbortRef.current?.abort();
+    setNodeExample(null);
+    setExampleRuns({});
+    setExampleExecutionOrder([]);
+    setExampleStopReason(null);
+    setExampleError(null);
+    setExampleWaiting(null);
+    setExampleReply("");
+    setIsExampleTesting(false);
+  };
+
+  const handleExampleDocumentUpload = useCallback(async (file: File) => {
+    setExampleError(null);
+    try {
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const isText = file.type.startsWith("text/") || /\.(txt|md|markdown|csv|json|jsonl|xml|html?|ya?ml)$/i.test(file.name);
+      const text = isPdf ? await extractPdfText(file) : isText ? await file.text() : "";
+      if (!text.trim()) throw new Error("This example accepts text-based files or PDFs with selectable text. Paste source text for other files.");
+      setExampleDocumentText(text);
+    } catch (error) {
+      setExampleError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const runNodeExampleTest = async (stopAfterNodeId?: string, resumeWaiting?: WorkflowWaitingState, resumeAnswer = "") => {
+    if (!nodeExample || isExampleTesting) return;
+    let resultData: unknown = exampleInput;
+    if (exampleInputMode === "json") {
+      try {
+        resultData = JSON.parse(exampleInput);
+      } catch (error) {
+        setExampleError(`Invalid example JSON: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+    }
+    const documentText = exampleDocumentText.trim() || (exampleInputMode === "text" ? exampleInput : null);
+
+    if (!resumeWaiting) {
+      setExampleRuns({});
+      setExampleExecutionOrder([]);
+    }
+    setExampleStopReason(null);
+    setExampleError(null);
+    if (!resumeWaiting) setExampleWaiting(null);
+    setIsExampleTesting(true);
+    const controller = new AbortController();
+    exampleAbortRef.current = controller;
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const exampleWorkflowId = `${workflowId}:node-example:${nodeExample.id}`;
+      const run = await executeWorkflow({ nodes: nodeExample.workflow.nodes, edges: normalizeEdgeHandles(nodeExample.workflow.nodes as Node[], nodeExample.workflow.edges as Edge[]) as WorkflowEdge[] }, {
+        workflowId: exampleWorkflowId,
+        resultData,
+        docText: documentText,
+        hasDocument: Boolean(documentText),
+        userMessage: examplePrompt,
+        organizationId: organizationId ?? null,
+        orgExecutionToken: null,
+        supabaseUrl: import.meta.env.VITE_SUPABASE_URL as string,
+        signal: controller.signal,
+        stopOnError: true,
+        stopAfterNodeId: resumeWaiting ? undefined : stopAfterNodeId,
+        resume: resumeWaiting ? { waiting: resumeWaiting, answer: resumeAnswer } : undefined,
+        onStepStart: (nodeId, input) => {
+          setExampleExecutionOrder((current) => current.includes(nodeId) ? current : [...current, nodeId]);
+          setExampleRuns((current) => ({
+            ...current,
+            [nodeId]: { status: "running", input, visits: (current[nodeId]?.visits ?? 0) + 1 },
+          }));
+        },
+        onStepDone: (step: WorkflowStepResult) => {
+          setExampleRuns((current) => ({
+            ...current,
+            [step.nodeId]: {
+              status: step.error ? "error" : "success",
+              input: step.input,
+              output: step.output,
+              error: step.error,
+              durationMs: step.durationMs,
+              visits: current[step.nodeId]?.visits ?? 1,
+            },
+          }));
+        },
+        onApiRequest: async (nodeId, config, input) => {
+          const { data, error } = await supabase.functions.invoke("workflow-api-request", {
+            body: { mode: "test", workflowId: exampleWorkflowId, nodeId, config, input, result: resultData, userMessage: examplePrompt },
+            headers: organizationId ? { "x-organization-id": organizationId } : undefined,
+          });
+          if (error) throw error;
+          if (!data?.ok) throw new Error(data?.error || `API request failed (${data?.status ?? "unknown"})`);
+          return pickDataPath(data.data, config.outputPath ?? "");
+        },
+        onAgentStep: async (nodeId, agentConfig, prompt, prevOutput) => {
+          const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-with-result`, {
+            method: "POST",
+            signal: controller.signal,
+            headers: {
+              "Content-Type": "application/json",
+              apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              ...(organizationId ? { "x-organization-id": organizationId } : {}),
+            },
+            body: JSON.stringify({
+              messages: [{ role: "user", content: prompt }],
+              result: agentConfig.includeDocument && agentConfig.documentDelivery !== "native_file" && documentText
+                ? {
+                    __doc_context: true,
+                    ...(agentConfig.includeResultData ? { result: resultData } : {}),
+                    docText: documentText,
+                  }
+                : (agentConfig.includeResultData ? resultData : undefined),
+              inputData: prevOutput,
+              workflowId: exampleWorkflowId,
+              nodeId,
+              organizationId,
+              agentId: agentConfig.agentId,
+              systemPrompt: agentConfig.inline?.systemPrompt,
+              outputType: agentConfig.inline?.outputType,
+              fallbackOutputType: agentConfig.inline?.fallbackOutputType,
+              skillIds: agentConfig.inline?.skillIds,
+              providerIds: agentConfig.inline?.providerIds,
+              agentProviders: agentConfig.inline?.agentProviders,
+            }),
+          });
+          if (!response.ok || !response.body) throw new Error(`Agent request failed (${response.status}): ${await response.text()}`);
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let output = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              if (!line.startsWith("data:")) continue;
+              try {
+                const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+                if (event.type === "token" && event.content) output += event.content;
+                if (event.type === "error") throw new Error(event.message || "Agent execution failed");
+              } catch (error) {
+                if (error instanceof SyntaxError) continue;
+                throw error;
+              }
+            }
+          }
+          return output;
+        },
+      });
+      setExampleWaiting(run.waiting ?? null);
+      if (run.waiting) {
+        setExampleSelectedNodeId(run.waiting.nodeId);
+        setExampleStopReason("Example paused for a user reply.");
+      } else {
+        setExampleReply("");
+        setExampleStopReason(run.stopReason ?? (run.aborted ? "Example run stopped." : "Example workflow finished."));
+      }
+      if (run.error) setExampleError(run.error);
+    } catch (error) {
+      const aborted = error instanceof DOMException && error.name === "AbortError";
+      setExampleStopReason(aborted ? "Example run was stopped by the user." : "Execution stopped because of an error.");
+      if (!aborted) setExampleError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsExampleTesting(false);
+      exampleAbortRef.current = null;
+    }
   };
 
   const updateSelectedNodeData = (data: Record<string, unknown>) => {
@@ -3904,6 +4329,237 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         </div>
       </div>
 
+      {nodeExample && (
+        <div className="fixed inset-4 z-[140] flex flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl">
+          <div className="flex items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><BookOpen className="h-4 w-4" /></span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{nodeExample.name}</p>
+                <p className="truncate text-[10px] text-muted-foreground">{nodeExample.description}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" disabled={isExampleTesting} onClick={() => { loadExample(nodeExample); closeNodeUsageExample(); }}>
+                <RotateCcw className="h-3.5 w-3.5" /> Load into canvas
+              </Button>
+              <button type="button" disabled={isExampleTesting} onClick={closeNodeUsageExample} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50" title="Close example preview">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(420px,1fr)_360px]">
+            <aside className="flex min-h-0 flex-col border-r bg-muted/10">
+              <div className="border-b p-3">
+                <p className="text-xs font-semibold">Example input</p>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">This data is only used for the temporary example run.</p>
+              </div>
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+                <div className="grid grid-cols-[90px_1fr] gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Input type</Label>
+                    <Select value={exampleInputMode} onValueChange={(value: "json" | "text") => setExampleInputMode(value)} disabled={isExampleTesting}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent><SelectItem value="json">JSON</SelectItem><SelectItem value="text">Text</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Test prompt</Label>
+                    <Input className="h-8 text-xs" disabled={isExampleTesting} value={examplePrompt} onChange={(event) => setExamplePrompt(event.target.value)} />
+                  </div>
+                </div>
+
+                {exampleNeedsResultData && (
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Trigger result data</Label>
+                    <Textarea className="min-h-[170px] font-mono text-[10px]" disabled={isExampleTesting} value={exampleInput} onChange={(event) => setExampleInput(event.target.value)} />
+                  </div>
+                )}
+
+                {exampleNeedsDocument && (
+                  <div className="space-y-2 rounded-lg border bg-background/60 p-2.5">
+                    <div>
+                      <Label className="text-[10px]">Trigger document input</Label>
+                      <p className="text-[9px] leading-relaxed text-muted-foreground">Upload a text-based file/selectable PDF or paste source text for this example.</p>
+                    </div>
+                    <Input type="file" className="h-8 text-[10px]" disabled={isExampleTesting} accept=".txt,.md,.markdown,.csv,.json,.jsonl,.xml,.html,.yaml,.yml,.pdf,text/*,application/pdf" onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void handleExampleDocumentUpload(file);
+                      event.target.value = "";
+                    }} />
+                    <Textarea className="min-h-[100px] text-[10px]" disabled={isExampleTesting} value={exampleDocumentText} onChange={(event) => setExampleDocumentText(event.target.value)} placeholder="Paste source document text" />
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+                  {isExampleTesting ? (
+                    <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => exampleAbortRef.current?.abort()}><CircleStop className="h-3.5 w-3.5" /> Stop</Button>
+                  ) : (
+                    <>
+                      <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => void runNodeExampleTest()}><Play className="h-3.5 w-3.5" /> Run full example</Button>
+                      <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" disabled={!exampleSelectedNodeId} onClick={() => void runNodeExampleTest(exampleSelectedNodeId ?? undefined)}><FlaskConical className="h-3.5 w-3.5" /> Run to selected</Button>
+                    </>
+                  )}
+                </div>
+
+                {exampleWaiting && (
+                  <div className="space-y-2 rounded-xl border bg-background p-3 shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <Send className="h-3.5 w-3.5 text-fuchsia-600" />
+                      <div>
+                        <p className="text-xs font-semibold">Chat interaction simulation</p>
+                        <p className="text-[9px] text-muted-foreground">The Ask User node paused the workflow. Reply below to continue the example.</p>
+                      </div>
+                    </div>
+                    <div className="space-y-2 rounded-lg bg-muted/40 p-2.5">
+                      <div className="max-w-[90%] rounded-xl rounded-bl-sm bg-background px-3 py-2 text-[11px] leading-relaxed shadow-sm">
+                        <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Workflow asks</p>
+                        <p>{exampleWaiting.question}</p>
+                        {exampleWaiting.options?.length ? <p className="mt-1 text-[9px] text-muted-foreground">Options: {exampleWaiting.options.join(", ")}</p> : null}
+                      </div>
+                      {exampleReply.trim() && (
+                        <div className="ml-auto max-w-[85%] rounded-xl rounded-br-sm bg-primary px-3 py-2 text-[11px] leading-relaxed text-primary-foreground shadow-sm">
+                          <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide opacity-80">User reply</p>
+                          <p>{exampleReply}</p>
+                        </div>
+                      )}
+                    </div>
+                    {exampleWaiting.inputType === "yes_no" ? (
+                      <div className="flex flex-wrap gap-2">
+                        {["yes", "no"].map((answer) => (
+                          <Button key={answer} type="button" size="sm" variant={exampleReply === answer ? "secondary" : "outline"} className="h-7 text-[10px] capitalize" disabled={isExampleTesting} onClick={() => setExampleReply(answer)}>{answer}</Button>
+                        ))}
+                      </div>
+                    ) : exampleWaiting.inputType === "select" && exampleWaiting.options?.length ? (
+                      <div className="flex flex-wrap gap-2">
+                        {exampleWaiting.options.map((option) => (
+                          <Button key={option} type="button" size="sm" variant={exampleReply === option ? "secondary" : "outline"} className="h-7 text-[10px]" disabled={isExampleTesting} onClick={() => setExampleReply(option)}>{option}</Button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="h-8 text-xs"
+                        disabled={isExampleTesting}
+                        value={exampleReply}
+                        onChange={(event) => setExampleReply(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey && exampleReply.trim()) {
+                            event.preventDefault();
+                            void runNodeExampleTest(undefined, exampleWaiting, exampleReply.trim());
+                          }
+                        }}
+                        placeholder={exampleWaiting.inputType === "yes_no" ? "Type yes or no" : "Type the user's reply"}
+                      />
+                      <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={isExampleTesting || !exampleReply.trim()} onClick={() => void runNodeExampleTest(undefined, exampleWaiting, exampleReply.trim())}>
+                        <Send className="h-3.5 w-3.5" /> Send reply
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {(exampleStopReason || exampleError) && (
+                  <div className={`rounded-lg border p-2.5 text-[10px] leading-relaxed ${exampleError ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"}`}>
+                    <p className="font-semibold">{exampleError ? "Execution stopped" : "Run result"}</p>
+                    <p>{exampleError || exampleStopReason}</p>
+                  </div>
+                )}
+              </div>
+            </aside>
+
+            <main className="relative min-h-0 bg-muted/10">
+              <ReactFlow
+                nodes={exampleCanvasNodes}
+                edges={exampleCanvasEdges}
+                nodeTypes={nodeTypes as never}
+                onNodeClick={(_, node) => setExampleSelectedNodeId(node.id)}
+                onPaneClick={() => setExampleSelectedNodeId(null)}
+                nodesDraggable={false}
+                nodesConnectable={false}
+                elementsSelectable
+                connectionMode={ConnectionMode.Loose}
+                defaultEdgeOptions={{ type: "smoothstep", markerEnd: EDGE_MARKER, style: EDGE_STYLE }}
+                fitView
+                fitViewOptions={{ padding: 0.25 }}
+                proOptions={{ hideAttribution: true }}
+                className="bg-muted/10"
+              >
+                <Background gap={20} size={1} color="hsl(var(--border))" />
+                <Controls showInteractive={false} className="!m-3 !overflow-hidden !rounded-lg !border !border-border !bg-background/90 !shadow-sm" />
+                <MiniMap
+                  nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+                  maskColor="hsl(var(--background) / 0.65)"
+                  className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
+                />
+              </ReactFlow>
+            </main>
+
+            <aside className="flex min-h-0 flex-col border-l bg-background">
+              <div className="border-b p-3">
+                <p className="text-xs font-semibold">Example output</p>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Select a node to inspect its latest test input and output.</p>
+              </div>
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+                {exampleExecutionOrder.length > 0 && (
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Execution path</Label>
+                    {exampleExecutionOrder.map((nodeId) => exampleNodes.find((node) => node.id === nodeId)).filter((node): node is Node => Boolean(node)).map((node) => {
+                      const run = exampleRuns[node.id];
+                      return <button type="button" key={node.id} onClick={() => setExampleSelectedNodeId(node.id)} className="flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left hover:bg-muted">
+                        {run.status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-500" /> : run.status === "error" ? <XCircle className="h-3.5 w-3.5 text-destructive" /> : <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}
+                        <span className="min-w-0 flex-1 truncate text-[10px] font-medium">{String(node.data.label || node.id)}</span>
+                        {run.durationMs !== undefined && <span className="text-[9px] text-muted-foreground">{run.durationMs} ms</span>}
+                      </button>;
+                    })}
+                  </div>
+                )}
+
+                {exampleSelectedNode ? (
+                  <div className="space-y-2 border-t pt-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold">{String(exampleSelectedNode.data.label || exampleSelectedNode.id)}</p>
+                        <p className="text-[9px] uppercase tracking-wide text-muted-foreground">{exampleSelectedNode.type}</p>
+                      </div>
+                      {exampleRuns[exampleSelectedNode.id] && <Badge variant="outline" className={`text-[9px] ${exampleRuns[exampleSelectedNode.id].status === "error" ? "border-destructive/40 text-destructive" : exampleRuns[exampleSelectedNode.id].status === "running" ? "border-sky-500/40 text-sky-600" : "border-emerald-500/40 text-emerald-600"}`}>{exampleRuns[exampleSelectedNode.id].status}</Badge>}
+                    </div>
+                    <details open className="rounded-lg border bg-muted/20">
+                      <summary className="cursor-pointer px-2.5 py-2 text-[10px] font-semibold">Node settings</summary>
+                      <div className="space-y-2 border-t p-2.5 text-[10px]">
+                        <div className="grid grid-cols-[76px_1fr] gap-1.5">
+                          <span className="text-muted-foreground">Node ID</span><span className="font-mono break-all">{exampleSelectedNode.id}</span>
+                          <span className="text-muted-foreground">Type</span><span className="font-mono">{exampleSelectedNode.type}</span>
+                          <span className="text-muted-foreground">Position</span><span className="font-mono">x {Math.round(exampleSelectedNode.position.x)}, y {Math.round(exampleSelectedNode.position.y)}</span>
+                        </div>
+                        <pre className="max-h-64 overflow-auto rounded-md border bg-background p-2 whitespace-pre-wrap break-words font-mono text-[9px] text-muted-foreground">{debugJson(exampleSelectedNode.data)}</pre>
+                      </div>
+                    </details>
+                    {exampleRuns[exampleSelectedNode.id] ? (
+                      <>
+                        <details open className="rounded-lg border bg-muted/20">
+                          <summary className="cursor-pointer px-2.5 py-2 text-[10px] font-semibold">Input received</summary>
+                          <pre className="max-h-48 overflow-auto border-t p-2.5 whitespace-pre-wrap break-words font-mono text-[9px] text-muted-foreground">{debugJson(exampleRuns[exampleSelectedNode.id].input)}</pre>
+                        </details>
+                        <details open className="rounded-lg border bg-muted/20">
+                          <summary className="cursor-pointer px-2.5 py-2 text-[10px] font-semibold">Output produced</summary>
+                          <pre className="max-h-56 overflow-auto border-t p-2.5 whitespace-pre-wrap break-words font-mono text-[9px] text-muted-foreground">{debugJson(exampleRuns[exampleSelectedNode.id].output)}</pre>
+                        </details>
+                        {exampleRuns[exampleSelectedNode.id].error && <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-2.5 text-[10px] text-destructive">{exampleRuns[exampleSelectedNode.id].error}</p>}
+                      </>
+                    ) : (
+                      <p className="rounded-lg border border-dashed p-3 text-[10px] leading-relaxed text-muted-foreground">Run the full example or run to this selected node to see real input/output data here.</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="rounded-lg border border-dashed p-3 text-[10px] leading-relaxed text-muted-foreground">Select a node in the example canvas to inspect its test data.</p>
+                )}
+              </div>
+            </aside>
+          </div>
+        </div>
+      )}
+
       {showWorkflowGenerator && (
         <div className="absolute left-[202px] top-[60px] z-50 flex max-h-[calc(100%_-_72px)] w-[470px] flex-col overflow-hidden rounded-xl border bg-background shadow-2xl">
           <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-2">
@@ -4161,18 +4817,39 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           </div>
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">
             {NODE_LIBRARY.map(({ type, icon: Icon, label, description, color, iconBg }) => (
-              <button
+              <div
                 key={type}
-                type="button"
+                role="button"
+                tabIndex={0}
                 draggable
                 onDragStart={(event) => onPaletteDragStart(event, type)}
                 onClick={() => addNode(type)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    addNode(type);
+                  }
+                }}
                 className="group flex w-full cursor-grab items-center gap-2 rounded-lg border bg-background p-2 text-left shadow-sm transition-all hover:border-primary/40 hover:shadow active:cursor-grabbing"
               >
                 <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${iconBg}`}><Icon className={`h-4 w-4 ${color}`} /></span>
                 <span className="min-w-0 flex-1"><span className="block text-xs font-semibold">{label}</span><span className="block truncate text-[9px] text-muted-foreground">{description}</span></span>
+                <button
+                  type="button"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-transparent text-muted-foreground opacity-80 transition-colors hover:border-primary/30 hover:bg-primary/10 hover:text-primary group-hover:opacity-100"
+                  title={`Show ${label} example`}
+                  aria-label={`Show ${label} example`}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openNodeUsageExample(type);
+                  }}
+                >
+                  <BookOpen className="h-3.5 w-3.5" />
+                </button>
                 <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 group-hover:text-muted-foreground" />
-              </button>
+              </div>
             ))}
             <div className="rounded-lg border border-dashed bg-background/50 p-2.5 text-[10px] leading-relaxed text-muted-foreground">
               Connect nodes by dragging between their circular ports. Select any node to configure it.
