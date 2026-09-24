@@ -875,7 +875,7 @@ const ChatDrawer = ({
   );
   // Local doc text overrides prop when the user uploads a file directly from the chatbox
   const [localDocText, setLocalDocText] = useState<string | null>(null);
-  const [localAttachment, setLocalAttachment] = useState<LlmAttachment | null>(null);
+  const [localAttachments, setLocalAttachments] = useState<LlmAttachment[]>([]);
   const [localAttachmentSource, setLocalAttachmentSource] = useState<"gateway" | "chat" | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [showDocPopover, setShowDocPopover] = useState(false);
@@ -908,18 +908,18 @@ const ChatDrawer = ({
 
   // In-chat upload overrides prop doc text
   const docText = localDocText ?? propDocText ?? null;
-  const hasDocument = Boolean(docText || localAttachment);
+  const hasDocument = Boolean(docText || localAttachments.length > 0);
 
   useEffect(() => {
     const stored = loadSourceDocuments(processSessionId);
-    const restored = stored[0] ? {
-      name: stored[0].name,
-      mimeType: stored[0].mimeType,
-      size: stored[0].size,
-      base64: stored[0].base64,
-    } : null;
-    setLocalAttachment(restored);
-    setLocalAttachmentSource(restored ? "gateway" : null);
+    const restored = stored.map((item) => ({
+      name: item.name,
+      mimeType: item.mimeType,
+      size: item.size,
+      base64: item.base64,
+    }));
+    setLocalAttachments(restored);
+    setLocalAttachmentSource(restored.length > 0 ? "gateway" : null);
     setLocalDocText(null);
   }, [processSessionId]);
 
@@ -942,7 +942,7 @@ const ChatDrawer = ({
       // is processing metadata, not evidence from the document itself.
       let extracted = "";
       const attachment = await fileAsAttachment(file);
-      setLocalAttachment(attachment);
+      setLocalAttachments([attachment]);
       setLocalAttachmentSource("chat");
       setLocalDocText(null);
       if (processSessionId) await saveSourceDocuments(processSessionId, [file]);
@@ -1050,7 +1050,7 @@ const ChatDrawer = ({
     const requestsChatUpload = triggerSources.includes("user_upload");
     const requiresDocumentSource = triggerSources.includes("document") || requestsChatUpload || legacyWorkflowNeedsDocument;
     const hasResult = resultData !== null && resultData !== undefined;
-    const hasDoc = !!docText?.trim() || Boolean(localAttachment);
+    const hasDoc = !!docText?.trim() || localAttachments.length > 0;
     const needsDoc = requiresDocumentSource;
     const preflight: string[] = [];
     if (requiresResult && !hasResult) preflight.push("result data (load a dataset first)");
@@ -1158,7 +1158,7 @@ const ChatDrawer = ({
             void _dropped;
             return rest;
           })();
-          const attachedDocument = agentConfig.includeDocument && agentConfig.documentDelivery !== "text" ? localAttachment : null;
+          const attachedDocument = agentConfig.includeDocument && agentConfig.documentDelivery !== "text" ? localAttachments : [];
           // Send source text even when a native attachment is also present. The
           // attachment lets provider-native models inspect the original file;
           // docText gives the workflow's exact-evidence agent the same source
@@ -1201,7 +1201,8 @@ const ChatDrawer = ({
               skillIds,
               providerIds,
               agentProviders,
-              attachment: attachedDocument,
+              attachment: attachedDocument[0] ?? null,
+              attachments: attachedDocument,
             }),
           });
 
@@ -1386,7 +1387,7 @@ const ChatDrawer = ({
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, workflows, resultData, docText, localAttachment, organizationId, orgExecutionToken, onResultDataChange]);
+  }, [selectedWorkflow, workflows, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -1525,10 +1526,10 @@ const ChatDrawer = ({
             }
           }
         }
-        const attachmentForAgent = localAttachment && (
+        const attachmentsForAgent = localAttachments.length > 0 && (
           (localAttachmentSource === "chat" && includeChatUpload) ||
           (localAttachmentSource === "gateway" && includeGatewayUpload)
-        ) ? localAttachment : null;
+        ) ? localAttachments : [];
 
         const { data: sessionData } = await supabase.auth.getSession();
         const token = sessionData?.session?.access_token;
@@ -1543,7 +1544,8 @@ const ChatDrawer = ({
             signal: abortRef.current.signal,
             body: JSON.stringify({
               messages: historyForApi,
-              attachment: attachmentForAgent,
+              attachment: attachmentsForAgent[0] ?? null,
+              attachments: attachmentsForAgent,
               result: contextPayload,
               org_execution_token: orgExecutionToken || undefined,
               agentId,
@@ -1617,7 +1619,7 @@ const ChatDrawer = ({
         abortRef.current = null;
       }
     },
-    [messages, isStreaming, resultData, orgExecutionToken, getAuthHeaders, activeAgentId, agents, propDocText, localDocText, localAttachment, localAttachmentSource, isFreeChatMode]
+    [messages, isStreaming, resultData, orgExecutionToken, getAuthHeaders, activeAgentId, agents, propDocText, localDocText, localAttachments, localAttachmentSource, isFreeChatMode]
   );
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -2015,8 +2017,12 @@ const ChatDrawer = ({
                       </button>
                     </div>
                     <p className="text-muted-foreground mb-2">
-                      {localAttachment?.name ?? (localDocText ? "Uploaded in this session" : "Loaded from selection")}
-                      {localAttachment ? ` · ${Math.max(1, Math.round(localAttachment.size / 1024))} KB` : docText ? ` · ${Math.round(docText.length / 1024)} KB` : ""}
+                      {localAttachments.length > 0
+                        ? `${localAttachments.length} file${localAttachments.length === 1 ? "" : "s"}: ${localAttachments.map((item) => item.name).join(", ")}`
+                        : (localDocText ? "Uploaded in this session" : "Loaded from selection")}
+                      {localAttachments.length > 0
+                        ? ` · ${Math.max(1, Math.round(localAttachments.reduce((sum, item) => sum + item.size, 0) / 1024))} KB total`
+                        : docText ? ` · ${Math.round(docText.length / 1024)} KB` : ""}
                     </p>
                     <button
                       className="text-primary hover:underline text-xs"

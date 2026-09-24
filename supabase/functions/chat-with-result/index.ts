@@ -172,6 +172,8 @@ interface ChatRequest {
   agentProviders?: LlmProvider[];
   /** Original file bytes for provider-native document input. */
   attachment?: LlmAttachment;
+  /** Multiple original file bytes for provider-native document input. */
+  attachments?: LlmAttachment[];
 }
 
 interface ExecutionTokenPayload {
@@ -462,7 +464,7 @@ const callLlmOnce = async (
 async function* streamLlm(
   providers: LlmProvider[],
   messages: ChatMessage[],
-  attachment?: LlmAttachment,
+  attachments: LlmAttachment[] = [],
 ): AsyncGenerator<string> {
   const errors: string[] = [];
   for (const p of providers) {
@@ -476,17 +478,24 @@ async function* streamLlm(
       : `${baseUrl}/chat/completions`;
     try {
       if (family === "anthropic") {
-        const supportedText = attachment ? (/^(text\/|application\/(json|xml))/.test(attachment.mimeType) || /\.(txt|md|csv|json|xml|ya?ml|html?)$/i.test(attachment.name)) : false;
-        const isPdf = attachment ? (attachment.mimeType === "application/pdf" || /\.pdf$/i.test(attachment.name)) : false;
-        if (attachment && !supportedText && !isPdf) {
-          errors.push(`${p.name || model}: Anthropic does not accept ${attachment.name} as a document block; DOC/DOCX/XLS/XLSX require conversion`);
+        const unsupported = attachments.find((attachment) => {
+          const supportedText = /^(text\/|application\/(json|xml))/.test(attachment.mimeType) || /\.(txt|md|csv|json|xml|ya?ml|html?)$/i.test(attachment.name);
+          const isPdf = attachment.mimeType === "application/pdf" || /\.pdf$/i.test(attachment.name);
+          return !supportedText && !isPdf;
+        });
+        if (unsupported) {
+          errors.push(`${p.name || model}: Anthropic does not accept ${unsupported.name} as a document block; DOC/DOCX/XLS/XLSX require conversion`);
           continue;
         }
         const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
-        const source = attachment && isPdf
-          ? { type: "base64", media_type: "application/pdf", data: attachment.base64 }
-          : attachment ? { type: "text", media_type: "text/plain", data: new TextDecoder().decode(Uint8Array.from(atob(attachment.base64), (char) => char.charCodeAt(0))) } : null;
-        const content = [...(source ? [{ type: "document", source }] : []), { type: "text", text: conversationText(messages) || "Respond to the user." }];
+        const documentBlocks = attachments.map((attachment) => {
+          const isPdf = attachment.mimeType === "application/pdf" || /\.pdf$/i.test(attachment.name);
+          const source = isPdf
+            ? { type: "base64", media_type: "application/pdf", data: attachment.base64 }
+            : { type: "text", media_type: "text/plain", data: new TextDecoder().decode(Uint8Array.from(atob(attachment.base64), (char) => char.charCodeAt(0))) };
+          return { type: "document", source };
+        });
+        const content = [...documentBlocks, { type: "text", text: conversationText(messages) || "Respond to the user." }];
         const anthropicUrl = baseUrl.endsWith("/messages") ? baseUrl : `${baseUrl}/messages`;
         const resp = await fetch(anthropicUrl, {
           method: "POST",
@@ -505,7 +514,7 @@ async function* streamLlm(
         const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
         const resp = await fetch(geminiUrl, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts: [...(attachment ? [{ inlineData: { mimeType: attachment.mimeType, data: attachment.base64 } }] : []), { text: conversationText(messages) || "Respond to the user." }] }] }),
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts: [...attachments.map((attachment) => ({ inlineData: { mimeType: attachment.mimeType, data: attachment.base64 } })), { text: conversationText(messages) || "Respond to the user." }] }] }),
           signal: AbortSignal.timeout(90_000),
         });
         if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
@@ -514,12 +523,13 @@ async function* streamLlm(
         return;
       }
 
-      if (attachment && (family === "openai" || family === "openai_compatible")) {
+      if (attachments.length > 0 && (family === "openai" || family === "openai_compatible")) {
         const responsesUrl = baseUrl.endsWith("/responses") ? baseUrl : `${baseUrl}/responses`;
         const instructions = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+        const fileParts = attachments.map((attachment) => ({ type: "input_file", filename: attachment.name, file_data: `data:${attachment.mimeType};base64,${attachment.base64}` }));
         const resp = await fetch(responsesUrl, {
           method: "POST", headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
-          body: JSON.stringify({ model, instructions, stream: true, input: [{ role: "user", content: [{ type: "input_file", filename: attachment.name, file_data: `data:${attachment.mimeType};base64,${attachment.base64}` }, { type: "input_text", text: conversationText(messages) || "Analyze the attached document." }] }] }),
+          body: JSON.stringify({ model, instructions, stream: true, input: [{ role: "user", content: [...fileParts, { type: "input_text", text: conversationText(messages) || "Analyze the attached documents." }] }] }),
           signal: AbortSignal.timeout(90_000),
         });
         if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
@@ -1030,15 +1040,20 @@ serve(async (req: Request) => {
   } catch {
     return sendError("Invalid JSON body");
   }
-  if (body.attachment) {
-    const attachment = body.attachment;
+  const attachments = Array.isArray(body.attachments) && body.attachments.length > 0
+    ? body.attachments
+    : body.attachment
+      ? [body.attachment]
+      : [];
+  if (attachments.length > 10) return sendError("Document attachments are limited to 10 files", 413);
+  for (const attachment of attachments) {
     const allowedName = /\.(pdf|txt|md|markdown|csv|json|jsonl|xml|html?|ya?ml|doc|docx|xls|xlsx)$/i.test(attachment.name || "");
     const estimatedBytes = Math.floor((attachment.base64?.length ?? 0) * 0.75);
     if (!allowedName || !attachment.base64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(attachment.base64)) {
       return sendError("Unsupported or invalid document attachment", 400);
     }
     if (attachment.name.length > 255 || estimatedBytes > 10 * 1024 * 1024 || attachment.size > 10 * 1024 * 1024) {
-      return sendError("Document attachments are limited to 10 MB", 413);
+      return sendError("Document attachments are limited to 10 MB each", 413);
     }
   }
 
@@ -1095,8 +1110,8 @@ serve(async (req: Request) => {
       )
     : [];
   const skillBlock = selectedSkills.length > 0
-    ? body.attachment
-      ? `\n## Assigned Agent Skills\nA native document attachment is present, so the assigned playbooks are provided directly. Apply every relevant playbook to the attached file.\n\n${selectedSkills.map(formatAgentSkill).join("\n\n---\n\n")}`
+    ? attachments.length > 0
+      ? `\n## Assigned Agent Skills\nNative document attachments are present, so the assigned playbooks are provided directly. Apply every relevant playbook to the attached file(s).\n\n${selectedSkills.map(formatAgentSkill).join("\n\n---\n\n")}`
       : `\n## Available Agent Skills\nThe following reusable playbooks are available. When one matches the request, call activate_agent_skill before answering. You initially see metadata only; activation loads its full procedure and references. Skills do not grant tool permissions. If several skills activate, the most recently activated skill controls the final output type.\n${selectedSkills.map((skill) => `- ${skill.id}: ${skill.name || "Agent Skill"} — ${skill.description || ""} (output: ${skill.outputType || "text"})`).join("\n")}`
     : null;
 
@@ -1350,7 +1365,7 @@ serve(async (req: Request) => {
         // Without MCP tools, stream once. The previous implementation first made
         // a discarded non-streaming call and then repeated it as a stream.
         if (allTools.length === 0) {
-          for await (const token of streamLlm(providers, loopMessages, body.attachment)) {
+          for await (const token of streamLlm(providers, loopMessages, attachments)) {
             send({ type: "token", content: token });
           }
           completed = true;
@@ -1367,8 +1382,8 @@ serve(async (req: Request) => {
 
           // No tool calls — final text response, stream it
           if (!message.tool_calls || message.tool_calls.length === 0) {
-            if (body.attachment) {
-              for await (const token of streamLlm(providers, loopMessages, body.attachment)) {
+            if (attachments.length > 0) {
+              for await (const token of streamLlm(providers, loopMessages, attachments)) {
                 send({ type: "token", content: token });
               }
             } else {
