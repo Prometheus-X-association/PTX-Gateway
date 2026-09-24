@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink } from "lucide-react";
+import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink, GripVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -760,10 +760,10 @@ const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; output
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
       <div
-        className={`${hasRichContent && !isUser ? "w-full max-w-full" : "max-w-[88%]"} rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+        className={`${hasRichContent && !isUser ? "w-full max-w-full" : "max-w-[88%]"} rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm ${
           isUser
             ? "bg-primary text-primary-foreground rounded-tr-sm"
-            : "bg-muted text-foreground rounded-tl-sm"
+            : "border border-border bg-background text-foreground rounded-tl-sm"
         }`}
       >
         {msg.toolEvents && msg.toolEvents.length > 0 && (
@@ -890,6 +890,9 @@ const ChatDrawer = ({
     knownTotal: number;  // total items in loop (0 = unknown)
     errors: number;
   } | null>(null);
+  const [chatPanelSize, setChatPanelSize] = useState({ width: 400, height: 520 });
+  const [isResizingChatPanel, setIsResizingChatPanel] = useState(false);
+  const chatPanelResizeOrigin = useRef({ pointerX: 0, pointerY: 0, width: 400, height: 520 });
   // Collects full step results so we can extract partial output on Stop
   const partialResultsRef = useRef<import("@/types/workflow").WorkflowStepResult[]>([]);
   const activeWorkflows = workflows.filter((w) => w.enabled);
@@ -1396,6 +1399,34 @@ const ChatDrawer = ({
 
   // Flat fallback when no agents have prompts
   const fallbackPrompts = FALLBACK_PROMPTS;
+
+  useEffect(() => {
+    if (!isResizingChatPanel) return;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "nwse-resize";
+    document.body.style.userSelect = "none";
+
+    const resize = (event: PointerEvent) => {
+      const deltaX = chatPanelResizeOrigin.current.pointerX - event.clientX;
+      const deltaY = chatPanelResizeOrigin.current.pointerY - event.clientY;
+      const maxWidth = Math.max(360, window.innerWidth - 48);
+      const maxHeight = Math.max(360, window.innerHeight - 48);
+      setChatPanelSize({
+        width: Math.min(maxWidth, Math.max(360, chatPanelResizeOrigin.current.width + deltaX)),
+        height: Math.min(maxHeight, Math.max(360, chatPanelResizeOrigin.current.height + deltaY)),
+      });
+    };
+    const stop = () => setIsResizingChatPanel(false);
+    window.addEventListener("pointermove", resize);
+    window.addEventListener("pointerup", stop, { once: true });
+    return () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", resize);
+      window.removeEventListener("pointerup", stop);
+    };
+  }, [isResizingChatPanel]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -2140,12 +2171,26 @@ const ChatDrawer = ({
         {panel}
       </div>
 
-      {/* Desktop: floating bottom-right panel, 50vh height */}
+      {/* Desktop: floating bottom-right panel with a top-left resize handle */}
       <div
-        className="hidden lg:flex fixed bottom-5 right-4 w-[400px] flex-col rounded-2xl border border-border shadow-2xl overflow-hidden"
-        style={{ zIndex: 9999, height: "50vh" }}
+        className="hidden lg:flex fixed bottom-5 right-4 flex-col rounded-2xl border border-border bg-background shadow-2xl overflow-hidden"
+        style={{ zIndex: 9999, width: chatPanelSize.width, height: chatPanelSize.height }}
         onClick={(e) => e.stopPropagation()}
       >
+        <button
+          type="button"
+          aria-label="Resize chatbox"
+          title="Drag to resize chatbox"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            chatPanelResizeOrigin.current = { pointerX: event.clientX, pointerY: event.clientY, width: chatPanelSize.width, height: chatPanelSize.height };
+            setIsResizingChatPanel(true);
+          }}
+          className="absolute left-0 top-0 z-20 flex h-7 w-7 cursor-nwse-resize items-center justify-center rounded-br-xl border-b border-r border-border bg-background/95 text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground"
+        >
+          <GripVertical className="h-3.5 w-3.5 rotate-45" />
+        </button>
         {panel}
       </div>
     </>
