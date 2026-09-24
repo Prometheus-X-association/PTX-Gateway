@@ -12,7 +12,7 @@ import {
   Bot, Square, ChevronRight, ChevronUp, ChevronDown, BookOpen, RotateCcw, GripVertical, Workflow, Settings2, Link2, Maximize2, Minimize2,
   FlaskConical, Loader2, CircleStop, CheckCircle2, XCircle,
   Globe2, Send, KeyRound, FileText,
-  Sparkles, Search,
+  Sparkles, Search, Download, Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -3210,6 +3210,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [workflowSystemPrompt, setWorkflowSystemPrompt] = useState(WORKFLOW_GENERATION_SYSTEM_PROMPT);
   const [isGeneratingWorkflow, setIsGeneratingWorkflow] = useState(false);
   const [workflowGenerationError, setWorkflowGenerationError] = useState<string | null>(null);
+  const [workflowImportStatus, setWorkflowImportStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [propertiesWidth, setPropertiesWidth] = useState(320);
   const [isResizingProperties, setIsResizingProperties] = useState(false);
@@ -3227,6 +3228,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const propertiesResizeOrigin = useRef({ pointerX: 0, width: 320 });
   const testAbortRef = useRef<AbortController | null>(null);
   const exampleAbortRef = useRef<AbortController | null>(null);
+  const workflowImportInputRef = useRef<HTMLInputElement>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) as WorkflowNode | undefined;
@@ -3655,6 +3657,134 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     } finally {
       setIsExampleTesting(false);
       exampleAbortRef.current = null;
+    }
+  };
+
+  const sanitizeWorkflowForExport = (workflowToExport: AgentWorkflow): AgentWorkflow => {
+    const clone = JSON.parse(JSON.stringify(workflowToExport)) as AgentWorkflow;
+    clone.nodes = clone.nodes.map((node) => {
+      const data = { ...(node.data as Record<string, unknown>) };
+      if (node.type === "api") {
+        Object.assign(data, {
+          bearerToken: "",
+          basicPassword: "",
+          apiKeyValue: "",
+          hasStoredCredentials: false,
+        });
+        const scrubKeyValues = (items: unknown) => Array.isArray(items)
+          ? items.map((item) => {
+              const entry = item && typeof item === "object" ? item as ApiKeyValue : null;
+              if (!entry) return item;
+              return /authorization|api[-_ ]?key|token|secret|password/i.test(entry.key)
+                ? { ...entry, value: "" }
+                : entry;
+            })
+          : items;
+        data.headers = scrubKeyValues(data.headers);
+        data.queryParams = scrubKeyValues(data.queryParams);
+      }
+      if (node.type === "agent" && Array.isArray(data.agentProviders)) {
+        data.agentProviders = (data.agentProviders as Array<Record<string, unknown>>).map((provider) => ({ ...provider, apiKey: "" }));
+      }
+      return { ...node, data } as WorkflowNode;
+    });
+    return clone;
+  };
+
+  const downloadWorkflowJson = () => {
+    const exportPayload = {
+      format: "ptx-agent-workflow",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      workflowId,
+      note: "Sensitive credential values are intentionally removed. Review agent/provider/API mappings after importing into another organization.",
+      workflow: sanitizeWorkflowForExport({ nodes: nodes as WorkflowNode[], edges: edges as WorkflowEdge[] }),
+    };
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `agentic-workflow-${workflowId || "export"}-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setWorkflowImportStatus({ type: "success", message: "Workflow JSON downloaded. Sensitive credential values were removed from the export." });
+  };
+
+  const parseImportedWorkflow = (raw: unknown): AgentWorkflow => {
+    const candidate = raw && typeof raw === "object" && "workflow" in raw
+      ? (raw as { workflow?: unknown }).workflow
+      : raw;
+    if (!candidate || typeof candidate !== "object") throw new Error("JSON must contain a workflow object.");
+    const imported = candidate as { nodes?: unknown; edges?: unknown };
+    if (!Array.isArray(imported.nodes)) throw new Error("Workflow JSON must include a nodes array.");
+    if (!Array.isArray(imported.edges)) throw new Error("Workflow JSON must include an edges array.");
+
+    const supportedTypes = new Set(NODE_LIBRARY.map((item) => item.type));
+    const seen = new Set<string>();
+    const importedNodes = imported.nodes.map((item, index) => {
+      const node = item && typeof item === "object" ? item as Partial<WorkflowNode> : null;
+      const id = typeof node?.id === "string" ? node.id.trim() : "";
+      const type = typeof node?.type === "string" ? node.type : "";
+      if (!id) throw new Error(`Node ${index + 1} is missing an id.`);
+      if (seen.has(id)) throw new Error(`Duplicate node id: ${id}`);
+      if (!supportedTypes.has(type)) throw new Error(`Unsupported node type for ${id}: ${type || "missing"}`);
+      seen.add(id);
+      const position = node?.position && typeof node.position === "object" ? node.position as { x?: unknown; y?: unknown } : {};
+      return {
+        ...node,
+        id,
+        type,
+        position: {
+          x: typeof position.x === "number" && Number.isFinite(position.x) ? position.x : 120 + index * 40,
+          y: typeof position.y === "number" && Number.isFinite(position.y) ? position.y : 80 + index * 100,
+        },
+        data: node?.data && typeof node.data === "object" ? node.data : { label: type },
+      } as WorkflowNode;
+    });
+
+    const importedEdges = imported.edges.map((item, index) => {
+      const edge = item && typeof item === "object" ? item as Partial<WorkflowEdge> : null;
+      const source = typeof edge?.source === "string" ? edge.source : "";
+      const target = typeof edge?.target === "string" ? edge.target : "";
+      if (!source || !seen.has(source)) throw new Error(`Edge ${index + 1} references an unknown source node: ${source || "missing"}`);
+      if (!target || !seen.has(target)) throw new Error(`Edge ${index + 1} references an unknown target node: ${target || "missing"}`);
+      return {
+        ...edge,
+        id: typeof edge?.id === "string" && edge.id.trim() ? edge.id : `import-edge-${index + 1}`,
+        source,
+        target,
+        markerEnd: EDGE_MARKER,
+        style: EDGE_STYLE,
+      } as WorkflowEdge;
+    });
+
+    if (!importedNodes.some((node) => node.type === "trigger")) throw new Error("Imported workflow must contain at least one trigger node.");
+    if (!importedNodes.some((node) => node.type === "output")) throw new Error("Imported workflow must contain at least one output node.");
+    return { nodes: importedNodes, edges: importedEdges };
+  };
+
+  const handleWorkflowJsonUpload = async (file: File) => {
+    setWorkflowImportStatus(null);
+    try {
+      const raw = JSON.parse(await file.text()) as unknown;
+      const imported = parseImportedWorkflow(raw);
+      const nextNodes = imported.nodes as Node[];
+      const nextEdges = normalizeEdgeHandles(nextNodes, imported.edges as Edge[]);
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      commit(nextNodes, nextEdges);
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+      setTestRuns({});
+      setTestExecutionOrder([]);
+      setWorkflowImportStatus({
+        type: "success",
+        message: `Imported ${nextNodes.length} nodes and ${nextEdges.length} connections. Review org-specific agents, skills, providers, MCP tools, and credentials before running.`,
+      });
+    } catch (error) {
+      setWorkflowImportStatus({ type: "error", message: error instanceof Error ? error.message : String(error) });
     }
   };
 
@@ -4285,6 +4415,23 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           >
             <FlaskConical className="h-3.5 w-3.5" /> Test workflow
           </Button>
+          <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={downloadWorkflowJson}>
+            <Download className="h-3.5 w-3.5" /> Download JSON
+          </Button>
+          <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => workflowImportInputRef.current?.click()}>
+            <Upload className="h-3.5 w-3.5" /> Upload JSON
+          </Button>
+          <input
+            ref={workflowImportInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void handleWorkflowJsonUpload(file);
+              event.target.value = "";
+            }}
+          />
           {(selectedNodeId || selectedEdgeId) && (
             <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-xs text-destructive hover:text-destructive" onClick={deleteSelected}>
               <Trash2 className="h-3.5 w-3.5" /> Delete {selectedEdgeId ? "connection" : "selected"}
@@ -4328,6 +4475,16 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           </Button>
         </div>
       </div>
+
+      {workflowImportStatus && (
+        <div className={`absolute right-4 top-14 z-50 max-w-md rounded-lg border px-3 py-2 text-[10px] leading-relaxed shadow-lg ${workflowImportStatus.type === "error" ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"}`}>
+          <div className="flex items-start gap-2">
+            {workflowImportStatus.type === "error" ? <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+            <p className="flex-1">{workflowImportStatus.message}</p>
+            <button type="button" onClick={() => setWorkflowImportStatus(null)} className="text-current opacity-70 hover:opacity-100"><X className="h-3 w-3" /></button>
+          </div>
+        </div>
+      )}
 
       {nodeExample && (
         <div className="fixed inset-4 z-[140] flex flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl">
