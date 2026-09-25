@@ -242,6 +242,8 @@ const ProcessingView = ({
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [canRetryPendingAvailability, setCanRetryPendingAvailability] = useState(false);
   const executionInFlightRef = useRef(false);
+  const executionVersionRef = useRef(0);
+  const executionAbortControllerRef = useRef<AbortController | null>(null);
   const pendingTransitionDelayMs = Math.round(pendingWaitSeconds) * 1000 || DEFAULT_PENDING_TRANSITION_DELAY_MS;
 
   const probeResultAvailability = useCallback(async (): Promise<boolean> => {
@@ -265,6 +267,7 @@ const ProcessingView = ({
       const fetchOptions: RequestInit = {
         method: "POST",
         headers: proxyHeaders,
+        signal: executionAbortControllerRef.current?.signal,
       };
 
       if (resultUrlInfo.method === "POST") {
@@ -286,7 +289,7 @@ const ProcessingView = ({
   }, [resultUrlInfo]);
 
   const runPendingAvailabilityWindow = useCallback(
-    async (pollIntervalMs: number): Promise<boolean> => {
+    async (pollIntervalMs: number, executionVersion: number): Promise<boolean> => {
       setHasError(false);
       setErrorResponse(null);
       setCurrentStep(4);
@@ -303,6 +306,7 @@ const ProcessingView = ({
       let resultReady = false;
 
       while (Date.now() - startedAt < pendingTransitionDelayMs) {
+        if (executionVersion !== executionVersionRef.current) return false;
         setProgress((prev) => Math.min(prev + 1, 97));
         resultReady = await probeResultAvailability();
         if (resultReady) break;
@@ -320,6 +324,10 @@ const ProcessingView = ({
       return;
     }
     executionInFlightRef.current = true;
+    const executionVersion = executionVersionRef.current;
+    const isExecutionCancelled = () => executionVersion !== executionVersionRef.current;
+    const abortController = new AbortController();
+    executionAbortControllerRef.current = abortController;
 
     try {
       setIsExecuting(true);
@@ -427,6 +435,7 @@ const ProcessingView = ({
 
       const { data, error } = await supabase.functions.invoke("pdc-execute", {
         headers: invokeHeaders,
+        signal: abortController.signal,
         body: {
           org_execution_token: pdcConfig.orgExecutionToken || undefined,
           payload: pdcPayload,
@@ -436,6 +445,8 @@ const ProcessingView = ({
 
       clearInterval(progressInterval);
       clearInterval(stepInterval);
+
+      if (isExecutionCancelled()) return;
 
       if (error) {
         console.error("PDC execution error:", error);
@@ -490,7 +501,9 @@ const ProcessingView = ({
         // - keep progress below 100
         // - notify user
         // - wait up to configured window while polling result URL every 10s
-        const resultReady = await runPendingAvailabilityWindow(INITIAL_PENDING_POLL_INTERVAL_MS);
+        const resultReady = await runPendingAvailabilityWindow(INITIAL_PENDING_POLL_INTERVAL_MS, executionVersion);
+
+        if (isExecutionCancelled()) return;
 
         if (resultReady) {
           setProgress(100);
@@ -562,6 +575,9 @@ const ProcessingView = ({
       onError(err);
     }
     } finally {
+      if (executionAbortControllerRef.current === abortController) {
+        executionAbortControllerRef.current = null;
+      }
       executionInFlightRef.current = false;
       setIsExecuting(false);
     }
@@ -594,6 +610,7 @@ const ProcessingView = ({
     setIsExecuting(true);
     const executionKey = getPayloadExecutionKey(pdcPayload);
     const thisTabId = getOrCreateTabId();
+    const executionVersion = executionVersionRef.current;
 
     if (executionKey) {
       writeExecutionRecord(executionKey, {
@@ -603,7 +620,9 @@ const ProcessingView = ({
       });
     }
 
-    const resultReady = await runPendingAvailabilityWindow(RETRY_PENDING_POLL_INTERVAL_MS);
+    const resultReady = await runPendingAvailabilityWindow(RETRY_PENDING_POLL_INTERVAL_MS, executionVersion);
+
+    if (executionVersion !== executionVersionRef.current) return;
 
     if (resultReady) {
       setCanRetryPendingAvailability(false);
@@ -641,6 +660,19 @@ const ProcessingView = ({
     }
     setIsExecuting(false);
     onError({ message: `Pending result not available after retry availability check (${waitSeconds} seconds)` });
+  };
+
+  const handleForceStop = () => {
+    if (!onBack) return;
+
+    executionVersionRef.current += 1;
+    executionAbortControllerRef.current?.abort();
+    const executionKey = getPayloadExecutionKey(pdcPayload);
+    const executionRecord = readExecutionRecord(executionKey);
+    if (executionRecord?.status === "running" && executionRecord.ownerTabId === getOrCreateTabId()) {
+      localStorage.removeItem(getExecutionStorageKey(executionKey));
+    }
+    onBack();
   };
 
   const handleContinueWithDummyResult = () => {
@@ -737,6 +769,17 @@ const ProcessingView = ({
         </div>
       </div>
 
+      {onBack && pendingMessage && !hasError && (
+        <div className="flex justify-end mb-6 sm:mb-8">
+          <button
+            onClick={handleForceStop}
+            className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-s)]"
+          >
+            Stop and go back
+          </button>
+        </div>
+      )}
+
       {/* Error Response Display */}
       {hasError && errorResponse && (
         <div className="glass-card p-4 sm:p-6">
@@ -753,9 +796,8 @@ const ProcessingView = ({
             <div className="flex items-center gap-2">
               {onBack && (
                 <button
-                  onClick={onBack}
-                  disabled={isExecuting}
-                  className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-s)] disabled:opacity-60 disabled:cursor-not-allowed"
+                  onClick={handleForceStop}
+                  className="theme-button subtle px-3 py-1.5 text-[length:var(--theme-font-size-s)]"
                 >
                   Back
                 </button>
