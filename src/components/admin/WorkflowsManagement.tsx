@@ -54,9 +54,9 @@ const emptyWorkflow = (): WorkflowConfig => ({
 const NodePill = ({ type, label }: { type: string; label: string }) => {
   const Icon = NODE_ICONS[type];
   return (
-    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${NODE_TYPE_COLORS[type] ?? ""}`}>
-      {Icon && <Icon className="h-2.5 w-2.5" />}
-      {label}
+    <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${NODE_TYPE_COLORS[type] ?? ""}`} title={label}>
+      {Icon && <Icon className="h-2.5 w-2.5 shrink-0" />}
+      <span className="min-w-0 truncate">{label}</span>
     </span>
   );
 };
@@ -178,15 +178,18 @@ const WorkflowRow = ({
         </div>
 
         {/* Node pills */}
-        <div className="flex flex-wrap gap-1">
+        <div
+          className="flex max-h-[46px] flex-wrap content-start gap-1 overflow-hidden"
+          title={config.graph.nodes.map((n) => (n.data as { label?: string }).label ?? n.type).join(" → ")}
+        >
           {nodeCount === 0
             ? <span className="text-[10px] text-muted-foreground italic">empty</span>
-            : config.graph.nodes.slice(0, 4).map((n) => (
+            : config.graph.nodes.slice(0, 6).map((n) => (
                 <NodePill key={n.id} type={n.type} label={(n.data as { label?: string }).label ?? n.type} />
               ))
           }
-          {nodeCount > 4 && (
-            <span className="text-[10px] text-muted-foreground">+{nodeCount - 4}</span>
+          {nodeCount > 6 && (
+            <span className="shrink-0 text-[10px] text-muted-foreground">+{nodeCount - 6}</span>
           )}
         </div>
 

@@ -168,6 +168,17 @@ const normalizeEdgeHandles = (nodes: Node[], edges: Edge[]): Edge[] => edges.map
 });
 
 type TestNodeStatus = "running" | "success" | "error";
+type WorkflowPopupKey = "generator" | "test";
+type WorkflowPopupPosition = { x: number; y: number };
+interface WorkflowPopupDragState {
+  key: WorkflowPopupKey;
+  startPointerX: number;
+  startPointerY: number;
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+}
 interface TestNodeRun {
   status: TestNodeStatus;
   input: unknown;
@@ -3186,6 +3197,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [showExamples, setShowExamples] = useState(false);
   const [nodeExample, setNodeExample] = useState<ExampleWorkflow | null>(null);
+  const [nodeExampleTargetType, setNodeExampleTargetType] = useState<string | null>(null);
   const [exampleInputMode, setExampleInputMode] = useState<"json" | "text">("json");
   const [exampleInput, setExampleInput] = useState('');
   const [exampleDocumentText, setExampleDocumentText] = useState("");
@@ -3215,6 +3227,12 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [propertiesWidth, setPropertiesWidth] = useState(320);
   const [isResizingProperties, setIsResizingProperties] = useState(false);
   const [showTestPanel, setShowTestPanel] = useState(false);
+  const [popupPositions, setPopupPositions] = useState<Record<WorkflowPopupKey, WorkflowPopupPosition>>({
+    generator: { x: 202, y: 60 },
+    test: { x: 202, y: 60 },
+  });
+  const [draggingPopupKey, setDraggingPopupKey] = useState<WorkflowPopupKey | null>(null);
+  const popupDragRef = useRef<WorkflowPopupDragState | null>(null);
   const [testInputMode, setTestInputMode] = useState<"json" | "text">("json");
   const [testInput, setTestInput] = useState('{\n  "example": "value"\n}');
   const [testDocumentText, setTestDocumentText] = useState("");
@@ -3229,7 +3247,69 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const testAbortRef = useRef<AbortController | null>(null);
   const exampleAbortRef = useRef<AbortController | null>(null);
   const workflowImportInputRef = useRef<HTMLInputElement>(null);
+  const workflowBuilderRootRef = useRef<HTMLDivElement>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+
+  const clampPopupPosition = useCallback((position: WorkflowPopupPosition, width: number, height: number): WorkflowPopupPosition => {
+    const rootRect = workflowBuilderRootRef.current?.getBoundingClientRect();
+    if (!rootRect) return position;
+
+    return {
+      x: Math.min(Math.max(8, position.x), Math.max(8, rootRect.width - width - 8)),
+      y: Math.min(Math.max(8, position.y), Math.max(8, rootRect.height - height - 8)),
+    };
+  }, []);
+
+  const startWorkflowPopupDrag = useCallback((key: WorkflowPopupKey, event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const panel = event.currentTarget.closest("[data-workflow-popup-panel]") as HTMLElement | null;
+    if (!panel) return;
+
+    const panelRect = panel.getBoundingClientRect();
+    popupDragRef.current = {
+      key,
+      startPointerX: event.clientX,
+      startPointerY: event.clientY,
+      originX: popupPositions[key].x,
+      originY: popupPositions[key].y,
+      width: panelRect.width,
+      height: panelRect.height,
+    };
+    setDraggingPopupKey(key);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }, [clampPopupPosition, popupPositions]);
+
+  useEffect(() => {
+    if (!draggingPopupKey) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = popupDragRef.current;
+      if (!drag) return;
+
+      const nextPosition = clampPopupPosition({
+        x: drag.originX + event.clientX - drag.startPointerX,
+        y: drag.originY + event.clientY - drag.startPointerY,
+      }, drag.width, drag.height);
+
+      setPopupPositions((current) => ({ ...current, [drag.key]: nextPosition }));
+    };
+
+    const finishDrag = () => {
+      popupDragRef.current = null;
+      setDraggingPopupKey(null);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishDrag, { once: true });
+    window.addEventListener("pointercancel", finishDrag, { once: true });
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishDrag);
+      window.removeEventListener("pointercancel", finishDrag);
+    };
+  }, [clampPopupPosition, draggingPopupKey]);
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) as WorkflowNode | undefined;
   const triggerTestSources = useMemo(() => {
@@ -3472,6 +3552,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     if (!example) return;
     const fixture = example.testFixture;
     setNodeExample(example);
+    setNodeExampleTargetType(type);
     setExampleInputMode(fixture?.inputMode ?? "json");
     setExampleInput(fixture?.input ?? '{\n  "example": "value"\n}');
     setExampleDocumentText(fixture?.documentText ?? "");
@@ -3491,6 +3572,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const closeNodeUsageExample = () => {
     exampleAbortRef.current?.abort();
     setNodeExample(null);
+    setNodeExampleTargetType(null);
     setExampleRuns({});
     setExampleExecutionOrder([]);
     setExampleStopReason(null);
@@ -3499,6 +3581,45 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     setExampleReply("");
     setIsExampleTesting(false);
   };
+
+  const addTargetExampleNodeToCanvas = () => {
+    if (!nodeExample || !nodeExampleTargetType) return;
+
+    const sourceNode = nodeExample.workflow.nodes.find((node) => node.type === nodeExampleTargetType) as WorkflowNode | undefined;
+    if (!sourceNode) return;
+
+    const nodeType = sourceNode.type ?? nodeExampleTargetType;
+    const clonedData = JSON.parse(JSON.stringify(sourceNode.data ?? { label: nodeType })) as Record<string, unknown>;
+    delete clonedData.__testStatus;
+
+    let position = {
+      x: 140 + (nodes.length % 5) * 28,
+      y: 120 + (nodes.length % 7) * 32,
+    };
+
+    if (reactFlowInstance && reactFlowWrapper.current) {
+      const rect = reactFlowWrapper.current.getBoundingClientRect();
+      position = reactFlowInstance.screenToFlowPosition({
+        x: rect.left + Math.max(220, Math.min(rect.width - 140, rect.width * 0.52)) + (nodes.length % 4) * 24,
+        y: rect.top + Math.max(120, Math.min(rect.height - 120, rect.height * 0.42)) + (nodes.length % 4) * 24,
+      });
+    }
+
+    const newNode: Node = {
+      id: `${nodeType}-${uid()}`,
+      type: nodeType,
+      position,
+      data: clonedData,
+    };
+
+    const nextNodes = [...nodes, newNode];
+    setNodes(nextNodes);
+    commit(nextNodes, edges);
+    setSelectedNodeId(newNode.id);
+    setSelectedEdgeId(null);
+    closeNodeUsageExample();
+  };
+
 
   const handleExampleDocumentUpload = useCallback(async (file: File) => {
     setExampleError(null);
@@ -4377,9 +4498,12 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
   };
 
   return (
-    <div className={isFullscreen
+    <div
+      ref={workflowBuilderRootRef}
+      className={isFullscreen
       ? "fixed inset-0 z-[100] overflow-hidden bg-background"
-      : "relative overflow-hidden rounded-xl border bg-background shadow-sm"}>
+      : "relative overflow-hidden rounded-xl border bg-background shadow-sm"}
+    >
       <div className="relative flex h-12 items-center justify-between border-b bg-background px-4">
         <div className="flex items-center gap-2">
           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary"><Workflow className="h-4 w-4" /></span>
@@ -4497,8 +4621,16 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" disabled={isExampleTesting} onClick={() => { loadExample(nodeExample); closeNodeUsageExample(); }}>
-                <RotateCcw className="h-3.5 w-3.5" /> Load into canvas
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs"
+                disabled={isExampleTesting || !nodeExampleTargetType || !nodeExample?.workflow.nodes.some((node) => node.type === nodeExampleTargetType)}
+                title="Add the node type whose example was opened to the current canvas without replacing the workflow"
+                onClick={addTargetExampleNodeToCanvas}
+              >
+                <Plus className="h-3.5 w-3.5" /> Add this node
               </Button>
               <button type="button" disabled={isExampleTesting} onClick={closeNodeUsageExample} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50" title="Close example preview">
                 <X className="h-4 w-4" />
@@ -4512,7 +4644,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 <p className="text-xs font-semibold">Example input</p>
                 <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">This data is only used for the temporary example run.</p>
               </div>
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+              <div className="scrollbar-hidden min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
                 <div className="grid grid-cols-[90px_1fr] gap-2">
                   <div className="space-y-1">
                     <Label className="text-[10px]">Input type</Label>
@@ -4657,7 +4789,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 <p className="text-xs font-semibold">Example output</p>
                 <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Select a node to inspect its latest test input and output.</p>
               </div>
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+              <div className="scrollbar-hidden min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
                 {exampleExecutionOrder.length > 0 && (
                   <div className="space-y-1">
                     <Label className="text-[10px]">Execution path</Label>
@@ -4718,8 +4850,16 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
       )}
 
       {showWorkflowGenerator && (
-        <div className="absolute left-[202px] top-[60px] z-50 flex max-h-[calc(100%_-_72px)] w-[470px] flex-col overflow-hidden rounded-xl border bg-background shadow-2xl">
-          <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-2">
+        <div
+          data-workflow-popup-panel
+          className="absolute z-50 flex w-[min(470px,calc(100%_-_16px))] flex-col overflow-hidden rounded-xl border bg-background shadow-2xl"
+          style={{ left: popupPositions.generator.x, top: popupPositions.generator.y, maxHeight: `calc(100% - ${popupPositions.generator.y + 12}px)` }}
+        >
+          <div
+            className={`flex cursor-move select-none items-center justify-between border-b bg-muted/30 px-3 py-2 ${draggingPopupKey === "generator" ? "bg-muted/50" : ""}`}
+            title="Drag to move this window"
+            onPointerDown={(event) => startWorkflowPopupDrag("generator", event)}
+          >
             <div className="flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-primary" />
               <div>
@@ -4727,7 +4867,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 <p className="text-[9px] text-muted-foreground">Uses the global LLM provider configured in Agent Operations</p>
               </div>
             </div>
-            <button type="button" disabled={isGeneratingWorkflow} onClick={() => setShowWorkflowGenerator(false)}>
+            <button type="button" disabled={isGeneratingWorkflow} onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowWorkflowGenerator(false)}>
               <X className="h-4 w-4 text-muted-foreground hover:text-foreground" />
             </button>
           </div>
@@ -4891,10 +5031,18 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
       )}
 
       {showTestPanel && (
-        <div className="absolute left-[202px] top-[60px] z-40 flex max-h-[calc(100%_-_72px)] w-[470px] flex-col overflow-hidden rounded-xl border bg-background shadow-2xl">
-          <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-2">
+        <div
+          data-workflow-popup-panel
+          className="absolute z-40 flex w-[min(470px,calc(100%_-_16px))] flex-col overflow-hidden rounded-xl border bg-background shadow-2xl"
+          style={{ left: popupPositions.test.x, top: popupPositions.test.y, maxHeight: `calc(100% - ${popupPositions.test.y + 12}px)` }}
+        >
+          <div
+            className={`flex cursor-move select-none items-center justify-between border-b bg-muted/30 px-3 py-2 ${draggingPopupKey === "test" ? "bg-muted/50" : ""}`}
+            title="Drag to move this window"
+            onPointerDown={(event) => startWorkflowPopupDrag("test", event)}
+          >
             <div className="flex items-center gap-2"><FlaskConical className="h-4 w-4 text-primary" /><div><p className="text-xs font-semibold">Test workflow</p><p className="text-[9px] text-muted-foreground">Current canvas · configured agents make real provider calls</p></div></div>
-            <button type="button" disabled={isTesting} onClick={() => setShowTestPanel(false)}><X className="h-4 w-4 text-muted-foreground hover:text-foreground" /></button>
+            <button type="button" disabled={isTesting} onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowTestPanel(false)}><X className="h-4 w-4 text-muted-foreground hover:text-foreground" /></button>
           </div>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
             <div className="grid grid-cols-[110px_1fr] gap-2">
