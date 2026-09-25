@@ -54,9 +54,12 @@ const emptyWorkflow = (): WorkflowConfig => ({
 const NodePill = ({ type, label }: { type: string; label: string }) => {
   const Icon = NODE_ICONS[type];
   return (
-    <span className={`inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${NODE_TYPE_COLORS[type] ?? ""}`} title={label}>
+    <span
+      className={`inline-flex max-w-[120px] items-center gap-1 overflow-hidden rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${NODE_TYPE_COLORS[type] ?? ""}`}
+      title={label}
+    >
       {Icon && <Icon className="h-2.5 w-2.5 shrink-0" />}
-      <span className="min-w-0 truncate">{label}</span>
+      <span className="min-w-0 max-w-full truncate whitespace-nowrap">{label}</span>
     </span>
   );
 };
@@ -145,6 +148,8 @@ const WorkflowRow = ({
   onToggleEdit, onChange, onDuplicate, onRemove, onMove,
 }: RowProps) => {
   const nodeCount = config.graph.nodes.length;
+  const visibleNodes = config.graph.nodes.slice(0, 2);
+  const hiddenNodeCount = Math.max(nodeCount - visibleNodes.length, 0);
   const nodeTypes = [...new Set(config.graph.nodes.map((n) => n.type))];
 
   return (
@@ -179,17 +184,17 @@ const WorkflowRow = ({
 
         {/* Node pills */}
         <div
-          className="flex max-h-[46px] flex-wrap content-start gap-1 overflow-hidden"
+          className="flex max-h-[46px] flex-wrap content-start items-center gap-1 overflow-hidden"
           title={config.graph.nodes.map((n) => (n.data as { label?: string }).label ?? n.type).join(" → ")}
         >
           {nodeCount === 0
             ? <span className="text-[10px] text-muted-foreground italic">empty</span>
-            : config.graph.nodes.slice(0, 6).map((n) => (
+            : visibleNodes.map((n) => (
                 <NodePill key={n.id} type={n.type} label={(n.data as { label?: string }).label ?? n.type} />
               ))
           }
-          {nodeCount > 6 && (
-            <span className="shrink-0 text-[10px] text-muted-foreground">+{nodeCount - 6}</span>
+          {hiddenNodeCount > 0 && (
+            <span className="shrink-0 text-[10px] text-muted-foreground">+{hiddenNodeCount}</span>
           )}
         </div>
 
