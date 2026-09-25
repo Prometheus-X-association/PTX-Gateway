@@ -1,4 +1,4 @@
-import { ChangeEvent, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -46,6 +46,11 @@ const AdminDashboard = () => {
   const { user, isAdmin, isSuperAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState("pdc");
   const [activeGeneralSubTab, setActiveGeneralSubTab] = useState("global");
+  const topTabsScrollRef = useRef<HTMLDivElement | null>(null);
+  const [topTabsScrollState, setTopTabsScrollState] = useState({
+    canScrollLeft: false,
+    canScrollRight: false,
+  });
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isCopyingFromOrg, setIsCopyingFromOrg] = useState(false);
@@ -62,6 +67,42 @@ const AdminDashboard = () => {
     organizationSettings: false,
     embedSettings: false,
   });
+
+  useEffect(() => {
+    const scrollEl = topTabsScrollRef.current;
+    if (!scrollEl) return;
+
+    const updateScrollState = () => {
+      const maxScrollLeft = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+      setTopTabsScrollState({
+        canScrollLeft: scrollEl.scrollLeft > 2,
+        canScrollRight: scrollEl.scrollLeft < maxScrollLeft - 2,
+      });
+    };
+
+    updateScrollState();
+    scrollEl.addEventListener("scroll", updateScrollState, { passive: true });
+    window.addEventListener("resize", updateScrollState);
+
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateScrollState) : null;
+    resizeObserver?.observe(scrollEl);
+
+    return () => {
+      scrollEl.removeEventListener("scroll", updateScrollState);
+      window.removeEventListener("resize", updateScrollState);
+      resizeObserver?.disconnect();
+    };
+  }, [isSuperAdmin]);
+
+  const scrollTopTabs = (direction: "left" | "right") => {
+    const scrollEl = topTabsScrollRef.current;
+    if (!scrollEl) return;
+
+    scrollEl.scrollBy({
+      left: direction === "left" ? -Math.max(280, scrollEl.clientWidth * 0.75) : Math.max(280, scrollEl.clientWidth * 0.75),
+      behavior: "smooth",
+    });
+  };
 
   const formatImportSummary = (summary?: ImportSettingsSummary | null) => {
     if (!summary) return "";
@@ -300,43 +341,73 @@ const AdminDashboard = () => {
         </header>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-7 lg:w-auto lg:inline-flex">
-            <TabsTrigger value="pdc" className="flex items-center gap-2">
-              <Globe className="h-4 w-4" />
-              <span className="hidden sm:inline">PDC Config</span>
-              <span className="sm:hidden">PDC</span>
-            </TabsTrigger>
-            <TabsTrigger value="global" className="flex items-center gap-2">
-              <Settings className="h-4 w-4" />
-              <span className="hidden sm:inline">Global Settings</span>
-              <span className="sm:hidden">Settings</span>
-            </TabsTrigger>
-            <TabsTrigger value="resources" className="flex items-center gap-2">
-              <Database className="h-4 w-4" />
-              <span className="hidden sm:inline">Resources</span>
-              <span className="sm:hidden">Data</span>
-            </TabsTrigger>
-            <TabsTrigger value="choose-analytics-page" className="flex items-center gap-2">
-              <Database className="h-4 w-4" />
-              <span className="hidden sm:inline">Choose Analytics Page</span>
-              <span className="sm:hidden">Analytics</span>
-            </TabsTrigger>
-            <TabsTrigger value="data-selection" className="flex items-center gap-2">
-              <Database className="h-4 w-4" />
-              <span className="hidden sm:inline">Data Selection</span>
-              <span className="sm:hidden">Data Sel</span>
-            </TabsTrigger>
-            <TabsTrigger value="processing-page" className="flex items-center gap-2">
-              <Timer className="h-4 w-4" />
-              <span className="hidden sm:inline">Show Processing Page</span>
-              <span className="sm:hidden">Processing</span>
-            </TabsTrigger>
-            <TabsTrigger value="result" className="flex items-center gap-2">
-              <FileJson className="h-4 w-4" />
-              <span className="hidden sm:inline">Result Page</span>
-              <span className="sm:hidden">Result</span>
-            </TabsTrigger>
-          </TabsList>
+          <div className="relative max-w-full overflow-hidden">
+            {topTabsScrollState.canScrollLeft && (
+              <button
+                type="button"
+                aria-label="Scroll admin tabs left"
+                onClick={() => scrollTopTabs("left")}
+                className="absolute inset-y-0 left-0 z-10 w-12 cursor-pointer bg-gradient-to-r from-background via-background/85 to-transparent shadow-[12px_0_20px_-18px_hsl(var(--primary))] transition-opacity hover:from-background hover:via-background/95"
+              />
+            )}
+            {topTabsScrollState.canScrollRight && (
+              <button
+                type="button"
+                aria-label="Scroll admin tabs right"
+                onClick={() => scrollTopTabs("right")}
+                className="absolute inset-y-0 right-0 z-10 w-12 cursor-pointer bg-gradient-to-l from-background via-background/85 to-transparent shadow-[-12px_0_20px_-18px_hsl(var(--primary))] transition-opacity hover:from-background hover:via-background/95"
+              />
+            )}
+            <div
+              ref={topTabsScrollRef}
+              className="scrollbar-hidden max-w-full overflow-x-auto rounded-xl cursor-grab active:cursor-grabbing"
+              role="region"
+              aria-label="Admin dashboard sections"
+            >
+              <TabsList className="inline-flex h-auto min-w-max w-max gap-1 whitespace-nowrap">
+                <TabsTrigger value="pdc" className="flex shrink-0 items-center gap-2">
+                  <Globe className="h-4 w-4" />
+                  <span className="hidden sm:inline">PDC Config</span>
+                  <span className="sm:hidden">PDC</span>
+                </TabsTrigger>
+                <TabsTrigger value="global" className="flex shrink-0 items-center gap-2">
+                  <Settings className="h-4 w-4" />
+                  <span className="hidden sm:inline">Global Settings</span>
+                  <span className="sm:hidden">Settings</span>
+                </TabsTrigger>
+                <TabsTrigger value="resources" className="flex shrink-0 items-center gap-2">
+                  <Database className="h-4 w-4" />
+                  <span className="hidden sm:inline">Resources</span>
+                  <span className="sm:hidden">Data</span>
+                </TabsTrigger>
+                <TabsTrigger value="choose-analytics-page" className="flex shrink-0 items-center gap-2">
+                  <Database className="h-4 w-4" />
+                  <span className="hidden sm:inline">Analytics Selection</span>
+                  <span className="sm:hidden">Analytics</span>
+                </TabsTrigger>
+                <TabsTrigger value="data-selection" className="flex shrink-0 items-center gap-2">
+                  <Database className="h-4 w-4" />
+                  <span className="hidden sm:inline">Data Selection</span>
+                  <span className="sm:hidden">Data Sel</span>
+                </TabsTrigger>
+                <TabsTrigger value="processing-page" className="flex shrink-0 items-center gap-2">
+                  <Timer className="h-4 w-4" />
+                  <span className="hidden sm:inline">Show Processing</span>
+                  <span className="sm:hidden">Processing</span>
+                </TabsTrigger>
+                <TabsTrigger value="result" className="flex shrink-0 items-center gap-2">
+                  <FileJson className="h-4 w-4" />
+                  <span className="hidden sm:inline">Result Page</span>
+                  <span className="sm:hidden">Result</span>
+                </TabsTrigger>
+                <TabsTrigger value="llm" className="flex shrink-0 items-center gap-2">
+                  <Brain className="h-4 w-4" />
+                  <span className="hidden sm:inline">Agent Operations</span>
+                  <span className="sm:hidden">Agents</span>
+                </TabsTrigger>
+              </TabsList>
+            </div>
+          </div>
 
           <TabsContent value="pdc">
             <PdcConfigSection />
@@ -372,12 +443,6 @@ const AdminDashboard = () => {
                       className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
                     >
                       OIDC Provider
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="llm"
-                      className="rounded-lg border border-transparent bg-background/70 px-4 py-2 text-xs font-medium transition-all data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-sm"
-                    >
-                      LLM Settings
                     </TabsTrigger>
                     <TabsTrigger
                       value="visualization"
@@ -420,9 +485,6 @@ const AdminDashboard = () => {
               <TabsContent value="oidc-provider" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
                 <GlobalConfigSection section="oidc-provider" />
               </TabsContent>
-              <TabsContent value="llm" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
-                <LlmSettingsSection />
-              </TabsContent>
               <TabsContent value="visualization" className="space-y-6 pt-4 animate-in fade-in-50 slide-in-from-bottom-1 duration-300">
                 <VisualizationConfigSection />
               </TabsContent>
@@ -452,6 +514,10 @@ const AdminDashboard = () => {
 
           <TabsContent value="result">
             <ResultPageSettingsSection />
+          </TabsContent>
+
+          <TabsContent value="llm">
+            <LlmSettingsSection />
           </TabsContent>
 
         </Tabs>
@@ -532,7 +598,7 @@ const AdminDashboard = () => {
                   />
                   <div>
                     <p className="font-medium">Global Settings</p>
-                    <p className="text-sm text-muted-foreground">Feature flags, environment, and LLM settings.</p>
+                    <p className="text-sm text-muted-foreground">Feature flags and environment.</p>
                   </div>
                 </label>
                 <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">

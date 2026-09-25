@@ -2127,7 +2127,7 @@ const ChatDrawer = ({
         </div>
         <div className="flex items-center justify-between mt-1.5">
           <p className="text-[10px] text-muted-foreground">
-            Powered by org LLM settings · MCP tools available if configured
+            Powered by org Agent Operations · MCP tools available if configured
           </p>
           {rag && (
             <span className={`flex items-center gap-1 text-[10px] ${

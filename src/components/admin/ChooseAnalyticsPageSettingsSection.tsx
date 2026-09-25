@@ -504,7 +504,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ShieldCheck className="h-5 w-5" />
-          Choose Analytics Page — Verification Plugins
+          Analytics Selection — Verification Plugins
         </CardTitle>
         <CardDescription>
           Add verification plugins that appear as badge buttons on analytics option cards in the gateway.

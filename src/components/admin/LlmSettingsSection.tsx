@@ -1815,7 +1815,7 @@ const LlmSettingsSection = () => {
           logging: { ...DEFAULT_GLOBAL_SNAPSHOT.logging, ...((data?.logging as Record<string, unknown> | null) ?? {}) } as GlobalConfigSnapshot["logging"],
         });
       } catch {
-        toast.error("Failed to load LLM settings");
+        toast.error("Failed to load agent operations");
       } finally {
         setIsLoading(false);
       }
@@ -1918,9 +1918,9 @@ const LlmSettingsSection = () => {
         features: { ...featuresRest, llmInsights: llm },
       });
       if (error) throw error;
-      toast.success("LLM settings saved");
+      toast.success("Agent operations saved");
     } catch {
-      toast.error("Failed to save LLM settings");
+      toast.error("Failed to save agent operations");
     } finally {
       setIsSaving(false);
     }
@@ -1941,10 +1941,10 @@ const LlmSettingsSection = () => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Brain className="h-5 w-5" />
-          LLM Result Insights
+          Result Page Agent Operations
         </CardTitle>
         <CardDescription>
-          Configure LLM providers, MCP servers, and agents. Each agent has its own system prompt, output type, MCP server assignments, and quick prompts available in the chat.
+          Configure the LLM providers, MCP servers, agents, skills, and workflows that power the agentic experience on the result page.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -1952,8 +1952,8 @@ const LlmSettingsSection = () => {
         {/* Enable toggle */}
         <div className="flex items-center justify-between p-4 border rounded-lg">
           <div>
-            <p className="font-medium">Enable LLM Insights</p>
-            <p className="text-sm text-muted-foreground">Show the AI chat button on the result page</p>
+            <p className="font-medium">Enable Agent Operations</p>
+            <p className="text-sm text-muted-foreground">Activate the result-page agent chat, including configured agents, skills, MCP tools, and workflows.</p>
           </div>
           <Switch checked={llm.enabled} onCheckedChange={(v) => patchLlm({ enabled: v })} />
         </div>
@@ -2197,7 +2197,7 @@ const LlmSettingsSection = () => {
         <Separator />
 
         <p className="text-xs text-muted-foreground">
-          LLM settings are stored in the organization global config and included in Admin Export/Import.
+          Agent operations are stored in the organization global config and included in Admin Export/Import.
         </p>
 
         <div className="flex justify-end">
@@ -2205,7 +2205,7 @@ const LlmSettingsSection = () => {
             {isSaving ? (
               <><Loader2 className="h-4 w-4 animate-spin" />Saving...</>
             ) : (
-              <><Save className="h-4 w-4" />Save LLM Settings</>
+              <><Save className="h-4 w-4" />Save Agent Operations</>
             )}
           </Button>
         </div>

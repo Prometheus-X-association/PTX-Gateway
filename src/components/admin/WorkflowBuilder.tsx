@@ -4724,7 +4724,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
               <Sparkles className="h-4 w-4 text-primary" />
               <div>
                 <p className="text-xs font-semibold">Generate agentic workflow</p>
-                <p className="text-[9px] text-muted-foreground">Uses the global LLM provider configured in LLM settings</p>
+                <p className="text-[9px] text-muted-foreground">Uses the global LLM provider configured in Agent Operations</p>
               </div>
             </div>
             <button type="button" disabled={isGeneratingWorkflow} onClick={() => setShowWorkflowGenerator(false)}>

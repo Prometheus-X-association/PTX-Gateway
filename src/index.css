@@ -127,6 +127,16 @@
     background-clip: text;
   }
 
+  .scrollbar-hidden {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+  }
+
+
   .analytics-card {
     @apply glass-card transition-all duration-300 cursor-pointer;
     padding: 1.5rem;
