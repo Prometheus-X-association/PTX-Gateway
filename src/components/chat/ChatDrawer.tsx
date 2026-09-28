@@ -1332,10 +1332,7 @@ const ChatDrawer = ({
           ...(waiting.options?.length ? ["", `Options: ${waiting.options.join(", ")}`] : []),
         ].join("\n");
         setMessages((prev) => [
-          ...prev.map((m) => m.id === statusId
-            ? { ...m, content: "Workflow paused for your input.", streaming: false }
-            : m
-          ),
+          ...prev.filter((m) => m.id !== statusId),
           {
             id: uid(),
             role: "assistant",
