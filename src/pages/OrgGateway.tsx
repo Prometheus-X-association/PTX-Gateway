@@ -747,12 +747,12 @@ const OrgGatewayContent = ({
 
   useEffect(() => {
     const existing = readPersistedOrgFlow(organization.slug);
-    if (!existing || existing.sessionId !== sessionId) return;
+    if (!existing || existing.sessionId !== activeProcessSessionId) return;
     setPersistedFlow(existing);
     setForcedResultData(existing.forcedResultData ?? null);
     setForcedResultNotice(existing.forcedResultNotice ?? null);
     goToStep(getStepIndex(existing.step === "processing" ? "Processing" : "Results"));
-  }, [organization.slug, sessionId, getStepIndex, goToStep]);
+  }, [organization.slug, activeProcessSessionId, getStepIndex, goToStep]);
 
   useEffect(() => {
     const storageKey = getOrgFlowStorageKey(organization.slug);
@@ -760,7 +760,7 @@ const OrgGatewayContent = ({
       if (event.key !== storageKey) return;
 
       const latest = readPersistedOrgFlow(organization.slug);
-      if (!latest || latest.sessionId !== sessionId) return;
+      if (!latest || latest.sessionId !== activeProcessSessionId) return;
 
       setPersistedFlow(latest);
       setForcedResultData(latest.forcedResultData ?? null);
@@ -770,7 +770,7 @@ const OrgGatewayContent = ({
 
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [organization.slug, sessionId, getStepIndex, goToStep]);
+  }, [organization.slug, activeProcessSessionId, getStepIndex, goToStep]);
 
   useEffect(() => {
     if (currentStepName !== "Processing" && currentStepName !== "Results") {
@@ -784,7 +784,7 @@ const OrgGatewayContent = ({
       currentStepName === "Processing" && pdcPayload
         ? {
             step: "processing",
-            sessionId,
+            sessionId: activeProcessSessionId,
             analyticsType: analyticsDisplayName || persistedFlow?.analyticsType || "Analytics",
             analyticsTargetId: analyticsTargetId ?? persistedFlow?.analyticsTargetId ?? null,
             pdcPayload,
@@ -797,7 +797,7 @@ const OrgGatewayContent = ({
         : currentStepName === "Results"
           ? {
               step: "results",
-              sessionId,
+              sessionId: activeProcessSessionId,
               analyticsType: analyticsDisplayName || persistedFlow?.analyticsType || "Analytics",
               analyticsTargetId: analyticsTargetId ?? persistedFlow?.analyticsTargetId ?? null,
               pdcPayload: pdcPayload ?? persistedFlow?.pdcPayload ?? null,
@@ -839,7 +839,7 @@ const OrgGatewayContent = ({
     setPersistedFlow(flowWithTimestamp);
   }, [
     organization.slug,
-    sessionId,
+    activeProcessSessionId,
     analyticsDisplayName,
     analyticsTargetId,
     pdcPayload,
