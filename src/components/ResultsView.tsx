@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink, Copy, MessageSquareDot } from "lucide-react";
+import { FileJson, FileText, Table as TableIcon, RotateCcw, Download, CheckCircle2, Send, Code, TableProperties, ChevronRight, ChevronDown, Minimize2, Pencil, Plus, Trash2, Loader2, AlertCircle, RefreshCw, Filter, ArrowUpDown, ArrowUp, ArrowDown, Palette, GraduationCap, ExternalLink, Copy, MessageSquareDot, GripVertical } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -63,6 +63,27 @@ interface TemplateTagHelp {
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+interface ChatLauncherPosition {
+  x: number;
+  y: number;
+}
+
+interface ChatLauncherDragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+  moved: boolean;
+  latest: ChatLauncherPosition;
+}
+
+const CHAT_LAUNCHER_MARGIN = 8;
+const clampChatLauncherPosition = (position: ChatLauncherPosition, width: number, height: number): ChatLauncherPosition => ({
+  x: Math.min(Math.max(CHAT_LAUNCHER_MARGIN, position.x), Math.max(CHAT_LAUNCHER_MARGIN, window.innerWidth - width - CHAT_LAUNCHER_MARGIN)),
+  y: Math.min(Math.max(CHAT_LAUNCHER_MARGIN, position.y), Math.max(CHAT_LAUNCHER_MARGIN, window.innerHeight - height - CHAT_LAUNCHER_MARGIN)),
+});
+
 
 const BUILT_IN_WORKFLOW_TEMPLATE_IDS = new Set([
   "interactive-skill-description-refinement",
@@ -2550,6 +2571,127 @@ const ResultsView = ({
   const [llmGlobalPrompts, setLlmGlobalPrompts] = useState<string[]>([]);
   const [llmWorkflows, setLlmWorkflows] = useState<WorkflowConfig[]>([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const chatLauncherRef = useRef<HTMLButtonElement>(null);
+  const chatLauncherDragRef = useRef<ChatLauncherDragState | null>(null);
+  const suppressChatLauncherClickRef = useRef(false);
+  const chatLauncherStorageKey = useMemo(
+    () => "ptx-result-chat-launcher-position-v1:" + (organizationId || "public"),
+    [organizationId],
+  );
+  const [chatLauncherPosition, setChatLauncherPosition] = useState<ChatLauncherPosition | null>(null);
+  const [chatDrawerAnchor, setChatDrawerAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(chatLauncherStorageKey);
+      if (!stored) {
+        setChatLauncherPosition(null);
+        return;
+      }
+      const parsed = JSON.parse(stored) as Partial<ChatLauncherPosition>;
+      if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) {
+        setChatLauncherPosition(null);
+        return;
+      }
+      const width = chatLauncherRef.current?.offsetWidth ?? 144;
+      const height = chatLauncherRef.current?.offsetHeight ?? 48;
+      setChatLauncherPosition(clampChatLauncherPosition({ x: Number(parsed.x), y: Number(parsed.y) }, width, height));
+    } catch {
+      setChatLauncherPosition(null);
+    }
+  }, [chatLauncherStorageKey]);
+
+  useEffect(() => {
+    const keepLauncherInViewport = () => {
+      setChatLauncherPosition((current) => {
+        if (!current) return current;
+        const width = chatLauncherRef.current?.offsetWidth ?? 144;
+        const height = chatLauncherRef.current?.offsetHeight ?? 48;
+        const next = clampChatLauncherPosition(current, width, height);
+        try {
+          window.localStorage.setItem(chatLauncherStorageKey, JSON.stringify(next));
+        } catch {
+          // Position persistence is optional when browser storage is unavailable.
+        }
+        return next;
+      });
+    };
+    window.addEventListener("resize", keepLauncherInViewport);
+    return () => window.removeEventListener("resize", keepLauncherInViewport);
+  }, [chatLauncherStorageKey]);
+
+  const startChatLauncherDrag = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = { x: rect.left, y: rect.top };
+    chatLauncherDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: rect.left,
+      originY: rect.top,
+      moved: false,
+      latest: position,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, []);
+
+  const moveChatLauncher = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = chatLauncherDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(deltaX, deltaY) < 4) return;
+
+    const next = clampChatLauncherPosition(
+      { x: drag.originX + deltaX, y: drag.originY + deltaY },
+      event.currentTarget.offsetWidth,
+      event.currentTarget.offsetHeight,
+    );
+    drag.moved = true;
+    drag.latest = next;
+    setChatLauncherPosition(next);
+    event.preventDefault();
+  }, []);
+
+  const finishChatLauncherDrag = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = chatLauncherDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    chatLauncherDragRef.current = null;
+    if (!drag.moved) return;
+
+    event.preventDefault();
+    suppressChatLauncherClickRef.current = true;
+    setChatLauncherPosition(drag.latest);
+    try {
+      window.localStorage.setItem(chatLauncherStorageKey, JSON.stringify(drag.latest));
+    } catch {
+      // Position persistence is optional when browser storage is unavailable.
+    }
+    window.setTimeout(() => {
+      suppressChatLauncherClickRef.current = false;
+    }, 0);
+  }, [chatLauncherStorageKey]);
+
+  const syncChatLauncherWithDrawer = useCallback((anchor: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => {
+    const position = { x: anchor.x, y: anchor.y };
+    setChatDrawerAnchor(anchor);
+    setChatLauncherPosition(position);
+    try {
+      window.localStorage.setItem(chatLauncherStorageKey, JSON.stringify(position));
+    } catch {
+      // Position persistence is optional when browser storage is unavailable.
+    }
+  }, [chatLauncherStorageKey]);
+
   const selectedTargetId = useMemo(() => {
     if (selectedAnalytics) {
       return selectedAnalytics.type === "software"
@@ -3954,10 +4096,30 @@ const ResultsView = ({
         <>
           {!isChatOpen && (
             <button
-              onClick={() => setIsChatOpen(true)}
-              className="fixed bottom-5 right-4 z-[9998] flex items-center gap-2 px-4 py-3 rounded-full shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              ref={chatLauncherRef}
+              type="button"
+              draggable={false}
+              style={chatLauncherPosition
+                ? { left: chatLauncherPosition.x, top: chatLauncherPosition.y }
+                : { right: "1rem", bottom: "1.25rem" }}
+              onPointerDown={startChatLauncherDrag}
+              onPointerMove={moveChatLauncher}
+              onPointerUp={finishChatLauncherDrag}
+              onPointerCancel={finishChatLauncherDrag}
+              onClick={(event) => {
+                if (suppressChatLauncherClickRef.current) {
+                  event.preventDefault();
+                  return;
+                }
+                const rect = event.currentTarget.getBoundingClientRect();
+                setChatDrawerAnchor({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
+                setIsChatOpen(true);
+              }}
+              className="fixed z-[9998] flex touch-none cursor-grab select-none items-center gap-2 rounded-full bg-primary px-4 py-3 text-primary-foreground shadow-lg transition-colors hover:bg-primary/90 active:cursor-grabbing"
               aria-label="Open AI Chat"
+              title="Drag to move · Click to open AI chat"
             >
+              <GripVertical className="h-4 w-4 opacity-70" />
               <MessageSquareDot className="h-5 w-5" />
               <span className="text-sm font-medium">Ask AI</span>
             </button>
@@ -3971,6 +4133,8 @@ const ResultsView = ({
             globalPrompts={llmGlobalPrompts}
             enabled={llmInsightsEnabled}
             freeChatEnabled={llmFreeChatEnabled}
+            launcherAnchor={chatDrawerAnchor}
+            onLauncherAnchorChange={syncChatLauncherWithDrawer}
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
             rag={rag}

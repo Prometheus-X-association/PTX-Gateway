@@ -66,6 +66,8 @@ interface ChatDrawerProps {
   enabled?: boolean;
   /** Whether global providers are available for generic chat without an agent. */
   freeChatEnabled?: boolean;
+  launcherAnchor?: LauncherAnchor | null;
+  onLauncherAnchorChange?: (anchor: LauncherAnchor) => void;
   isOpen: boolean;
   onClose: () => void;
   rag?: RagWorkerHandle;
@@ -80,6 +82,38 @@ interface ChatDrawerProps {
   /** Named workflow configs — active ones can be selected and run from the chat */
   workflows?: WorkflowConfig[];
 }
+
+interface LauncherAnchor {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface ChatPanelPosition {
+  left: number;
+  top: number;
+}
+
+const CHAT_PANEL_MARGIN = 8;
+
+const getChatPanelPosition = (
+  anchor: LauncherAnchor,
+  size: { width: number; height: number },
+): ChatPanelPosition => {
+  const maxLeft = Math.max(CHAT_PANEL_MARGIN, window.innerWidth - size.width - CHAT_PANEL_MARGIN);
+  const maxTop = Math.max(CHAT_PANEL_MARGIN, window.innerHeight - size.height - CHAT_PANEL_MARGIN);
+  return {
+    left: Math.min(
+      Math.max(CHAT_PANEL_MARGIN, anchor.x + anchor.width / 2 - size.width / 2),
+      maxLeft,
+    ),
+    top: Math.min(
+      Math.max(CHAT_PANEL_MARGIN, anchor.y + anchor.height - size.height),
+      maxTop,
+    ),
+  };
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -855,6 +889,8 @@ const ChatDrawer = ({
   globalPrompts = [],
   enabled = true,
   freeChatEnabled = true,
+  launcherAnchor,
+  onLauncherAnchorChange,
   isOpen,
   onClose,
   rag,
@@ -893,6 +929,16 @@ const ChatDrawer = ({
   const [chatPanelSize, setChatPanelSize] = useState({ width: 400, height: 520 });
   const [isResizingChatPanel, setIsResizingChatPanel] = useState(false);
   const chatPanelResizeOrigin = useRef({ pointerX: 0, pointerY: 0, width: 400, height: 520 });
+  const [chatPanelPosition, setChatPanelPosition] = useState<ChatPanelPosition | null>(null);
+  const [isDraggingChatPanel, setIsDraggingChatPanel] = useState(false);
+  const chatPanelDragOrigin = useRef({
+    pointerX: 0,
+    pointerY: 0,
+    left: 0,
+    top: 0,
+    launcherWidth: 0,
+    launcherHeight: 0,
+  });
   // Collects full step results so we can extract partial output on Stop
   const partialResultsRef = useRef<import("@/types/workflow").WorkflowStepResult[]>([]);
   const activeWorkflows = workflows.filter((w) => w.enabled);
@@ -1426,6 +1472,50 @@ const ChatDrawer = ({
   }, [isResizingChatPanel]);
 
   useEffect(() => {
+    if (!isOpen || !launcherAnchor || isDraggingChatPanel) return;
+    setChatPanelPosition(getChatPanelPosition(launcherAnchor, chatPanelSize));
+  }, [
+    isOpen,
+    launcherAnchor,
+    chatPanelSize,
+    isDraggingChatPanel,
+  ]);
+
+  useEffect(() => {
+    if (!isDraggingChatPanel) return;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "move";
+    document.body.style.userSelect = "none";
+
+    const move = (event: PointerEvent) => {
+      const origin = chatPanelDragOrigin.current;
+      const maxLeft = Math.max(CHAT_PANEL_MARGIN, window.innerWidth - chatPanelSize.width - CHAT_PANEL_MARGIN);
+      const maxTop = Math.max(CHAT_PANEL_MARGIN, window.innerHeight - chatPanelSize.height - CHAT_PANEL_MARGIN);
+      const next = {
+        left: Math.min(Math.max(CHAT_PANEL_MARGIN, origin.left + event.clientX - origin.pointerX), maxLeft),
+        top: Math.min(Math.max(CHAT_PANEL_MARGIN, origin.top + event.clientY - origin.pointerY), maxTop),
+      };
+      setChatPanelPosition(next);
+      onLauncherAnchorChange?.({
+        x: next.left + (chatPanelSize.width - origin.launcherWidth) / 2,
+        y: next.top + chatPanelSize.height - origin.launcherHeight,
+        width: origin.launcherWidth,
+        height: origin.launcherHeight,
+      });
+    };
+    const stop = () => setIsDraggingChatPanel(false);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+    return () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+  }, [isDraggingChatPanel, chatPanelSize.width, chatPanelSize.height, onLauncherAnchorChange]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -1732,6 +1822,24 @@ const ChatDrawer = ({
   const handleStop = () => abortRef.current?.abort();
   const handleClear = () => { if (isStreaming) handleStop(); setMessages([]); };
 
+  const startChatPanelDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || window.innerWidth < 1024) return;
+    if ((event.target as HTMLElement).closest("button, a, input, textarea, select")) return;
+    const position = chatPanelPosition
+      ?? (launcherAnchor ? getChatPanelPosition(launcherAnchor, chatPanelSize) : null);
+    if (!position || !launcherAnchor) return;
+    chatPanelDragOrigin.current = {
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      left: position.left,
+      top: position.top,
+      launcherWidth: launcherAnchor.width,
+      launcherHeight: launcherAnchor.height,
+    };
+    event.preventDefault();
+    setIsDraggingChatPanel(true);
+  };
+
   if (!enabled || !isOpen) return null;
 
   const agentBadgeColor: Record<string, string> = {
@@ -1750,7 +1858,10 @@ const ChatDrawer = ({
   const panel = (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0 bg-muted/30">
+      <div
+        className="flex shrink-0 items-center justify-between border-b border-border bg-muted/30 px-4 py-3 lg:cursor-move lg:touch-none"
+        onPointerDown={startChatPanelDrag}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <MessageSquareDot className="h-5 w-5 text-primary shrink-0" />
           <span className="font-semibold text-sm">AI Assistant</span>
@@ -2168,10 +2279,17 @@ const ChatDrawer = ({
         {panel}
       </div>
 
-      {/* Desktop: floating bottom-right panel with a top-left resize handle */}
+      {/* Desktop: floating panel anchored to the launcher with a top-left resize handle */}
       <div
-        className="hidden lg:flex fixed bottom-5 right-4 flex-col rounded-2xl border border-border bg-background shadow-2xl overflow-hidden"
-        style={{ zIndex: 9999, width: chatPanelSize.width, height: chatPanelSize.height }}
+        className="fixed hidden flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl lg:flex"
+        style={{
+          zIndex: 9999,
+          width: chatPanelSize.width,
+          height: chatPanelSize.height,
+          ...(chatPanelPosition ?? (launcherAnchor
+            ? getChatPanelPosition(launcherAnchor, chatPanelSize)
+            : { right: 16, bottom: 20 })),
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         <button
