@@ -1,5 +1,5 @@
 import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge, WorkflowWaitingState } from "@/types/workflow";
-import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData } from "@/types/workflow";
+import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData } from "@/types/workflow";
 import { executeSandboxedJavascript } from "@/lib/workflowSandbox";
 
 export interface InlineAgentConfig {
@@ -118,6 +118,34 @@ const parseStructuredAgentOutput = (value: string): unknown => {
   try { return JSON.parse(candidate); } catch { return value; }
 };
 
+const routerRuleMatches = (input: unknown, rule: RouterRule, caseSensitive: boolean): boolean => {
+  if (rule.operator === "exists") return input !== undefined && input !== null && input !== "";
+
+  const values = Array.isArray(input) ? input : [input];
+  const expectedRaw = rule.value ?? "";
+  const normalize = (value: unknown) => {
+    const text = typeof value === "object" && value !== null ? JSON.stringify(value) : String(value ?? "");
+    return caseSensitive ? text : text.toLocaleLowerCase();
+  };
+  const expected = normalize(expectedRaw);
+
+  return values.some((value) => {
+    const actual = normalize(value);
+    switch (rule.operator) {
+      case "contains": return actual.includes(expected);
+      case "equals": return actual === expected;
+      case "not_equals": return actual !== expected;
+      case "starts_with": return actual.startsWith(expected);
+      case "ends_with": return actual.endsWith(expected);
+      case "greater_than": return Number(value) > Number(expectedRaw);
+      case "greater_than_or_equal": return Number(value) >= Number(expectedRaw);
+      case "less_than": return Number(value) < Number(expectedRaw);
+      case "less_than_or_equal": return Number(value) <= Number(expectedRaw);
+      default: return false;
+    }
+  });
+};
+
 export async function executeWorkflow(
   workflow: AgentWorkflow,
   ctx: ExecutorContext,
@@ -138,6 +166,7 @@ export async function executeWorkflow(
     Object.entries(ctx.resume.waiting.nodeOutputs).forEach(([nodeId, value]) => outputByNodeId.set(nodeId, value));
   }
   const conditionResults = new Map<string, boolean>();
+  const routerResults = new Map<string, Set<string>>();
   let resolvedDocumentContext: Pick<DocumentContextNodeData, "source" | "delivery" | "reuseScope"> | null = null;
   let stopReason: string | undefined;
   let waiting: WorkflowWaitingState | undefined;
@@ -399,6 +428,19 @@ export async function executeWorkflow(
         }
         conditionResults.set(node.id, result);
 
+      } else if (node.type === "router") {
+        const d = node.data as RouterNodeData;
+        output = prevOutput;
+        const selectedInput = selectDataPath(prevOutput, d.inputPath);
+        const matchingRuleIds: string[] = [];
+        for (const rule of d.rules ?? []) {
+          if (routerRuleMatches(selectedInput, rule, Boolean(d.caseSensitive))) {
+            matchingRuleIds.push(rule.id);
+            if (d.matchMode === "first_match") break;
+          }
+        }
+        routerResults.set(node.id, new Set(matchingRuleIds.length > 0 ? matchingRuleIds : ["fallback"]));
+
       } else if (node.type === "output") {
         const d = node.data as OutputNodeData;
         if (d.renderAs === "update_result" && d.transformCode?.trim()) {
@@ -433,7 +475,6 @@ export async function executeWorkflow(
     }
     if (node.type === "output") {
       stopReason = `Workflow completed at output node "${String(node.data.label || node.id)}".`;
-      fatalStop = true;
       return;
     }
     if (ctx.stopAfterNodeId === node.id) {
@@ -441,9 +482,16 @@ export async function executeWorkflow(
       return;
     }
 
-    // Follow outgoing edges. For condition nodes, only follow the matching branch.
+    // Follow outgoing edges. Conditions select one boolean branch; routers can fan out.
     const outEdges = edges.filter((e) => {
       if (e.source !== node.id) return false;
+      if (node.type === "router") {
+        const handle = e.sourceHandle ?? "";
+        const routeId = handle.startsWith("route-")
+          ? handle.slice("route-".length).replace(/-(top|right|bottom|left)$/, "")
+          : undefined;
+        return routeId ? routerResults.get(node.id)?.has(routeId) === true : false;
+      }
       const branch = e.sourceHandle === "true" || e.sourceHandle?.startsWith("true-")
         ? true
         : e.sourceHandle === "false" || e.sourceHandle?.startsWith("false-")
@@ -458,7 +506,9 @@ export async function executeWorkflow(
     if (outEdges.length === 0 && node.type !== "output") {
       stopReason = node.type === "condition"
         ? `Condition "${String(node.data.label || node.id)}" evaluated to ${conditionResults.get(node.id) ? "true" : "false"}, but that branch has no connection.`
-        : `Flow ended at "${String(node.data.label || node.id)}" because it has no outgoing connection.`;
+        : node.type === "router"
+          ? `Router "${String(node.data.label || node.id)}" matched ${[...(routerResults.get(node.id) ?? [])].join(", ") || "no routes"}, but no matching branch has a connection.`
+          : `Flow ended at "${String(node.data.label || node.id)}" because it has no outgoing connection.`;
     }
 
     for (const edge of outEdges) {

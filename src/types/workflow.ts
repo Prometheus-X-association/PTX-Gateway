@@ -1,6 +1,6 @@
 // Agentic workflow graph — persisted inside llmInsights.workflows[] in global_configs.
 
-export type NodeType = "trigger" | "document_context" | "retrieval" | "user_input" | "agent" | "api" | "plugin" | "condition" | "output";
+export type NodeType = "trigger" | "document_context" | "retrieval" | "user_input" | "agent" | "api" | "plugin" | "condition" | "router" | "output";
 
 // ─── Node data payloads ───────────────────────────────────────────────────────
 
@@ -157,6 +157,39 @@ export interface ConditionNodeData {
   loopEnd?: number;
 }
 
+export type RouterRuleOperator =
+  | "contains"
+  | "equals"
+  | "not_equals"
+  | "starts_with"
+  | "ends_with"
+  | "exists"
+  | "greater_than"
+  | "greater_than_or_equal"
+  | "less_than"
+  | "less_than_or_equal";
+
+export interface RouterRule {
+  /** Stable connection key. The label may be renamed without breaking edges. */
+  id: string;
+  label: string;
+  operator: RouterRuleOperator;
+  value?: string;
+}
+
+export interface RouterNodeData {
+  label: string;
+  /** Optional dot/bracket path within prevOutput. Empty evaluates the complete value. */
+  inputPath?: string;
+  /** all_matches fans out to every match; first_match stops after the first match. */
+  matchMode: "all_matches" | "first_match";
+  caseSensitive?: boolean;
+  rules: RouterRule[];
+  fallbackLabel?: string;
+  inputSchema?: string;
+  outputSchema?: string;
+}
+
 export interface OutputNodeData {
   label: string;
   /** How to render the final output in chat */
@@ -176,6 +209,7 @@ export type AnyNodeData =
   | ApiNodeData
   | PluginNodeData
   | ConditionNodeData
+  | RouterNodeData
   | OutputNodeData;
 
 // ─── Graph primitives ─────────────────────────────────────────────────────────

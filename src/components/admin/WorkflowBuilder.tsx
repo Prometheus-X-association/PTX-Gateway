@@ -8,7 +8,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import {
-  Play, Plus, Trash2, X, Code2, GitBranch,
+  Play, Plus, Trash2, X, Code2, GitBranch, Route,
   Bot, Square, ChevronRight, ChevronUp, ChevronDown, BookOpen, RotateCcw, GripVertical, Workflow, Settings2, Link2, Maximize2, Minimize2,
   FlaskConical, Loader2, CircleStop, CheckCircle2, XCircle,
   Globe2, Send, KeyRound, FileText,
@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type {
   AgentWorkflow, WorkflowNode, WorkflowEdge,
-  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, OutputNodeData, WorkflowStepResult, WorkflowWaitingState,
+  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, OutputNodeData, WorkflowStepResult, WorkflowWaitingState,
 } from "@/types/workflow";
 import { executeWorkflow } from "@/lib/workflowExecutor";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
@@ -83,6 +83,7 @@ const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
   api:       ({ className }) => <Globe2 className={className} />,
   plugin:    ({ className }) => <Code2 className={className} />,
   condition: ({ className }) => <GitBranch className={className} />,
+  router:    ({ className }) => <Route className={className} />,
   output:    ({ className }) => <Square className={className} />,
 };
 
@@ -95,6 +96,7 @@ const NODE_LIBRARY = [
   { type: "api", icon: Globe2, label: "API Request", description: "Calls an HTTP API", color: "text-cyan-600", iconBg: "bg-cyan-500/10" },
   { type: "plugin", icon: Code2, label: "JavaScript", description: "Transforms data safely", color: "text-amber-600", iconBg: "bg-amber-500/10" },
   { type: "condition", icon: GitBranch, label: "Condition", description: "Branches the workflow", color: "text-rose-500", iconBg: "bg-rose-500/10" },
+  { type: "router", icon: Route, label: "Result Router", description: "Matches any number of result rules", color: "text-orange-600", iconBg: "bg-orange-500/10" },
   { type: "output", icon: Square, label: "Output", description: "Renders the final result", color: "text-emerald-600", iconBg: "bg-emerald-500/10" },
 ] as const;
 
@@ -107,6 +109,7 @@ const NODE_ACCENTS: Record<string, string> = {
   api: "border-l-cyan-500",
   plugin: "border-l-amber-500",
   condition: "border-l-rose-500",
+  router: "border-l-orange-500",
   output: "border-l-emerald-500",
 };
 
@@ -125,6 +128,19 @@ const branchFromHandle = (handle?: string | null): "true" | "false" | undefined 
   if (handle === "true" || handle?.startsWith("true-")) return "true";
   if (handle === "false" || handle?.startsWith("false-")) return "false";
   return undefined;
+};
+
+const routeFromHandle = (handle?: string | null): string | undefined => {
+  if (!handle?.startsWith("route-")) return undefined;
+  return handle.slice("route-".length).replace(/-(top|right|bottom|left)$/, "") || undefined;
+};
+
+const routeLabel = (node: Node | undefined, routeId?: string): string | undefined => {
+  if (node?.type !== "router" || !routeId) return undefined;
+  const data = node.data as unknown as RouterNodeData;
+  return routeId === "fallback"
+    ? data.fallbackLabel || "No match"
+    : data.rules?.find((rule) => rule.id === routeId)?.label;
 };
 
 const sideFromHandle = (handle?: string | null): HandleSide | undefined => {
@@ -154,15 +170,23 @@ const normalizeEdgeHandles = (nodes: Node[], edges: Edge[]): Edge[] => edges.map
   if (!source || !target) return edge;
   const sides = connectionSides(source, target);
   const branch = branchFromHandle(edge.sourceHandle);
+  const routeId = routeFromHandle(edge.sourceHandle);
+  const routerData = source.data as unknown as RouterNodeData;
+  const validRouteId = routeId === "fallback" || routerData.rules?.some((rule) => rule.id === routeId)
+    ? routeId
+    : routerData.rules?.[0]?.id ?? "fallback";
   const sourceSide = sideFromHandle(edge.sourceHandle) ?? sides.source;
   const targetSide = sideFromHandle(edge.targetHandle) ?? sides.target;
+  const targetInputSide = target.type === "router" && targetSide === "right" ? "left" : targetSide;
   return {
     ...edge,
     sourceHandle: source.type === "condition"
       ? `${branch ?? "true"}-${sourceSide}`
-      : `port-${sourceSide}`,
-    targetHandle: target.type === "condition"
-      ? `input-${targetSide}`
+      : source.type === "router"
+        ? `route-${validRouteId}-right`
+        : `port-${sourceSide}`,
+    targetHandle: target.type === "condition" || target.type === "router"
+      ? `input-${targetInputSide}`
       : `port-${targetSide}`,
   };
 });
@@ -236,19 +260,24 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
   const Icon = NODE_ICONS[type] ?? NODE_ICONS.agent;
   const label = (data.label as string) || type;
   const isCondition = type === "condition";
+  const isRouter = type === "router";
+  const routerData = data as unknown as RouterNodeData;
+  const routerRoutes = isRouter
+    ? [...(routerData.rules ?? []).map((rule) => ({ id: rule.id, label: rule.label })), { id: "fallback", label: routerData.fallbackLabel || "No match" }]
+    : [];
   const isOutput = type === "output";
   const testStatus = data.__testStatus as TestNodeStatus | undefined;
 
   return (
     <div
-      className={`rounded-lg border border-l-4 bg-background shadow-sm min-w-[180px] max-w-[220px] cursor-pointer transition-all
+      className={`rounded-lg border border-l-4 bg-background shadow-sm min-w-[180px] ${isRouter ? "w-[240px]" : "max-w-[220px]"} cursor-pointer transition-all
         ${NODE_ACCENTS[type] ?? NODE_ACCENTS.agent} ${selected ? "ring-2 ring-primary/60 shadow-md" : "hover:shadow-md"}`}
     >
-      {!isCondition && HANDLE_POSITIONS.map(({ side, position }) => (
+      {!isCondition && !isRouter && HANDLE_POSITIONS.map(({ side, position }) => (
         <Handle key={`port-${side}`} id={`port-${side}`} type="source" position={position}
           className="!h-3 !w-3 !border-2 !border-muted-foreground !bg-background transition-colors hover:!border-primary hover:!bg-primary/20" />
       ))}
-      {isCondition && HANDLE_POSITIONS.map(({ side, position }) => (
+      {(isCondition || isRouter) && HANDLE_POSITIONS.filter(({ side }) => !isRouter || side !== "right").map(({ side, position }) => (
         <Handle key={`input-${side}`} id={`input-${side}`} type="target" position={position}
           className="!h-3 !w-3 !border-2 !border-muted-foreground !bg-background" />
       ))}
@@ -286,6 +315,15 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
       {type === "condition" && (
         <p className="text-[10px] text-muted-foreground font-mono truncate">{(data as ConditionNodeData).expression}</p>
       )}
+      {isRouter && (
+        <div className="space-y-1">
+          <p className="truncate font-mono text-[9px] text-muted-foreground">{routerData.inputPath || "entire input"}</p>
+          {routerRoutes.map((route) => (
+            <div key={route.id} className="truncate rounded border bg-muted/20 px-2 py-1 text-[9px]">{route.label}</div>
+          ))}
+        </div>
+      )}
+
       {type === "trigger" && (
         <Badge variant="outline" className="text-[9px] px-1.5 py-0">
           {(data as TriggerNodeData).triggerType === "on_load" ? "auto" : "manual"}
@@ -321,6 +359,16 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
           <div className="mt-1 flex justify-between px-0.5 text-[9px] opacity-60"><span>✓ true</span><span>✗ false</span></div>
         </>
       )}
+      {isRouter && routerRoutes.map((route, index) => (
+        <Handle
+          key={`route-${route.id}-right`}
+          id={`route-${route.id}-right`}
+          type="source"
+          position={Position.Right}
+          style={{ top: `${32 + ((index + 1) / (routerRoutes.length + 1)) * 62}%` }}
+          className="!h-2.5 !w-2.5 !border-2 !border-orange-600 !bg-orange-400"
+        />
+      ))}
     </div>
   );
 };
@@ -334,6 +382,7 @@ const nodeTypes = {
   api:       (p: FlowNodeProps) => <FlowNode {...p} type="api" />,
   plugin:    (p: FlowNodeProps) => <FlowNode {...p} type="plugin" />,
   condition: (p: FlowNodeProps) => <FlowNode {...p} type="condition" />,
+  router:    (p: FlowNodeProps) => <FlowNode {...p} type="router" />,
   output:    (p: FlowNodeProps) => <FlowNode {...p} type="output" />,
 };
 
@@ -902,7 +951,7 @@ const ApiPanel = ({ node, organizationId, onChange }: { node: WorkflowNode; orga
 
 interface PluginGenerationContext {
   workflowNodes: Array<{ nodeId: string; label: string; type: string; inputSchema?: string; outputSchema?: string }>;
-  workflowEdges: Array<{ source: string; target: string; dataPath?: string; branch?: string }>;
+  workflowEdges: Array<{ source: string; target: string; dataPath?: string; branch?: string; route?: string }>;
   incoming: Array<{ nodeId: string; label: string; type: string; dataPath?: string; outputSchema?: string; latestTestOutput?: unknown }>;
   outgoing: Array<{ nodeId: string; label: string; type: string; inputSchema?: string }>;
 }
@@ -1177,7 +1226,7 @@ trigger(result) -> retrieval(list result skills without sending full JSON) -> us
 `.trim();
 
 const WORKFLOW_GENERATION_SYSTEM_PROMPT = `You design executable agentic workflows. Return JSON only with {"nodes":[],"edges":[]}.
-Allowed node types: trigger, document_context, retrieval, user_input, agent, api, plugin, condition, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision before continuing.
+Allowed node types: trigger, document_context, retrieval, user_input, agent, api, plugin, condition, router, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision before continuing.
 Prefer deterministic plugin nodes for parsing, validation, looping, accumulation, formatting, evidence verification, and resultData updates. Use LLM agents only for semantic interpretation or generation.
 Each node: {"id":"short-unique-id","type":"allowed type","data":{...}}. Do not include positions.
 All inputSchema and outputSchema values must be concise human-readable strings. Do not return schema objects in these fields.
@@ -1189,8 +1238,9 @@ Agent data: prefer an available saved agent with {label,mode:"existing",agentId,
 API data: {label,url,method,queryParams:[],headers:[],authType:"none|bearer|basic|api_key",bodyType:"none|json|text|form_urlencoded",body,responseType:"auto|json|text",outputPath,inputSchema,outputSchema}. Never invent credential values; leave auth values empty.
 Plugin data: {label,description,code,inputSchema,outputSchema}. Code is a sandbox function body receiving input.prevOutput, input.result, input.docText and input.getNodeOutput(id); it must return a value and cannot use network, DOM, storage, imports, eval, Function, or timers.
 Condition data: {label,expression,inputSchema,loopStart optional,loopEnd optional}. Expression reads prevOutput and returns truthy/falsy.
+Router data: {label,inputPath optional,matchMode:"all_matches|first_match",caseSensitive,rules:[{id,label,operator,value}],fallbackLabel,inputSchema,outputSchema}. Operators: contains, equals, not_equals, starts_with, ends_with, exists, greater_than, greater_than_or_equal, less_than, less_than_or_equal.
 Output data: {label,renderAs:"auto|html|json|text|update_result",inputSchema}.
-Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional,"dataPath":"optional.path"}. Only condition edges may specify branch. Ensure schemas and data paths are compatible.`;
+Each edge: {"source":"node-id","target":"node-id","branch":"true|false" optional,"route":"router-rule-id|fallback" optional,"dataPath":"optional.path"}. Only condition edges may specify branch and only router edges may specify route. Ensure schemas and data paths are compatible.`;
 
 const PluginPanel = ({ node, organizationId, generationContext, onChange }: {
   node: WorkflowNode;
@@ -1382,6 +1432,132 @@ const ConditionPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: 
         outputSchema={d.outputSchema}
         onInputChange={(v) => onChange({ ...d, inputSchema: v || undefined })}
         onOutputChange={(v) => onChange({ ...d, outputSchema: v || undefined })}
+      />
+    </div>
+  );
+};
+
+const ROUTER_OPERATORS: Array<{ value: RouterRule["operator"]; label: string }> = [
+  { value: "contains", label: "Contains" },
+  { value: "equals", label: "Equals" },
+  { value: "not_equals", label: "Does not equal" },
+  { value: "starts_with", label: "Starts with" },
+  { value: "ends_with", label: "Ends with" },
+  { value: "exists", label: "Exists" },
+  { value: "greater_than", label: "Greater than" },
+  { value: "greater_than_or_equal", label: "Greater than or equal" },
+  { value: "less_than", label: "Less than" },
+  { value: "less_than_or_equal", label: "Less than or equal" },
+];
+
+const RouterPanel = ({
+  node,
+  onChange,
+  onRemoveRule,
+}: {
+  node: WorkflowNode;
+  onChange: (data: RouterNodeData) => void;
+  onRemoveRule: (ruleId: string) => void;
+}) => {
+  const data = node.data as RouterNodeData;
+  const rules = data.rules ?? [];
+  const updateRule = (ruleId: string, patch: Partial<RouterRule>) => {
+    onChange({ ...data, rules: rules.map((rule) => rule.id === ruleId ? { ...rule, ...patch } : rule) });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <Label className="text-xs">Label</Label>
+        <Input className="h-7 text-xs" value={data.label} onChange={(event) => onChange({ ...data, label: event.target.value })} />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Input field path</Label>
+        <Input
+          className="h-7 font-mono text-xs"
+          value={data.inputPath ?? ""}
+          placeholder="e.g. results or classification.codes"
+          onChange={(event) => onChange({ ...data, inputPath: event.target.value || undefined })}
+        />
+        <p className="text-[10px] text-muted-foreground">Leave empty to compare against the complete previous output.</p>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Routing mode</Label>
+        <Select value={data.matchMode ?? "all_matches"} onValueChange={(value) => onChange({ ...data, matchMode: value as RouterNodeData["matchMode"] })}>
+          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all_matches">All matches</SelectItem>
+            <SelectItem value="first_match">First match only</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[10px] text-muted-foreground">
+          All matches fans out to every matching route. First match uses rule order.
+        </p>
+      </div>
+      <div className="flex items-center justify-between rounded-md border px-2.5 py-2">
+        <div>
+          <Label className="text-xs">Case sensitive</Label>
+          <p className="text-[10px] text-muted-foreground">Applies to text comparisons.</p>
+        </div>
+        <Switch checked={Boolean(data.caseSensitive)} onCheckedChange={(checked) => onChange({ ...data, caseSensitive: checked })} />
+      </div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs">Routes</Label>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 text-xs"
+            onClick={() => onChange({
+              ...data,
+              rules: [...rules, { id: `rule-${uid()}`, label: `Route ${rules.length + 1}`, operator: "contains", value: "" }],
+            })}
+          >
+            <Plus className="h-3 w-3" /> Add route
+          </Button>
+        </div>
+        {rules.map((rule, index) => (
+          <div key={rule.id} className="space-y-2 rounded-md border bg-muted/20 p-2.5">
+            <div className="flex items-center gap-1">
+              <Input className="h-7 flex-1 text-xs" value={rule.label} placeholder="Route label" onChange={(event) => updateRule(rule.id, { label: event.target.value })} />
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={index === 0} onClick={() => onChange({ ...data, rules: moveItem(rules, index, index - 1) })}>
+                <ChevronUp className="h-3.5 w-3.5" />
+              </Button>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={index === rules.length - 1} onClick={() => onChange({ ...data, rules: moveItem(rules, index, index + 1) })}>
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+              <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onRemoveRule(rule.id)}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Select value={rule.operator} onValueChange={(value) => updateRule(rule.id, { operator: value as RouterRule["operator"] })}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ROUTER_OPERATORS.map((operator) => <SelectItem key={operator.value} value={operator.value}>{operator.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Input
+                className="h-8 font-mono text-xs"
+                value={rule.value ?? ""}
+                disabled={rule.operator === "exists"}
+                placeholder="Value"
+                onChange={(event) => updateRule(rule.id, { value: event.target.value })}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Fallback route label</Label>
+        <Input className="h-7 text-xs" value={data.fallbackLabel ?? "No match"} onChange={(event) => onChange({ ...data, fallbackLabel: event.target.value })} />
+      </div>
+      <SchemaRow
+        inputSchema={data.inputSchema}
+        outputSchema={data.outputSchema}
+        onInputChange={(value) => onChange({ ...data, inputSchema: value || undefined })}
+        onOutputChange={(value) => onChange({ ...data, outputSchema: value || undefined })}
       />
     </div>
   );
@@ -3144,6 +3320,57 @@ return { count: items.length, average: Math.round(average * 10) / 10, top };` } 
       ],
     },
   },
+  router: {
+    id: "node-example-router",
+    name: "Result Router example",
+    description: "Fans out to every route whose rule matches a structured agent result.",
+    testFixture: {
+      inputMode: "json",
+      input: JSON.stringify({ requestId: "REQ-ROUTER-1" }, null, 2),
+      prompt: "Route the sample agent result.",
+    },
+    workflow: {
+      nodes: [
+        { id: "ex-router-trigger", type: "trigger", position: { x: 40, y: 220 }, data: { label: "Start routing", triggerType: "manual", inputSources: ["result"] } satisfies TriggerNodeData },
+        { id: "ex-router-agent-result", type: "plugin", position: { x: 290, y: 220 }, data: { label: "Sample agent result", description: "Deterministic structured output for the live example", code: "return { results: ['123', '321', 'x'] };", outputSchema: "{ results: string[] }" } satisfies PluginNodeData },
+        {
+          id: "ex-router",
+          type: "router",
+          position: { x: 550, y: 180 },
+          data: {
+            label: "Route result codes",
+            inputPath: "results",
+            matchMode: "all_matches",
+            rules: [
+              { id: "has-123", label: "Process A", operator: "contains", value: "123" },
+              { id: "has-321", label: "Process B", operator: "contains", value: "321" },
+              { id: "has-y", label: "Process C", operator: "contains", value: "y" },
+            ],
+            fallbackLabel: "No matching code",
+            inputSchema: "{ results: string[] }",
+            outputSchema: "{ results: string[] }",
+          } satisfies RouterNodeData,
+        },
+        { id: "ex-router-a", type: "plugin", position: { x: 850, y: 40 }, data: { label: "Process A", description: "Runs when results contain 123", code: "return { process: 'A', matched: '123', input: input.prevOutput };", outputSchema: "{ process, matched, input }" } satisfies PluginNodeData },
+        { id: "ex-router-b", type: "plugin", position: { x: 850, y: 160 }, data: { label: "Process B", description: "Runs when results contain 321", code: "return { process: 'B', matched: '321', input: input.prevOutput };", outputSchema: "{ process, matched, input }" } satisfies PluginNodeData },
+        { id: "ex-router-c", type: "plugin", position: { x: 850, y: 280 }, data: { label: "Process C", description: "Runs when results contain y", code: "return { process: 'C', matched: 'y', input: input.prevOutput };", outputSchema: "{ process, matched, input }" } satisfies PluginNodeData },
+        { id: "ex-router-fallback", type: "plugin", position: { x: 850, y: 400 }, data: { label: "Fallback process", description: "Runs only when no rule matches", code: "return { process: 'fallback', input: input.prevOutput };", outputSchema: "{ process, input }" } satisfies PluginNodeData },
+        { id: "ex-router-output", type: "output", position: { x: 1120, y: 220 }, data: { label: "Show routed process", renderAs: "json", inputSchema: "{ process, matched?, input }" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "ex-router-e1", source: "ex-router-trigger", target: "ex-router-agent-result" },
+        { id: "ex-router-e2", source: "ex-router-agent-result", target: "ex-router" },
+        { id: "ex-router-e3", source: "ex-router", target: "ex-router-a", sourceHandle: "route-has-123", label: "Process A" },
+        { id: "ex-router-e4", source: "ex-router", target: "ex-router-b", sourceHandle: "route-has-321", label: "Process B" },
+        { id: "ex-router-e5", source: "ex-router", target: "ex-router-c", sourceHandle: "route-has-y", label: "Process C" },
+        { id: "ex-router-e6", source: "ex-router", target: "ex-router-fallback", sourceHandle: "route-fallback", label: "No matching code" },
+        { id: "ex-router-e7", source: "ex-router-a", target: "ex-router-output" },
+        { id: "ex-router-e8", source: "ex-router-b", target: "ex-router-output" },
+        { id: "ex-router-e9", source: "ex-router-c", target: "ex-router-output" },
+        { id: "ex-router-e10", source: "ex-router-fallback", target: "ex-router-output" },
+      ],
+    },
+  },
   output: {
     id: "node-example-output",
     name: "Output example",
@@ -3348,7 +3575,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       const data = workflowNode.data as { label?: string; inputSchema?: string; outputSchema?: string };
       return { nodeId: workflowNode.id, label: data.label ?? workflowNode.id, type: workflowNode.type ?? "unknown", inputSchema: data.inputSchema, outputSchema: data.outputSchema };
     }),
-    workflowEdges: edges.map((edge) => ({ source: edge.source, target: edge.target, dataPath: typeof edge.dataPath === "string" ? edge.dataPath : undefined, branch: branchFromHandle(edge.sourceHandle) })),
+    workflowEdges: edges.map((edge) => ({ source: edge.source, target: edge.target, dataPath: typeof edge.dataPath === "string" ? edge.dataPath : undefined, branch: branchFromHandle(edge.sourceHandle), route: routeFromHandle(edge.sourceHandle) })),
     incoming: edges.filter((edge) => edge.target === selectedNode.id).map((edge) => {
       const source = nodes.find((candidate) => candidate.id === edge.source);
       const sourceData = source?.data as { label?: string; outputSchema?: string } | undefined;
@@ -3447,8 +3674,10 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     if (sourceNode?.type === "output") return;
     setEdges((eds) => {
       const branch = branchFromHandle(params.sourceHandle);
+      const routeId = routeFromHandle(params.sourceHandle);
+      const edgeLabel = routeLabel(sourceNode, routeId) ?? branch;
       const next = addEdge(
-        { ...params, id: uid(), markerEnd: EDGE_MARKER, style: EDGE_STYLE, label: branch },
+        { ...params, id: uid(), markerEnd: EDGE_MARKER, style: EDGE_STYLE, label: edgeLabel },
         eds,
       );
       commit(nodes, next);
@@ -3461,10 +3690,13 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     if (sourceNode?.type === "output") return;
     setEdges((currentEdges) => {
       const wasBranch = branchFromHandle(oldEdge.sourceHandle);
+      const wasRoute = routeFromHandle(oldEdge.sourceHandle);
       const next = reconnectEdge(oldEdge, connection, currentEdges, { shouldReplaceId: false }).map((edge) => {
         if (edge.id !== oldEdge.id) return edge;
         const branch = branchFromHandle(connection.sourceHandle);
-        return { ...edge, label: branch ?? (wasBranch ? undefined : edge.label) };
+        const routeId = routeFromHandle(connection.sourceHandle);
+        const label = routeLabel(sourceNode, routeId) ?? branch ?? (wasBranch || wasRoute ? undefined : edge.label);
+        return { ...edge, label };
       });
       commit(nodes, next);
       return next;
@@ -3481,6 +3713,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       api:       { label: "API Request", url: "", method: "GET", queryParams: [], headers: [], authType: "none", bodyType: "none", responseType: "auto" } satisfies ApiNodeData,
       plugin:    { label: "Plugin", code: "return input.prevOutput;", description: "" } satisfies PluginNodeData,
       condition: { label: "Condition", expression: "prevOutput?.length > 0" } satisfies ConditionNodeData,
+      router:    { label: "Result Router", inputPath: "", matchMode: "all_matches", caseSensitive: false, rules: [{ id: `rule-${uid()}`, label: "Process A", operator: "contains", value: "123" }], fallbackLabel: "No match" } satisfies RouterNodeData,
       output:    { label: "Output", renderAs: "auto" } satisfies OutputNodeData,
     };
     const newNode: Node = {
@@ -3915,6 +4148,35 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     commit(next, edges);
   };
 
+  const updateSelectedRouterData = (data: RouterNodeData) => {
+    const nextNodes = nodes.map((node) => node.id === selectedNodeId ? { ...node, data: { ...node.data, ...data } } : node);
+    const nextEdges = edges.map((edge) => {
+      if (edge.source !== selectedNodeId) return edge;
+      const routeId = routeFromHandle(edge.sourceHandle);
+      if (!routeId) return edge;
+      const label = routeId === "fallback"
+        ? data.fallbackLabel || "No match"
+        : data.rules.find((rule) => rule.id === routeId)?.label;
+      return { ...edge, label };
+    });
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    commit(nextNodes, nextEdges);
+  };
+
+  const removeSelectedRouterRule = (ruleId: string) => {
+    if (!selectedNodeId) return;
+    const nextNodes = nodes.map((node) => {
+      if (node.id !== selectedNodeId || node.type !== "router") return node;
+      const data = node.data as unknown as RouterNodeData;
+      return { ...node, data: { ...data, rules: (data.rules ?? []).filter((rule) => rule.id !== ruleId) } };
+    });
+    const nextEdges = edges.filter((edge) => edge.source !== selectedNodeId || routeFromHandle(edge.sourceHandle) !== ruleId);
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    commit(nextNodes, nextEdges);
+  };
+
   const updateSelectedEdge = (patch: Partial<Edge>) => {
     const next = edges.map((edge) => edge.id === selectedEdgeId ? { ...edge, ...patch } : edge);
     setEdges(next);
@@ -4228,6 +4490,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           if ((edge.branch === "true" || edge.branch === "false") && sourceType !== "condition") issues.push(`Edge ${index + 1} uses branch but source is not a condition node.`);
         });
         if (rawEdges.length === 0 && rawNodes.length > 1) issues.push("Graph should include explicit edges between nodes.");
+          if (edge.route && sourceType !== "router") issues.push(`Edge ${index + 1} uses route but source is not a router node.`);
         return issues;
       };
       let parsed = parseGeneratedWorkflowResponse(generated);
@@ -4253,7 +4516,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         generated = await callWorkflowGenerator(repairPrompt, activeSystemPrompt, { ...generationContextPayload, plan, validationIssues, graph: parsed });
         parsed = parseGeneratedWorkflowResponse(generated);
       }
-      const allowedTypes = new Set(["trigger", "document_context", "retrieval", "user_input", "agent", "api", "plugin", "condition", "output"]);
+      const allowedTypes = new Set(["trigger", "document_context", "retrieval", "user_input", "agent", "api", "plugin", "condition", "router", "output"]);
       const typeAliases: Record<string, WorkflowNode["type"]> = {
         start: "trigger", input: "trigger", user_input: "trigger",
         document: "document_context", document_context: "document_context", file_context: "document_context",
@@ -4261,6 +4524,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         ask: "user_input", question: "user_input", user_input: "user_input", wait: "user_input", pause: "user_input", human_input: "user_input",
         ai: "agent", llm: "agent", ai_agent: "agent",
         http: "api", request: "api", api_request: "api",
+        router: "router", route: "router", switch: "router", multi_condition: "router",
         javascript: "plugin", code: "plugin", transform: "plugin", function: "plugin",
         branch: "condition", decision: "condition", if: "condition",
         end: "output", result: "output", response: "output", final: "output",
@@ -4403,6 +4667,34 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           loopStart: typeof rawData.loopStart === "number" ? Math.max(0, Math.round(rawData.loopStart)) : undefined,
           loopEnd: typeof rawData.loopEnd === "number" ? Math.max(0, Math.round(rawData.loopEnd)) : undefined,
         };
+        else if (type === "router") {
+          const allowedOperators = new Set<RouterRule["operator"]>(["contains", "equals", "not_equals", "starts_with", "ends_with", "exists", "greater_than", "greater_than_or_equal", "less_than", "less_than_or_equal"]);
+          const usedRuleIds = new Set<string>();
+          const rules: RouterRule[] = [];
+          for (const [ruleIndex, rawRule] of (Array.isArray(rawData.rules) ? rawData.rules : []).slice(0, 20).entries()) {
+            const value = rawRule && typeof rawRule === "object" ? rawRule as Record<string, unknown> : {};
+            let ruleId = String(value.id || `rule-${ruleIndex + 1}`).replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 48) || `rule-${ruleIndex + 1}`;
+            if (ruleId === "fallback" || usedRuleIds.has(ruleId)) ruleId = `rule-${ruleIndex + 1}-${uid()}`;
+            usedRuleIds.add(ruleId);
+            const operator = allowedOperators.has(value.operator as RouterRule["operator"]) ? value.operator as RouterRule["operator"] : "contains";
+            rules.push({
+              id: ruleId,
+              label: String(value.label || `Route ${ruleIndex + 1}`).slice(0, 100),
+              operator,
+              value: operator === "exists" ? undefined : String(value.value ?? "").slice(0, 1000),
+            });
+          }
+          data = {
+            label,
+            inputPath: String(rawData.inputPath || "").slice(0, 500) || undefined,
+            matchMode: rawData.matchMode === "first_match" ? "first_match" : "all_matches",
+            caseSensitive: rawData.caseSensitive === true,
+            rules: rules.length > 0 ? rules : [{ id: `rule-${uid()}`, label: "Matched", operator: "contains", value: "" }],
+            fallbackLabel: String(rawData.fallbackLabel || "No match").slice(0, 100),
+            inputSchema: normalizeGeneratedSchema(rawData.inputSchema),
+            outputSchema: normalizeGeneratedSchema(rawData.outputSchema),
+          };
+        }
         else data = { label, renderAs: workflowOutput, inputSchema: normalizeGeneratedSchema(rawData.inputSchema) };
         return { id, type, position: { x: 240 + (index % 3) * 280, y: 40 + Math.floor(index / 3) * 170 }, data: data as WorkflowNode["data"] };
       });
@@ -4457,7 +4749,14 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         const sourceNode = generatedNodes.find((node) => node.id === source);
         if (sourceNode?.type === "output") return [];
         const branch = sourceNode?.type === "condition" && (value.branch === "true" || value.branch === "false") ? value.branch : undefined;
-        return [{ id: `generated-edge-${index + 1}-${uid()}`, source, target, sourceHandle: branch, label: branch, type: "smoothstep" as const, dataPath: String(value.dataPath || "").slice(0, 500) || undefined }];
+        const routerData = sourceNode?.data as RouterNodeData | undefined;
+        const requestedRoute = String(value.route || "");
+        const routeId = sourceNode?.type === "router" && (requestedRoute === "fallback" || routerData?.rules?.some((rule) => rule.id === requestedRoute))
+          ? requestedRoute
+          : sourceNode?.type === "router" ? routerData?.rules?.[0]?.id ?? "fallback" : undefined;
+        const sourceHandle = branch ?? (routeId ? `route-${routeId}` : undefined);
+        const label = branch ?? (routeId === "fallback" ? routerData?.fallbackLabel || "No match" : routerData?.rules?.find((rule) => rule.id === routeId)?.label);
+        return [{ id: `generated-edge-${index + 1}-${uid()}`, source, target, sourceHandle, label, type: "smoothstep" as const, dataPath: String(value.dataPath || "").slice(0, 500) || undefined }];
       });
       const triggerId = triggerNodes[0].id;
       const reachesOutput = () => {
@@ -4777,7 +5076,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 <Background gap={20} size={1} color="hsl(var(--border))" />
                 <Controls showInteractive={false} className="!m-3 !overflow-hidden !rounded-lg !border !border-border !bg-background/90 !shadow-sm" />
                 <MiniMap
-                  nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+                  nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
                   maskColor="hsl(var(--background) / 0.65)"
                   className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
                 />
@@ -5193,7 +5492,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
               className="!m-3 !overflow-hidden !rounded-lg !border-2 !border-foreground/70 !bg-transparent !shadow-none [&_button]:!border-border [&_button]:!bg-transparent [&_button]:!text-foreground [&_button]:hover:!bg-muted/50 [&_svg]:!fill-current [&_svg]:!stroke-current"
             />
             <MiniMap
-      nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+              nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
               maskColor="hsl(var(--background) / 0.65)"
               className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
             />
@@ -5275,6 +5574,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 {selectedNode.type === "api" && <ApiPanel node={selectedNode} organizationId={organizationId} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "plugin" && <PluginPanel node={selectedNode} organizationId={organizationId} generationContext={pluginGenerationContext} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "condition" && <ConditionPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
+                {selectedNode.type === "router" && <RouterPanel node={selectedNode} onChange={updateSelectedRouterData} onRemoveRule={removeSelectedRouterRule} />}
                 {selectedNode.type === "output" && <OutputPanel
                   node={selectedNode}
                   incomingEdges={edges.filter((edge) => edge.target === selectedNode.id) as Array<Edge & { dataPath?: string }>}
@@ -5321,11 +5621,18 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 <div className="space-y-1">
                   <Label className="text-xs">From node</Label>
                   <Select value={selectedEdge.source} onValueChange={(source) => {
-                    const isCondition = nodes.find((node) => node.id === source)?.type === "condition";
+                    const sourceNode = nodes.find((node) => node.id === source);
+                    const isCondition = sourceNode?.type === "condition";
+                    const isRouter = sourceNode?.type === "router";
                     const branch = branchFromHandle(selectedEdge.sourceHandle) ?? "true";
                     const side = sideFromHandle(selectedEdge.sourceHandle) ?? "bottom";
                     const wasBranch = branchFromHandle(selectedEdge.sourceHandle);
-                    updateSelectedEdge({ source, sourceHandle: isCondition ? `${branch}-${side}` : `port-${side}`, label: isCondition ? branch : (wasBranch ? undefined : selectedEdge.label) });
+                    const wasRoute = routeFromHandle(selectedEdge.sourceHandle);
+                    const routerData = sourceNode?.data as unknown as RouterNodeData;
+                    const routeId = routeFromHandle(selectedEdge.sourceHandle) ?? routerData?.rules?.[0]?.id ?? "fallback";
+                    const sourceHandle = isCondition ? `${branch}-${side}` : isRouter ? `route-${routeId}-right` : `port-${side}`;
+                    const label = isCondition ? branch : isRouter ? routeLabel(sourceNode, routeId) : (wasBranch || wasRoute ? undefined : selectedEdge.label);
+                    updateSelectedEdge({ source, sourceHandle, label });
                   }}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>{nodes.filter((node) => node.type !== "output").map((node) => <SelectItem key={node.id} value={node.id}>{String(node.data.label || node.id)}</SelectItem>)}</SelectContent>
@@ -5340,12 +5647,29 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                     </Select>
                   </div>
                 )}
+                {(() => {
+                  const sourceNode = nodes.find((node) => node.id === selectedEdge.source);
+                  if (sourceNode?.type !== "router") return null;
+                  const data = sourceNode.data as unknown as RouterNodeData;
+                  const routes = [...(data.rules ?? []).map((rule) => ({ id: rule.id, label: rule.label })), { id: "fallback", label: data.fallbackLabel || "No match" }];
+                  const selectedRouteId = routeFromHandle(selectedEdge.sourceHandle) ?? routes[0]?.id ?? "fallback";
+                  return (
+                    <div className="space-y-1">
+                      <Label className="text-xs">Router route</Label>
+                      <Select value={selectedRouteId} onValueChange={(routeId) => updateSelectedEdge({ sourceHandle: `route-${routeId}-right`, label: routeLabel(sourceNode, routeId) })}>
+                        <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>{routes.map((route) => <SelectItem key={route.id} value={route.id}>{route.label}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                  );
+                })()}
                 <div className="space-y-1">
                   <Label className="text-xs">To node</Label>
                   <Select value={selectedEdge.target} onValueChange={(target) => {
                     const side = sideFromHandle(selectedEdge.targetHandle) ?? "top";
-                    const isCondition = nodes.find((node) => node.id === target)?.type === "condition";
-                    updateSelectedEdge({ target, targetHandle: `${isCondition ? "input" : "port"}-${side}` });
+                    const isBranchingNode = ["condition", "router"].includes(nodes.find((node) => node.id === target)?.type ?? "");
+                    const targetSide = nodes.find((node) => node.id === target)?.type === "router" && side === "right" ? "left" : side;
+                    updateSelectedEdge({ target, targetHandle: `${isBranchingNode ? "input" : "port"}-${targetSide}` });
                   }}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>{nodes.filter((node) => node.type !== "trigger").map((node) => <SelectItem key={node.id} value={node.id}>{String(node.data.label || node.id)}</SelectItem>)}</SelectContent>

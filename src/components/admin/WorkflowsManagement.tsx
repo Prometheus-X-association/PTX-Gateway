@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   Plus, Pencil, Trash2, Play, Square, ChevronDown, ChevronUp,
-  GitBranch, Code2, Bot, Globe2, X, Copy,
+  GitBranch, Code2, Bot, Globe2, Route, X, Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   api:       "bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 border-cyan-500/30",
   plugin:    "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
   condition: "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30",
+  router: "bg-orange-500/15 text-orange-700 dark:text-orange-300 border-orange-500/30",
   output:    "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
 };
 
@@ -36,6 +37,7 @@ const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
   api:       ({ className }) => <Globe2 className={className} />,
   plugin:    ({ className }) => <Code2 className={className} />,
   condition: ({ className }) => <GitBranch className={className} />,
+  router:    ({ className }) => <Route className={className} />,
   output:    ({ className }) => <Square className={className} />,
 };
 
