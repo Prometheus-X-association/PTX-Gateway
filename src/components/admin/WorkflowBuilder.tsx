@@ -1175,6 +1175,27 @@ const parseGeneratedWorkflowResponse = (value: string): { nodes: unknown[]; edge
   throw new Error(`The configured LLM did not return a usable workflow graph. Response started with: ${trimmed.slice(0, 180)}`);
 };
 
+const parseGeneratedJsonResponse = (value: string): unknown => {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("The configured LLM returned an empty response.");
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  const objectValue = firstBrace >= 0 && lastBrace > firstBrace ? trimmed.slice(firstBrace, lastBrace + 1) : "";
+  const firstBracket = trimmed.indexOf("[");
+  const lastBracket = trimmed.lastIndexOf("]");
+  const arrayValue = firstBracket >= 0 && lastBracket > firstBracket ? trimmed.slice(firstBracket, lastBracket + 1) : "";
+  const candidates = [...new Set([trimmed, objectValue, arrayValue].filter(Boolean))];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed !== null && typeof parsed === "object") return parsed;
+    } catch {
+      // Try the next representation. Some providers add prose around JSON.
+    }
+  }
+  throw new Error("The configured LLM did not return usable JSON. Response started with: " + trimmed.slice(0, 180));
+};
+
 const normalizeGeneratedSchema = (value: unknown): string | undefined => {
   if (value === null || value === undefined) return undefined;
   if (typeof value === "string") {
@@ -3415,6 +3436,15 @@ const defaultWorkflow = (): AgentWorkflow => ({
   edges: [],
 });
 
+const WORKFLOW_TEST_EXAMPLES = [
+  {
+    id: "ai-engineer-knowledge-graph",
+    label: "AI engineer knowledge graph",
+    path: "/examples/ai-engineer-knowledge-graph.json",
+    prompt: "Analyze this AI engineer profile knowledge graph.",
+  },
+] as const;
+
 export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalProviders, organizationId, onChange }: WorkflowBuilderProps) => {
   const wf = workflow.nodes.length === 0 ? defaultWorkflow() : workflow;
 
@@ -3462,6 +3492,12 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const popupDragRef = useRef<WorkflowPopupDragState | null>(null);
   const [testInputMode, setTestInputMode] = useState<"json" | "text">("json");
   const [testInput, setTestInput] = useState('{\n  "example": "value"\n}');
+  const [testExampleId, setTestExampleId] = useState("custom");
+  const [isLoadingTestExample, setIsLoadingTestExample] = useState(false);
+  const [testInputGenerationPrompt, setTestInputGenerationPrompt] = useState("");
+  const [generatedTestInput, setGeneratedTestInput] = useState<string | null>(null);
+  const [isGeneratingTestInput, setIsGeneratingTestInput] = useState(false);
+  const [testInputGenerationError, setTestInputGenerationError] = useState<string | null>(null);
   const [testDocumentText, setTestDocumentText] = useState("");
   const [testPrompt, setTestPrompt] = useState("Process this test data through the workflow.");
   const [isTesting, setIsTesting] = useState(false);
@@ -4201,6 +4237,130 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       setTestError(error instanceof Error ? error.message : String(error));
     }
   }, []);
+
+  const loadWorkflowTestExample = async (exampleId: string) => {
+    setTestExampleId(exampleId);
+    if (exampleId === "custom") return;
+
+    const example = WORKFLOW_TEST_EXAMPLES.find((item) => item.id === exampleId);
+    if (!example) return;
+
+    setIsLoadingTestExample(true);
+    setTestError(null);
+    try {
+      const response = await fetch(example.path);
+      if (!response.ok) throw new Error("Example data request failed with status " + response.status);
+      const data = await response.json() as unknown;
+      setTestInputMode("json");
+      setTestInput(JSON.stringify(data, null, 2));
+      setTestPrompt(example.prompt);
+      setTestDocumentText("");
+      setTestRuns({});
+      setTestExecutionOrder([]);
+      setTestStopReason(null);
+    } catch (error) {
+      setTestExampleId("custom");
+      setTestError("Could not load example data: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsLoadingTestExample(false);
+    }
+  };
+
+  const generateTestInputProposal = async () => {
+    if (!testInputGenerationPrompt.trim() || isGeneratingTestInput) return;
+
+    setIsGeneratingTestInput(true);
+    setTestInputGenerationError(null);
+    setGeneratedTestInput(null);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 60_000);
+
+    try {
+      const workflowContext = {
+        workflowId,
+        prompt: testPrompt,
+        nodes: nodes.map((node) => ({
+          id: node.id,
+          type: node.type,
+          label: String(node.data.label || node.id),
+          inputSchema: "inputSchema" in node.data ? node.data.inputSchema : undefined,
+          outputSchema: "outputSchema" in node.data ? node.data.outputSchema : undefined,
+        })),
+        edges: edges.map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+          dataPath: edge.dataPath,
+        })),
+      };
+      const content = [
+        "Generate one realistic, compact JSON input example for testing the supplied agentic workflow.",
+        "Return only one valid JSON object or array. Do not use Markdown fences, comments, placeholders, or secrets.",
+        "Match the workflow schemas and the user's requested scenario. Keep the example focused enough to inspect in a test panel.",
+        "",
+        "User request:",
+        testInputGenerationPrompt.trim(),
+        "",
+        "Workflow context:",
+        JSON.stringify(workflowContext, null, 2),
+      ].join("\n");
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const response = await fetch((import.meta.env.VITE_SUPABASE_URL as string) + "/functions/v1/chat-with-result", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+          ...(token ? { Authorization: "Bearer " + token } : {}),
+          ...(organizationId ? { "x-organization-id": organizationId } : {}),
+        },
+        body: JSON.stringify({
+          messages: [{ role: "user", content }],
+          result: workflowContext,
+          systemPrompt: "You create realistic JSON fixtures for workflow testing. Return valid JSON only.",
+          outputType: "json",
+        }),
+      });
+      if (!response.ok || !response.body) {
+        const detail = await response.text();
+        throw new Error("JSON generation failed (" + response.status + ")" + (detail ? ": " + detail : ""));
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulated = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          try {
+            const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+            if (event.type === "token" && event.content) accumulated += event.content;
+            if (event.type === "error") throw new Error(event.message || "LLM JSON generation failed");
+          } catch (error) {
+            if (error instanceof SyntaxError) continue;
+            throw error;
+          }
+        }
+      }
+
+      const generated = parseGeneratedJsonResponse(accumulated);
+      setGeneratedTestInput(JSON.stringify(generated, null, 2));
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === "AbortError"
+        ? "JSON generation timed out."
+        : error instanceof Error ? error.message : String(error);
+      setTestInputGenerationError(message);
+    } finally {
+      window.clearTimeout(timeoutId);
+      setIsGeneratingTestInput(false);
+    }
+  };
 
   const runWorkflowTest = async (stopAfterNodeId?: string) => {
     if (isTesting) return;
@@ -5344,10 +5504,64 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
             <button type="button" disabled={isTesting} onPointerDown={(event) => event.stopPropagation()} onClick={() => setShowTestPanel(false)}><X className="h-4 w-4 text-muted-foreground hover:text-foreground" /></button>
           </div>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+            <div className="space-y-1">
+              <Label className="text-[10px]">Example data</Label>
+              <Select value={testExampleId} onValueChange={(value) => void loadWorkflowTestExample(value)} disabled={isTesting || isLoadingTestExample}>
+                <SelectTrigger className="h-8 text-xs">
+                  {isLoadingTestExample ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {WORKFLOW_TEST_EXAMPLES.map((example) => <SelectItem key={example.id} value={example.id}>{example.label}</SelectItem>)}
+                  <SelectItem value="custom">Custom input</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-2.5">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-3.5 w-3.5 text-violet-600" />
+                <Label className="text-[10px] font-semibold">Generate JSON with LLM</Label>
+              </div>
+              <Textarea
+                className="min-h-[64px] text-xs"
+                disabled={isTesting || isGeneratingTestInput}
+                value={testInputGenerationPrompt}
+                onChange={(event) => setTestInputGenerationPrompt(event.target.value)}
+                placeholder="Describe a realistic test fixture, including the fields and scenario you need."
+              />
+              <Button type="button" size="sm" className="h-7 gap-1.5 text-xs" disabled={isTesting || isGeneratingTestInput || !testInputGenerationPrompt.trim()} onClick={() => void generateTestInputProposal()}>
+                {isGeneratingTestInput ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                {isGeneratingTestInput ? "Generating..." : "Generate proposal"}
+              </Button>
+              {testInputGenerationError && <p className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-[10px] text-destructive">{testInputGenerationError}</p>}
+              {generatedTestInput && (
+                <div className="space-y-2">
+                  <Label className="text-[10px]">Proposed JSON</Label>
+                  <Textarea className="min-h-[140px] font-mono text-[10px]" readOnly value={generatedTestInput} />
+                  <div className="flex items-center gap-2">
+                    <Button type="button" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => {
+                      setTestInputMode("json");
+                      setTestInput(generatedTestInput);
+                      setTestExampleId("custom");
+                      setGeneratedTestInput(null);
+                      setTestRuns({});
+                      setTestExecutionOrder([]);
+                      setTestStopReason(null);
+                      setTestError(null);
+                    }}>
+                      <CheckCircle2 className="h-3.5 w-3.5" /> Use this JSON
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setGeneratedTestInput(null)}>
+                      <X className="h-3.5 w-3.5" /> Discard
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="grid grid-cols-[110px_1fr] gap-2">
               <div className="space-y-1">
                 <Label className="text-[10px]">Input type</Label>
-                <Select value={testInputMode} onValueChange={(value: "json" | "text") => setTestInputMode(value)} disabled={isTesting}>
+                <Select value={testInputMode} onValueChange={(value: "json" | "text") => { setTestInputMode(value); setTestExampleId("custom"); }} disabled={isTesting || isLoadingTestExample}>
                   <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="json">JSON</SelectItem><SelectItem value="text">Text</SelectItem></SelectContent>
                 </Select>
@@ -5356,7 +5570,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
             </div>
             {testNeedsResultData && <div className="space-y-1">
               <Label className="text-[10px]">Trigger result data</Label>
-              <Textarea className="min-h-[110px] font-mono text-[10px]" disabled={isTesting} value={testInput} onChange={(event) => setTestInput(event.target.value)} placeholder={testInputMode === "json" ? '{ "items": [] }' : "Paste the text to process"} />
+              <Textarea className="min-h-[110px] font-mono text-[10px]" disabled={isTesting || isLoadingTestExample} value={testInput} onChange={(event) => { setTestInput(event.target.value); setTestExampleId("custom"); }} placeholder={testInputMode === "json" ? '{ "items": [] }' : "Paste the text to process"} />
             </div>}
             {testNeedsDocument && <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
               <div>
@@ -5380,7 +5594,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
               {isTesting ? (
                 <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => testAbortRef.current?.abort()}><CircleStop className="h-3.5 w-3.5" /> Stop test</Button>
               ) : (
-                <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => void runWorkflowTest()}><Play className="h-3.5 w-3.5" /> Run test</Button>
+                <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={isLoadingTestExample} onClick={() => void runWorkflowTest()}><Play className="h-3.5 w-3.5" /> Run test</Button>
               )}
               {Object.keys(testRuns).length > 0 && <span className="text-[10px] text-muted-foreground">{Object.values(testRuns).filter((run) => run.status === "success").length}/{nodes.length} nodes completed</span>}
             </div>
