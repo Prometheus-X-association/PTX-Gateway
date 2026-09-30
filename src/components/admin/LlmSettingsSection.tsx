@@ -10,6 +10,9 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
@@ -541,27 +544,30 @@ interface ProviderCardProps {
   provider: LlmProvider; index: number; total: number;
   onChange: (updated: LlmProvider) => void;
   onMove: (from: number, to: number) => void;
+  showListControls?: boolean;
   onRemove: () => void;
 }
 
-const ProviderCard = ({ provider, index, total, onChange, onMove, onRemove }: ProviderCardProps) => {
+const ProviderCard = ({ provider, index, total, onChange, onMove, onRemove, showListControls = true }: ProviderCardProps) => {
   const [showKey, setShowKey] = useState(false);
   const label = index === 0 ? "Primary" : `Fallback ${index}`;
 
   return (
     <div className="border rounded-lg p-4 space-y-3 bg-card">
       <div className="flex items-center gap-2">
-        <Badge variant={index === 0 ? "default" : "secondary"} className="shrink-0">{label}</Badge>
+        {showListControls && <Badge variant={index === 0 ? "default" : "secondary"} className="shrink-0">{label}</Badge>}
         <Input className="h-8 text-sm font-medium" placeholder="Provider name (e.g. OpenAI, Groq)"
           value={provider.name} onChange={(e) => onChange({ ...provider, name: e.target.value })} />
         <div className="flex items-center gap-1 ml-auto shrink-0">
+          {showListControls && <>
           <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={index === 0}
             onClick={() => onMove(index, index - 1)}><ChevronUp className="h-4 w-4" /></Button>
           <Button type="button" variant="ghost" size="icon" className="h-7 w-7" disabled={index === total - 1}
             onClick={() => onMove(index, index + 1)}><ChevronDown className="h-4 w-4" /></Button>
+          </>}
           <Switch checked={provider.enabled} onCheckedChange={(v) => onChange({ ...provider, enabled: v })} />
-          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive"
-            onClick={onRemove}><Trash2 className="h-4 w-4" /></Button>
+          {showListControls && <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive"
+            onClick={onRemove}><Trash2 className="h-4 w-4" /></Button>}
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -660,9 +666,10 @@ interface McpCardProps {
   organizationId?: string;
   onChange: (updated: McpServer) => void;
   onRemove: () => void;
+  showRemove?: boolean;
 }
 
-const McpCard = ({ server, supabaseClient, organizationId, onChange, onRemove }: McpCardProps) => {
+const McpCard = ({ server, supabaseClient, organizationId, onChange, onRemove, showRemove = true }: McpCardProps) => {
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<McpTestResult | null>(null);
@@ -686,8 +693,8 @@ const McpCard = ({ server, supabaseClient, organizationId, onChange, onRemove }:
           value={server.name} onChange={(e) => onChange({ ...server, name: e.target.value })} />
         <div className="flex items-center gap-1 ml-auto shrink-0">
           <Switch checked={server.enabled} onCheckedChange={(v) => onChange({ ...server, enabled: v })} />
-          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive"
-            onClick={onRemove}><Trash2 className="h-4 w-4" /></Button>
+          {showRemove && <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive"
+            onClick={onRemove}><Trash2 className="h-4 w-4" /></Button>}
         </div>
       </div>
 
@@ -1755,6 +1762,8 @@ const LlmSettingsSection = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [availabilityTargets, setAvailabilityTargets] = useState<ChatAvailabilityTarget[]>([]);
+  const [providerEditor, setProviderEditor] = useState<{ mode: "create" | "edit"; draft: LlmProvider } | null>(null);
+  const [mcpEditor, setMcpEditor] = useState<{ mode: "create" | "edit"; draft: McpServer } | null>(null);
 
   useEffect(() => {
     const fetchConfig = async () => {
@@ -1868,17 +1877,50 @@ const LlmSettingsSection = () => {
     }));
   };
 
-  const updateProvider = (i: number, updated: LlmProvider) =>
-    patchLlm({ providers: llm.providers.map((p, j) => (j === i ? updated : p)) });
   const removeProvider = (i: number) =>
     patchLlm({ providers: llm.providers.filter((_, j) => j !== i) });
   const moveProvider = (from: number, to: number) =>
     patchLlm({ providers: moveItem(llm.providers, from, to) });
 
-  const updateMcp = (i: number, updated: McpServer) =>
-    patchLlm({ mcpServers: llm.mcpServers.map((s, j) => (j === i ? updated : s)) });
   const removeMcp = (i: number) =>
     patchLlm({ mcpServers: llm.mcpServers.filter((_, j) => j !== i) });
+
+  const saveProviderEditor = () => {
+    if (!providerEditor) return;
+    const provider = {
+      ...providerEditor.draft,
+      name: providerEditor.draft.name.trim(),
+      apiBaseUrl: providerEditor.draft.apiBaseUrl.trim(),
+      model: providerEditor.draft.model.trim(),
+    };
+    if (!provider.name || !provider.apiBaseUrl || !provider.model) {
+      toast.error("Provider name, API base URL, and model are required");
+      return;
+    }
+    patchLlm({
+      providers: providerEditor.mode === "create"
+        ? [...llm.providers, provider]
+        : llm.providers.map((item) => item.id === provider.id ? provider : item),
+    });
+    setProviderEditor(null);
+    toast.success(providerEditor.mode === "create" ? "Provider added" : "Provider updated");
+  };
+
+  const saveMcpEditor = () => {
+    if (!mcpEditor) return;
+    const server = { ...mcpEditor.draft, name: mcpEditor.draft.name.trim(), url: mcpEditor.draft.url.trim() };
+    if (!server.name || !server.url) {
+      toast.error("MCP server name and endpoint URL are required");
+      return;
+    }
+    patchLlm({
+      mcpServers: mcpEditor.mode === "create"
+        ? [...llm.mcpServers, server]
+        : llm.mcpServers.map((item) => item.id === server.id ? server : item),
+    });
+    setMcpEditor(null);
+    toast.success(mcpEditor.mode === "create" ? "MCP server added" : "MCP server updated");
+  };
 
   const updateAgent = (i: number, updated: LlmAgent) =>
     patchLlm({ agents: llm.agents.map((a, j) => (j === i ? updated : a)) });
@@ -1985,64 +2027,94 @@ const LlmSettingsSection = () => {
           </TabsList>
 
           <TabsContent value="providers" className="mt-0 space-y-6 rounded-xl border bg-muted/10 p-4 sm:p-5">
-            {/* LLM Providers */}
-            <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Zap className="h-4 w-4 text-muted-foreground" />
-            <h3 className="font-semibold text-sm">LLM Providers</h3>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Providers are tried in order — primary first, then fallbacks. Any OpenAI-compatible endpoint works.
-          </p>
-          <div className="space-y-3">
-            {llm.providers.length === 0 && (
-              <p className="text-sm text-muted-foreground border border-dashed rounded-lg p-4 text-center">
-                No providers configured. Add one below.
+            <section className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Zap className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="text-sm font-semibold">LLM Providers</h3>
+                </div>
+                <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setProviderEditor({ mode: "create", draft: emptyProvider() })}>
+                  <Plus className="h-3.5 w-3.5" /> Add provider
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Providers are tried in priority order. Open a row to edit its connection, model, credentials, and availability.
               </p>
-            )}
-            {llm.providers.map((provider, i) => (
-              <ProviderCard key={provider.id} provider={provider} index={i} total={llm.providers.length}
-                onChange={(updated) => updateProvider(i, updated)}
-                onMove={moveProvider} onRemove={() => removeProvider(i)} />
-            ))}
-          </div>
-          <Button type="button" variant="outline" size="sm" className="gap-2"
-            onClick={() => patchLlm({ providers: [...llm.providers, emptyProvider()] })}>
-            <Plus className="h-4 w-4" /> Add Provider
-          </Button>
-            </div>
+              <div className="overflow-x-auto rounded-md border bg-background">
+                <div className="min-w-[820px]">
+                  <div className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_132px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                    <span>Priority</span>
+                    <span>Name</span>
+                    <span>Family</span>
+                    <span>Model</span>
+                    <span>Endpoint</span>
+                    <span>Status</span>
+                    <span className="text-right">Actions</span>
+                  </div>
+                  {llm.providers.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-sm text-muted-foreground">No providers configured.</div>
+                  ) : llm.providers.map((provider, index) => (
+                    <div key={provider.id} className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_132px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+                      <Badge variant={index === 0 ? "default" : "secondary"} className="w-fit text-[10px]">{index === 0 ? "Primary" : `#${index + 1}`}</Badge>
+                      <span className="truncate text-sm font-medium" title={provider.name}>{provider.name || "Unnamed provider"}</span>
+                      <span className="truncate text-xs text-muted-foreground">{provider.providerType === "openai_compatible" ? "OpenAI compatible" : provider.providerType}</span>
+                      <span className="truncate font-mono text-xs text-muted-foreground" title={provider.model}>{provider.model || "Not set"}</span>
+                      <span className="truncate font-mono text-xs text-muted-foreground" title={provider.apiBaseUrl}>{provider.apiBaseUrl || "Not set"}</span>
+                      <Badge variant={provider.enabled ? "outline" : "secondary"} className="w-fit text-[10px]">{provider.enabled ? "Enabled" : "Off"}</Badge>
+                      <div className="flex justify-end gap-1">
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider up" disabled={index === 0} onClick={() => moveProvider(index, index - 1)}><ChevronUp className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider down" disabled={index === llm.providers.length - 1} onClick={() => moveProvider(index, index + 1)}><ChevronDown className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Edit provider" onClick={() => setProviderEditor({ mode: "edit", draft: { ...provider } })}><Pencil className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Delete provider" onClick={() => removeProvider(index)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
 
             <Separator />
 
-            {/* MCP Servers */}
-            <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Server className="h-4 w-4 text-muted-foreground" />
-            <h3 className="font-semibold text-sm">MCP Servers</h3>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Connect remote MCP servers to give agents additional tools. Each agent can be configured to use specific servers.
-          </p>
-          <McpGuide />
-          <div className="space-y-3">
-            {llm.mcpServers.length === 0 && (
-              <p className="text-sm text-muted-foreground border border-dashed rounded-lg p-4 text-center">
-                No MCP servers configured. Add one below.
+            <section className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Server className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="text-sm font-semibold">MCP Servers</h3>
+                </div>
+                <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setMcpEditor({ mode: "create", draft: emptyMcpServer() })}>
+                  <Plus className="h-3.5 w-3.5" /> Add MCP server
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Connect remote MCP servers and assign them to agents. Connection testing remains available inside each editor.
               </p>
-            )}
-            {llm.mcpServers.map((server, i) => (
-              <McpCard key={server.id} server={server} index={i}
-                supabaseClient={supabase}
-                organizationId={user?.organization?.id}
-                onChange={(updated) => updateMcp(i, updated)}
-                onRemove={() => removeMcp(i)} />
-            ))}
-          </div>
-          <Button type="button" variant="outline" size="sm" className="gap-2"
-            onClick={() => patchLlm({ mcpServers: [...llm.mcpServers, emptyMcpServer()] })}>
-            <Plus className="h-4 w-4" /> Add MCP Server
-          </Button>
-            </div>
+              <McpGuide />
+              <div className="overflow-x-auto rounded-md border bg-background">
+                <div className="min-w-[700px]">
+                  <div className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_88px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                    <span>Name</span>
+                    <span>Endpoint</span>
+                    <span>Authentication</span>
+                    <span>Status</span>
+                    <span className="text-right">Actions</span>
+                  </div>
+                  {llm.mcpServers.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-sm text-muted-foreground">No MCP servers configured.</div>
+                  ) : llm.mcpServers.map((server, index) => (
+                    <div key={server.id} className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_88px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+                      <span className="truncate text-sm font-medium" title={server.name}>{server.name || "Unnamed server"}</span>
+                      <span className="truncate font-mono text-xs text-muted-foreground" title={server.url}>{server.url || "Not set"}</span>
+                      <span className="text-xs text-muted-foreground">{server.apiKey ? "API key" : "None"}</span>
+                      <Badge variant={server.enabled ? "outline" : "secondary"} className="w-fit text-[10px]">{server.enabled ? "Enabled" : "Off"}</Badge>
+                      <div className="flex justify-end gap-1">
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Edit MCP server" onClick={() => setMcpEditor({ mode: "edit", draft: { ...server } })}><Pencil className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Delete MCP server" onClick={() => removeMcp(index)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
           </TabsContent>
 
           <TabsContent value="agents" className="mt-0 space-y-6 rounded-xl border bg-muted/10 p-4 sm:p-5">
@@ -2193,6 +2265,58 @@ const LlmSettingsSection = () => {
             </div>
           </TabsContent>
         </Tabs>
+
+        <Dialog open={providerEditor !== null} onOpenChange={(open) => { if (!open) setProviderEditor(null); }}>
+          <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{providerEditor?.mode === "create" ? "Add LLM provider" : "Edit LLM provider"}</DialogTitle>
+              <DialogDescription>Configure the provider connection and model used by agents and workflow nodes.</DialogDescription>
+            </DialogHeader>
+            {providerEditor && (
+              <ProviderCard
+                provider={providerEditor.draft}
+                index={Math.max(0, llm.providers.findIndex((provider) => provider.id === providerEditor.draft.id))}
+                total={Math.max(1, llm.providers.length)}
+                showListControls={false}
+                onChange={(draft) => setProviderEditor({ ...providerEditor, draft })}
+                onMove={() => undefined}
+                onRemove={() => undefined}
+              />
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setProviderEditor(null)}>Cancel</Button>
+              <Button type="button" className="gap-1.5" onClick={saveProviderEditor}>
+                <Save className="h-4 w-4" /> Save provider
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={mcpEditor !== null} onOpenChange={(open) => { if (!open) setMcpEditor(null); }}>
+          <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{mcpEditor?.mode === "create" ? "Add MCP server" : "Edit MCP server"}</DialogTitle>
+              <DialogDescription>Configure the server endpoint, credentials, status, and test its available tools.</DialogDescription>
+            </DialogHeader>
+            {mcpEditor && (
+              <McpCard
+                server={mcpEditor.draft}
+                index={0}
+                supabaseClient={supabase}
+                organizationId={user?.organization?.id}
+                showRemove={false}
+                onChange={(draft) => setMcpEditor({ ...mcpEditor, draft })}
+                onRemove={() => undefined}
+              />
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setMcpEditor(null)}>Cancel</Button>
+              <Button type="button" className="gap-1.5" onClick={saveMcpEditor}>
+                <Save className="h-4 w-4" /> Save MCP server
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Separator />
 
