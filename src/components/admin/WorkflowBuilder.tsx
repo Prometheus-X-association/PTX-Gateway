@@ -3606,6 +3606,31 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       ? { ...edge, animated: targetRun.status === "running", style: { ...EDGE_STYLE, stroke: targetRun.status === "error" ? "#ef4444" : "#10b981", strokeWidth: 2.2 } }
       : edge;
   });
+  const examplePluginGenerationContext: PluginGenerationContext = exampleSelectedNode ? {
+    workflowNodes: exampleNodes.map((workflowNode) => {
+      const data = workflowNode.data as { label?: string; inputSchema?: string; outputSchema?: string };
+      return { nodeId: workflowNode.id, label: data.label ?? workflowNode.id, type: workflowNode.type ?? "unknown", inputSchema: data.inputSchema, outputSchema: data.outputSchema };
+    }),
+    workflowEdges: exampleEdges.map((edge) => ({ source: edge.source, target: edge.target, dataPath: typeof edge.dataPath === "string" ? edge.dataPath : undefined, branch: branchFromHandle(edge.sourceHandle), route: routeFromHandle(edge.sourceHandle) })),
+    incoming: exampleEdges.filter((edge) => edge.target === exampleSelectedNode.id).map((edge) => {
+      const source = exampleNodes.find((candidate) => candidate.id === edge.source);
+      const sourceData = source?.data as { label?: string; outputSchema?: string } | undefined;
+      const tested = exampleRuns[edge.source]?.output;
+      return {
+        nodeId: edge.source,
+        label: sourceData?.label ?? edge.source,
+        type: source?.type ?? "unknown",
+        dataPath: typeof edge.dataPath === "string" ? edge.dataPath : undefined,
+        outputSchema: sourceData?.outputSchema,
+        latestTestOutput: tested === undefined ? undefined : compactWorkflowValue(pickDataPath(tested, typeof edge.dataPath === "string" ? edge.dataPath : "")),
+      };
+    }),
+    outgoing: exampleEdges.filter((edge) => edge.source === exampleSelectedNode.id).map((edge) => {
+      const target = exampleNodes.find((candidate) => candidate.id === edge.target);
+      const targetData = target?.data as { label?: string; inputSchema?: string } | undefined;
+      return { nodeId: edge.target, label: targetData?.label ?? edge.target, type: target?.type ?? "unknown", inputSchema: targetData?.inputSchema };
+    }),
+  } : { workflowNodes: [], workflowEdges: [], incoming: [], outgoing: [] };
   const pluginGenerationContext: PluginGenerationContext = selectedNode ? {
     workflowNodes: nodes.map((workflowNode) => {
       const data = workflowNode.data as { label?: string; inputSchema?: string; outputSchema?: string };
@@ -3850,6 +3875,69 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     setExampleReply("");
     setIsExampleTesting(false);
   };
+  const clearExampleExecution = () => {
+    setExampleRuns({});
+    setExampleExecutionOrder([]);
+    setExampleStopReason(null);
+    setExampleError(null);
+    setExampleWaiting(null);
+    setExampleReply("");
+  };
+
+  const updateExampleWorkflow = (updater: (workflow: AgentWorkflow) => AgentWorkflow) => {
+    setNodeExample((current) => current ? { ...current, workflow: updater(current.workflow) } : current);
+    clearExampleExecution();
+  };
+
+  const updateExampleSelectedNodeData = (data: Record<string, unknown>) => {
+    if (!exampleSelectedNodeId) return;
+    updateExampleWorkflow((current) => ({
+      ...current,
+      nodes: current.nodes.map((node) => node.id === exampleSelectedNodeId
+        ? { ...node, data: { ...node.data, ...data } } as WorkflowNode
+        : node),
+    }));
+  };
+
+  const updateExampleSelectedRouterData = (data: RouterNodeData) => {
+    if (!exampleSelectedNodeId) return;
+    updateExampleWorkflow((current) => ({
+      ...current,
+      nodes: current.nodes.map((node) => node.id === exampleSelectedNodeId
+        ? { ...node, data: { ...node.data, ...data } } as WorkflowNode
+        : node),
+      edges: current.edges.map((edge) => {
+        if (edge.source !== exampleSelectedNodeId) return edge;
+        const routeId = routeFromHandle(edge.sourceHandle);
+        if (!routeId) return edge;
+        const label = routeId === "fallback"
+          ? data.fallbackLabel || "No match"
+          : data.rules.find((rule) => rule.id === routeId)?.label;
+        return { ...edge, label };
+      }),
+    }));
+  };
+
+  const removeExampleSelectedRouterRule = (ruleId: string) => {
+    if (!exampleSelectedNodeId) return;
+    updateExampleWorkflow((current) => ({
+      ...current,
+      nodes: current.nodes.map((node) => {
+        if (node.id !== exampleSelectedNodeId || node.type !== "router") return node;
+        const data = node.data as RouterNodeData;
+        return { ...node, data: { ...data, rules: (data.rules ?? []).filter((rule) => rule.id !== ruleId) } } as WorkflowNode;
+      }),
+      edges: current.edges.filter((edge) => edge.source !== exampleSelectedNodeId || routeFromHandle(edge.sourceHandle) !== ruleId),
+    }));
+  };
+
+  const updateExampleEdgeDataPath = (edgeId: string, dataPath?: string) => {
+    updateExampleWorkflow((current) => ({
+      ...current,
+      edges: current.edges.map((edge) => edge.id === edgeId ? { ...edge, dataPath } : edge),
+    }));
+  };
+
 
   const addTargetExampleNodeToCanvas = () => {
     if (!nodeExample || !nodeExampleTargetType) return;
@@ -5245,8 +5333,8 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
 
             <aside className="flex min-h-0 flex-col border-l bg-background">
               <div className="border-b p-3">
-                <p className="text-xs font-semibold">Example output</p>
-                <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Select a node to inspect its latest test input and output.</p>
+                <p className="text-xs font-semibold">Node inspector</p>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">Select a node to inspect its real controls and latest test data.</p>
               </div>
               <div className="scrollbar-hidden min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
                 {exampleExecutionOrder.length > 0 && (
@@ -5266,23 +5354,46 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 {exampleSelectedNode ? (
                   <div className="space-y-2 border-t pt-3">
                     <div className="flex items-center justify-between gap-2">
+                      {(() => { const Icon = NODE_ICONS[exampleSelectedNode.type]; return Icon ? <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted"><Icon className="h-4 w-4" /></span> : null; })()}
                       <div>
                         <p className="text-xs font-semibold">{String(exampleSelectedNode.data.label || exampleSelectedNode.id)}</p>
                         <p className="text-[9px] uppercase tracking-wide text-muted-foreground">{exampleSelectedNode.type}</p>
                       </div>
                       {exampleRuns[exampleSelectedNode.id] && <Badge variant="outline" className={`text-[9px] ${exampleRuns[exampleSelectedNode.id].status === "error" ? "border-destructive/40 text-destructive" : exampleRuns[exampleSelectedNode.id].status === "running" ? "border-sky-500/40 text-sky-600" : "border-emerald-500/40 text-emerald-600"}`}>{exampleRuns[exampleSelectedNode.id].status}</Badge>}
                     </div>
-                    <details open className="rounded-lg border bg-muted/20">
-                      <summary className="cursor-pointer px-2.5 py-2 text-[10px] font-semibold">Node settings</summary>
-                      <div className="space-y-2 border-t p-2.5 text-[10px]">
-                        <div className="grid grid-cols-[76px_1fr] gap-1.5">
-                          <span className="text-muted-foreground">Node ID</span><span className="font-mono break-all">{exampleSelectedNode.id}</span>
-                          <span className="text-muted-foreground">Type</span><span className="font-mono">{exampleSelectedNode.type}</span>
-                          <span className="text-muted-foreground">Position</span><span className="font-mono">x {Math.round(exampleSelectedNode.position.x)}, y {Math.round(exampleSelectedNode.position.y)}</span>
-                        </div>
-                        <pre className="max-h-64 overflow-auto rounded-md border bg-background p-2 whitespace-pre-wrap break-words font-mono text-[9px] text-muted-foreground">{debugJson(exampleSelectedNode.data)}</pre>
-                      </div>
-                    </details>
+                    <fieldset disabled={isExampleTesting} className="space-y-3 disabled:opacity-70">
+                      {exampleSelectedNode.type === "trigger" && <TriggerPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
+                      {exampleSelectedNode.type === "document_context" && <DocumentContextPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
+                      {exampleSelectedNode.type === "user_input" && <UserInputPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
+                      {exampleSelectedNode.type === "retrieval" && <RetrievalPanel
+                        node={exampleSelectedNode}
+                        nodes={exampleNodes}
+                        organizationId={organizationId}
+                        generationContext={examplePluginGenerationContext}
+                        onChange={(data) => updateExampleSelectedNodeData(data as never)}
+                      />}
+                      {exampleSelectedNode.type === "agent" && <AgentPanel
+                        node={exampleSelectedNode}
+                        agents={agents}
+                        skills={skills}
+                        globalProviders={globalProviders}
+                        defaultUseUploadedDocument={exampleNeedsDocument}
+                        onChange={(data) => updateExampleSelectedNodeData(data as never)}
+                      />}
+                      {exampleSelectedNode.type === "api" && <ApiPanel node={exampleSelectedNode} organizationId={organizationId} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
+                      {exampleSelectedNode.type === "plugin" && <PluginPanel node={exampleSelectedNode} organizationId={organizationId} generationContext={examplePluginGenerationContext} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
+                      {exampleSelectedNode.type === "condition" && <ConditionPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
+                      {exampleSelectedNode.type === "router" && <RouterPanel node={exampleSelectedNode} onChange={updateExampleSelectedRouterData} onRemoveRule={removeExampleSelectedRouterRule} />}
+                      {exampleSelectedNode.type === "output" && <OutputPanel
+                        node={exampleSelectedNode}
+                        incomingEdges={exampleEdges.filter((edge) => edge.target === exampleSelectedNode.id) as Array<Edge & { dataPath?: string }>}
+                        nodes={exampleNodes}
+                        testRuns={exampleRuns}
+                        onUpdateEdge={updateExampleEdgeDataPath}
+                        onChange={(data) => updateExampleSelectedNodeData(data as never)}
+                      />}
+                    </fieldset>
+                    <div className="truncate border-y py-2 font-mono text-[9px] text-muted-foreground">id: {exampleSelectedNode.id}</div>
                     {exampleRuns[exampleSelectedNode.id] ? (
                       <>
                         <details open className="rounded-lg border bg-muted/20">
