@@ -2312,7 +2312,9 @@ return {
           position: { x: 260, y: 300 },
           data: {
             label: "Ask Skill Selection",
-            question: `I found {{prevOutput.totalSkillsText}} skills. Examples: {{prevOutput.examplesText}}.
+            question: `{{prevOutput.validationMessage}}
+
+I found {{prevOutput.totalSkillsText}} skills. Examples: {{prevOutput.examplesText}}.
 
 Which exact skill should be refined? Use the full skill label; underscores may be written as spaces.`,
             answerKey: "selectedSkill",
@@ -2709,7 +2711,7 @@ return {
 
 {{prevOutput.latestFrameworkPreview}}
 
-Do you want to add another framework description, or is this enough?`,
+Do you want to add another framework description?`,
             answerKey: "addAnotherFramework",
             inputType: "yes_no",
             inputSchema: "{ frameworkDescriptions[] }",
@@ -3615,9 +3617,27 @@ const createObjectMapSkillRefinementTemplate = (): ExampleWorkflow | null => {
   const askSkill = template.workflow.nodes.find((node) => node.id === "refine-ask-skill");
   if (askSkill) {
     const data = askSkill.data as UserInputNodeData;
-    data.question = `I found {{prevOutput.totalSkillsText}} matched skills in the result object. Examples: {{prevOutput.examplesText}}.
+    data.question = `{{prevOutput.validationMessage}}
+
+I found {{prevOutput.totalSkillsText}} matched skills in the result object. Examples: {{prevOutput.examplesText}}.
 
 Which exact skill should be refined? You may use the object key with underscores, the same key with spaces, or one exact alternative label.`;
+  }
+  if (!template.workflow.nodes.some((node) => node.id === "refine-ask-skill-retry")) {
+    template.workflow.nodes.push({
+      id: "refine-ask-skill-retry",
+      type: "user_input",
+      position: { x: -40, y: 435 },
+      data: {
+        label: "Ask Skill Selection Again",
+        question: "{{prevOutput.validationMessage}}",
+        answerKey: "selectedSkill",
+        inputType: "text",
+        description: "Repeats skill selection after an invalid exact match without replaying the initial extraction summary",
+        inputSchema: "{ validationMessage, skills }",
+        outputSchema: "{ skills, selectedSkill, userAnswer }",
+      } satisfies UserInputNodeData,
+    });
   }
   const validate = template.workflow.nodes.find((node) => node.id === "refine-validate-skill");
   if (validate) {
@@ -3639,6 +3659,18 @@ Which exact skill should be refined? You may use the object key with underscores
     data.description = "Updates selected data.result object-map skills[index].description.literal";
     data.inputSchema = "{ selectedUpdateDescription, selectedUpdateSource, skill.resultKey, skill.skillIndex, documentBasedDescription, evidence, frameworkDescriptions }";
     data.code = OBJECT_MAP_SKILL_UPDATE_CODE;
+  }
+  template.workflow.edges = template.workflow.edges.map((edge) =>
+    edge.id === "refine-e7"
+      ? { ...edge, target: "refine-ask-skill-retry" }
+      : edge
+  );
+  if (!template.workflow.edges.some((edge) => edge.id === "refine-e7-retry")) {
+    template.workflow.edges.push({
+      id: "refine-e7-retry",
+      source: "refine-ask-skill-retry",
+      target: "refine-validate-skill",
+    });
   }
   return template;
 };
