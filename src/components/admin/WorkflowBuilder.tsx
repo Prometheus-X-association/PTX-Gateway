@@ -9,7 +9,7 @@ import "@xyflow/react/dist/style.css";
 
 import {
   Play, Plus, Trash2, X, Code2, GitBranch, Route,
-  Bot, Square, ChevronRight, ChevronUp, ChevronDown, BookOpen, RotateCcw, GripVertical, Workflow, Settings2, Link2, Maximize2, Minimize2,
+  Bot, Square, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, BookOpen, RotateCcw, GripVertical, Workflow, Settings2, Link2, Maximize2, Minimize2,
   FlaskConical, Loader2, CircleStop, CheckCircle2, XCircle,
   Globe2, Send, KeyRound, FileText,
   Sparkles, Search, Download, Upload,
@@ -3996,13 +3996,41 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [testWaiting, setTestWaiting] = useState<WorkflowWaitingState | null>(null);
   const [testWaitingMode, setTestWaitingMode] = useState<WorkflowTestRunMode>("workflow");
   const [testReply, setTestReply] = useState("");
+  const [workflowActionsScrollable, setWorkflowActionsScrollable] = useState(false);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const propertiesResizeOrigin = useRef({ pointerX: 0, width: 320 });
   const testAbortRef = useRef<AbortController | null>(null);
   const exampleAbortRef = useRef<AbortController | null>(null);
   const workflowImportInputRef = useRef<HTMLInputElement>(null);
   const workflowBuilderRootRef = useRef<HTMLDivElement>(null);
+  const workflowActionStripRef = useRef<HTMLDivElement>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+
+  const scrollWorkflowActions = useCallback((direction: -1 | 1) => {
+    const strip = workflowActionStripRef.current;
+    if (!strip) return;
+    strip.scrollBy({ left: direction * Math.max(180, strip.clientWidth * 0.8), behavior: "smooth" });
+  }, []);
+
+  const updateWorkflowActionsScrollable = useCallback(() => {
+    const strip = workflowActionStripRef.current;
+    setWorkflowActionsScrollable(Boolean(strip && strip.scrollWidth > strip.clientWidth + 2));
+  }, []);
+
+  useEffect(() => {
+    updateWorkflowActionsScrollable();
+    const strip = workflowActionStripRef.current;
+    if (!strip) return;
+
+    const observer = new ResizeObserver(updateWorkflowActionsScrollable);
+    observer.observe(strip);
+    Array.from(strip.children).forEach((child) => observer.observe(child));
+    window.addEventListener("resize", updateWorkflowActionsScrollable);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateWorkflowActionsScrollable);
+    };
+  }, [isFullscreen, selectedNodeId, selectedEdgeId, updateWorkflowActionsScrollable]);
 
   const clampPopupPosition = useCallback((position: WorkflowPopupPosition, width: number, height: number): WorkflowPopupPosition => {
     const rootRect = workflowBuilderRootRef.current?.getBoundingClientRect();
@@ -5598,20 +5626,38 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
       ? "fixed inset-0 z-[100] overflow-hidden bg-background"
       : "relative overflow-hidden rounded-xl border bg-background shadow-sm"}
     >
-      <div className="relative flex h-12 items-center justify-between border-b bg-background px-4">
-        <div className="flex items-center gap-2">
+      <div className="relative flex h-12 items-center justify-between gap-3 border-b bg-background px-4">
+        <div className="flex min-w-0 shrink-0 items-center gap-2">
           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary"><Workflow className="h-4 w-4" /></span>
           <div>
             <p className="text-xs font-semibold">Workflow canvas</p>
             <p className="text-[10px] text-muted-foreground">{nodes.length} nodes · {edges.length} connections</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="pointer-events-none absolute left-[220px] right-[270px] top-0 flex h-12 min-w-0 items-center justify-center">
+          <div className={`pointer-events-auto flex min-w-0 items-center gap-1 ${isFullscreen ? "w-full max-w-[900px]" : "w-full max-w-[640px]"}`}>
+            {workflowActionsScrollable && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 shrink-0 p-0 shadow-sm"
+                onClick={() => scrollWorkflowActions(-1)}
+                title="Scroll workflow actions left"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            <div
+              className={`group relative min-w-0 flex-1 rounded-lg ${workflowActionsScrollable ? "shadow-[inset_-18px_0_18px_-18px_hsl(var(--foreground)/0.45),inset_18px_0_18px_-18px_hsl(var(--foreground)/0.20)]" : ""}`}
+              title={workflowActionsScrollable ? "Scroll horizontally for more workflow actions" : undefined}
+            >
+              <div ref={workflowActionStripRef} className={`scrollbar-hidden flex min-w-0 items-center gap-2 overflow-x-auto overscroll-x-contain rounded-lg px-1 py-1 ${workflowActionsScrollable ? "cursor-grab active:cursor-grabbing" : ""}`}>
           <Button
             type="button"
             variant={showWorkflowGenerator ? "secondary" : "outline"}
             size="sm"
-            className="h-8 gap-1.5 text-xs"
+            className="h-8 shrink-0 gap-1.5 text-xs"
             onClick={() => {
               setShowWorkflowGenerator((value) => !value);
               setShowTestPanel(false);
@@ -5624,7 +5670,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
             type="button"
             variant={showTestPanel ? "secondary" : "outline"}
             size="sm"
-            className="h-8 gap-1.5 text-xs"
+            className="h-8 shrink-0 gap-1.5 text-xs"
             onClick={() => {
               setShowTestPanel((value) => !value);
               setShowWorkflowGenerator(false);
@@ -5633,10 +5679,10 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           >
             <FlaskConical className="h-3.5 w-3.5" /> Test workflow
           </Button>
-          <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={downloadWorkflowJson}>
+          <Button type="button" variant="outline" size="sm" className="h-8 shrink-0 gap-1.5 text-xs" onClick={downloadWorkflowJson}>
             <Download className="h-3.5 w-3.5" /> Download JSON
           </Button>
-          <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => workflowImportInputRef.current?.click()}>
+          <Button type="button" variant="outline" size="sm" className="h-8 shrink-0 gap-1.5 text-xs" onClick={() => workflowImportInputRef.current?.click()}>
             <Upload className="h-3.5 w-3.5" /> Upload JSON
           </Button>
           <input
@@ -5651,12 +5697,29 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
             }}
           />
           {(selectedNodeId || selectedEdgeId) && (
-            <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 text-xs text-destructive hover:text-destructive" onClick={deleteSelected}>
+            <Button type="button" variant="ghost" size="sm" className="h-8 shrink-0 gap-1.5 text-xs text-destructive hover:text-destructive" onClick={deleteSelected}>
               <Trash2 className="h-3.5 w-3.5" /> Delete {selectedEdgeId ? "connection" : "selected"}
             </Button>
           )}
-          <div className="relative">
-            <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => {
+              </div>
+            </div>
+            {workflowActionsScrollable && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 shrink-0 p-0 shadow-sm"
+                onClick={() => scrollWorkflowActions(1)}
+                title="Scroll workflow actions right"
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="z-10 ml-auto flex shrink-0 items-center gap-2">
+          <div className="relative shrink-0">
+            <Button type="button" variant="outline" size="sm" className="h-8 shrink-0 gap-1.5 text-xs" onClick={() => {
               setShowExamples((value) => !value);
               setShowWorkflowGenerator(false);
               setShowTestPanel(false);
@@ -5684,7 +5747,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
             type="button"
             variant={isFullscreen ? "secondary" : "outline"}
             size="sm"
-            className="h-8 gap-1.5 text-xs"
+            className="h-8 shrink-0 gap-1.5 text-xs"
             onClick={() => setIsFullscreen((value) => !value)}
             title={isFullscreen ? "Close full-screen view (Esc)" : "Open full-screen workflow canvas"}
           >

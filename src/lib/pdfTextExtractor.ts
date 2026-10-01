@@ -38,11 +38,20 @@ export async function extractPdfText(file: File): Promise<string> {
         pages.push(normalized);
         extractedLength += normalized.length;
       }
-      page.cleanup();
+      const pageCleanup = (page as { cleanup?: () => void }).cleanup;
+      if (typeof pageCleanup === "function") pageCleanup.call(page);
       if (extractedLength >= MAX_EXTRACTED_CHARS) break;
     }
   } finally {
-    await document.destroy();
+    const pdfDocument = document as { destroy?: () => Promise<void> | void; cleanup?: () => Promise<void> | void };
+    const task = loadingTask as { destroy?: () => Promise<void> | void };
+    if (typeof pdfDocument.destroy === "function") {
+      await pdfDocument.destroy.call(document);
+    } else if (typeof task.destroy === "function") {
+      await task.destroy.call(loadingTask);
+    } else if (typeof pdfDocument.cleanup === "function") {
+      await pdfDocument.cleanup.call(document);
+    }
   }
 
   const text = pages.join("\n\n").slice(0, MAX_EXTRACTED_CHARS).trim();
