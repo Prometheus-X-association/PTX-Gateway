@@ -258,7 +258,7 @@ const resolvePublicOrgContext = async (
     const valid = await verify(`${header}.${payload}`, signature, secret);
     if (!valid) return null;
     const decoded = JSON.parse(fromBase64Url(payload)) as ExecutionTokenPayload;
-    if (decoded.typ !== "execute" || !decoded.org_id) return null;
+    if (decoded.typ !== "pdc_exec" || !decoded.org_id) return null;
     if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) return null;
     return { orgId: decoded.org_id };
   } catch {
