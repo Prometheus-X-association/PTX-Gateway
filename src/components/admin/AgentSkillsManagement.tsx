@@ -2,13 +2,14 @@ import { useState } from "react";
 import { BookOpen, Copy, Download, Loader2, Pencil, Plus, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentSkill, AgentSkillInputField, AgentSkillInputType, AgentSkillOutputType, AgentSkillReference } from "@/types/agentSkill";
-import { createSkillsFrameworkMapperTemplate, serializeAgentSkillMarkdown } from "@/types/agentSkill";
+import { createSkillsFrameworkDescriptionTemplate, createSkillsFrameworkMapperTemplate, serializeAgentSkillMarkdown } from "@/types/agentSkill";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -147,6 +148,26 @@ Required shape:
 }
 Make the skill practical, specific, and safe to attach to an LLM agent. Do not include secrets, API keys, or implementation claims that were not requested.`;
 
+const AGENT_SKILL_TEMPLATES: Array<{
+  id: string;
+  name: string;
+  description: string;
+  create: () => AgentSkill;
+}> = [
+  {
+    id: "skills-framework-mapper",
+    name: "Skills Framework Mapper",
+    description: "Map internal skills to external framework concepts with provenance and review status.",
+    create: createSkillsFrameworkMapperTemplate,
+  },
+  {
+    id: "skills-framework-description",
+    name: "Skills Framework Description",
+    description: "Retrieve verified public framework descriptions for selected skill concepts.",
+    create: createSkillsFrameworkDescriptionTemplate,
+  },
+];
+
 interface AgentSkillsManagementProps {
   skills: AgentSkill[];
   onChange: (skills: AgentSkill[]) => void;
@@ -275,9 +296,21 @@ ${generationPrompt.trim()}`,
           <p className="mt-1 text-xs text-muted-foreground">Reusable operational playbooks attached to agents and workflow agent nodes.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs" onClick={() => add(createSkillsFrameworkMapperTemplate())}>
-            <RotateCcw className="h-3.5 w-3.5" />Add example
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs">
+                <RotateCcw className="h-3.5 w-3.5" />Add example
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-80">
+              {AGENT_SKILL_TEMPLATES.map((template) => (
+                <DropdownMenuItem key={template.id} className="block cursor-pointer p-3" onSelect={() => add(template.create())}>
+                  <p className="text-xs font-semibold">{template.name}</p>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">{template.description}</p>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button type="button" size="sm" className="gap-1.5 text-xs" onClick={() => add(emptySkill())}>
             <Plus className="h-3.5 w-3.5" />New Skill
           </Button>

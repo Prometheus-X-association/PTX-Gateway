@@ -137,3 +137,46 @@ export const createSkillsFrameworkMapperTemplate = (): AgentSkill => ({
   enabled: true,
   version: 1,
 });
+
+export const SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID = "skills-framework-description";
+
+export const createSkillsFrameworkDescriptionTemplate = (): AgentSkill => ({
+  id: SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID,
+  name: "Skills Framework Description",
+  description: "Find the requested skill in an external skills framework and return the framework description when verified; otherwise generate a clearly labelled model-knowledge description.",
+  objective: "Return the correct description for a framework skill concept by checking authoritative framework sources first, and use internal LLM knowledge only when the framework entry cannot be verified.",
+  instructions: [
+    "Use frameworkName to identify the intended source taxonomy or skills framework, then use skillLabel as the target concept name. Use documentBasedDescription and evidence only to resolve ambiguity between similarly named concepts; never copy, paraphrase, summarize, or derive the final description from those provided documents or sentences.",
+    "Search for an official public API or authoritative public framework page for the requested framework and skill. Use source-specific searches when helpful, for example `site:lightcast.io/taxonomies/skills-taxonomy <skillLabel> skill`, `site:skills.emsidata.com <skillLabel>`, or the official ESCO API documented at https://ec.europa.eu/esco/api/doc/esco_api_doc.html#api-_ for ESCO.",
+    "If an official public API is available, query it for the exact concept matching skillLabel. Return the framework's exact description text only when the API result clearly identifies the requested skill concept.",
+    "If no public API is available, inspect authoritative framework pages or search-result snippets from authoritative pages. For Lightcast, prefer the public Lightcast skill page and use the skill ID from the URL when available. If opening the page fails but the search result snippet exposes the definition and identifying taxonomy details, you may use that snippet, but disclose that limitation in note.",
+    "Extract framework metadata when available, such as concept ID, category, subcategory, type, related skills, source URL, or framework version. Use these only to verify and explain provenance in note; do not add them to description unless the official framework description itself contains them.",
+    "When the exact framework concept and description are verified from an authoritative framework source or authoritative search-result snippet, copy only the official definition into description and set available to true. Keep description importable: no rationale, citations, labels, framework preambles, examples, category text, related-skill text, or phrases such as \"This is the ESCO description\", \"In ESCO\", \"The framework says\", or \"Based on the context\".",
+    "If the framework page lists related or associated skills, mention them only in note with context that they are associations from the framework, not requirements for the selected skill.",
+    "If the exact framework description cannot be verified because public API access, authoritative pages, snippets, or concept matching are unavailable or ambiguous, generate a concise best-effort skill description from your internal LLM knowledge instead of using the provided documentBasedDescription or evidence.",
+    "For an LLM-generated fallback, set available to true only when you can provide a useful generic skill description, and explain in note that direct public framework verification was not available, the text is not an official framework description, and it was generated from the current model's internal knowledge rather than from the provided document or evidence.",
+    "In every LLM-generated fallback note, name the model family/version you are running on when known, for example Claude, GPT-5, or the exact model identifier visible to you. If the exact model is not visible, say that the exact model identifier is not available.",
+    "Set available to false only when neither a verified framework description nor a useful LLM-generated fallback can be produced; leave description empty and explain the missing source, ambiguity, or insufficiency in note.",
+  ].map((step, index) => `${index + 1}. ${step}`).join("\n"),
+  requiredInputs: [
+    { id: "input-skill-label", key: "skillLabel", label: "Selected skill label", type: "text", description: "Exact selected skill label or object-map key being refined.", required: true },
+    { id: "input-framework-name", key: "frameworkName", label: "Framework name", type: "text", description: "Requested framework, for example ESCO, ROME, SFIA, O*NET, or a custom framework.", required: true },
+    { id: "input-document-description", key: "documentBasedDescription", label: "Accepted document description", type: "text", description: "Human-accepted description generated from uploaded source evidence.", required: true },
+    { id: "input-evidence", key: "evidence", label: "Accepted evidence", type: "json", description: "Agreed evidence sentences and any domain/task/tool context that supports framework matching.", required: false },
+  ],
+  outputTemplate: JSON.stringify({
+    framework: "",
+    description: "",
+    available: false,
+    note: "",
+  }, null, 2),
+  outputType: "json",
+  references: [{
+    id: "reference-framework-description-policy",
+    name: "Framework description policy",
+    description: "Rules for verified framework description retrieval and internal-knowledge fallback generation.",
+    content: "Return only JSON. Prefer the exact public framework description when the concept and source can be verified. For verified results, the description field must contain only the exact public framework description that can be imported; do not include rationale, citations, confidence language, adapted wording, examples, category metadata, related-skill metadata, or generated text in description. Authoritative search-result snippets may be used only when the official page cannot be opened and the snippet clearly exposes the definition and identifying framework metadata; disclose that limitation in note. The uploaded document and accepted evidence are disambiguation hints only; they are never a source for the final description and must not be copied, paraphrased, summarized, or transformed into description. When no verified public framework description can be accessed, generate a best-effort description from internal LLM knowledge, keep the generated description importable, and use note to disclose that it is not official framework text, that direct public API/source verification was unavailable, and which LLM model family/version produced the fallback when known.",
+  }],
+  enabled: true,
+  version: 1,
+});

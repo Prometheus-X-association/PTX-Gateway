@@ -56,6 +56,8 @@ export interface ProviderStub {
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
+const SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID = "skills-framework-description-agent";
+
 const emptyInlineProvider = (): NonNullable<AgentNodeData["agentProviders"]>[number] => ({
   id: uid(),
   name: "",
@@ -2624,20 +2626,10 @@ return {
           position: { x: 560, y: 1485 },
           data: {
             label: "Generate Framework Description",
-            mode: "inline",
-            inlineName: "Skills Framework Description Agent",
-            inlineOutputType: "json",
-            inlineFallbackOutputType: "json",
+            mode: "existing",
+            agentId: SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID,
             contextMode: "document_only",
-            inlineSystemPrompt: `You provide skill descriptions from named skills frameworks when possible.
-Return ONLY valid JSON: {"framework": string, "description": string, "available": boolean, "note": string}
-Rules:
-- Use the selected skill label and requested frameworkName.
-- Use the accepted document-based description, agreed source evidence sentences, domain, tools, and activities as context to identify the closest relevant skill/concept in the requested framework.
-- If you know the direct framework skill description or can identify a close framework-aligned description from that context, provide only that description text and set available true.
-- The description field must contain only the importable skill description. Do not include explanation, rationale, labels, citations, or phrases like "This is the ESCO description", "In ESCO", "The framework says", or "Based on the context".
-- If you do not know or cannot identify a corresponding skill, set available false and explain what extra context would be needed in note.
-- Do not pretend to have searched live external databases.`,
+            useUploadedDocument: false,
             passPrevOutput: true,
             promptOverride: `Selected skill, accepted document-based description, and agreed source evidence/context:
 {{prevOutput}}

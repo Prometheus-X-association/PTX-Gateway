@@ -1,7 +1,10 @@
 // Global Configuration
 // Controls admin/debug mode and application-wide settings
 import type { AgentSkill } from "@/types/agentSkill";
-import { createSkillsFrameworkMapperTemplate } from "@/types/agentSkill";
+import {
+  SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID,
+  createSkillsFrameworkMapperTemplate,
+} from "@/types/agentSkill";
 
 const DATA_ANALYST_SYSTEM_PROMPT =
   "You are a data analyst assistant. The user is viewing a result dataset. Answer questions clearly and concisely with insights, trends, patterns, and actionable recommendations. Structure your response with headings and bullet points for clarity.";
@@ -14,6 +17,11 @@ const AI_INSIGHT_SYSTEM_PROMPT =
 
 const SWITCHABLE_CHART_SYSTEM_PROMPT =
   "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best visualization type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide the matching data structure: data[] for cartesian/pie/radial types, nodes[]+links[] for network, hierarchy object for treemap, data[] with lat/lng fields for map. Keep labels concise and aggregate long-tail items as 'Other'. The user can switch to another compatible chart type in the UI after generation.";
+
+const SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID = "skills-framework-description-agent";
+
+const FRAMEWORK_DESCRIPTION_AGENT_SYSTEM_PROMPT =
+  "You generate framework-aligned skill descriptions from an accepted skill refinement context. Use the assigned Skills Framework Description playbook whenever framework description generation is requested. Return only valid JSON with framework, description, available, and note.";
 
 export interface LlmProviderConfig {
   id: string;
@@ -186,6 +194,22 @@ export const globalConfig: GlobalConfig = {
             "Generate a summary with insights and a switchable visualization",
             "What is the best chart type for this data? Show me the result",
           ],
+          enabled: true,
+        },
+        {
+          id: SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID,
+          name: "Skills Framework Description Agent",
+          description: "Generates JSON framework descriptions for the interactive skill refinement workflow",
+          systemPrompt: FRAMEWORK_DESCRIPTION_AGENT_SYSTEM_PROMPT,
+          expectedOutput: "auto",
+          fallbackOutput: "json",
+          outputInstructions:
+            "Return ONLY valid JSON. No markdown, no code fences, no text before or after the JSON object.",
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID],
+          inputSources: ["result"],
+          resultContextMode: "chunked",
+          resultChunkSize: 2000,
+          defaultPrompts: [],
           enabled: true,
         },
       ],

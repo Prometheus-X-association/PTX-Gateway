@@ -1829,6 +1829,22 @@ const ChatDrawer = ({
 
   const handleStop = () => abortRef.current?.abort();
   const handleClear = () => { if (isStreaming) handleStop(); setMessages([]); };
+  const workflowQuickReplyOptions = pausedWorkflow?.waiting.inputType === "yes_no"
+    ? ["yes", "no"]
+    : pausedWorkflow?.waiting.inputType === "select"
+      ? (pausedWorkflow.waiting.options ?? [])
+      : [];
+
+  const submitWorkflowReply = useCallback((answer: string) => {
+    const trimmed = answer.trim();
+    if (!trimmed || !pausedWorkflow || isWorkflowRunning) return;
+    setInput("");
+    setShowPrompts(false);
+    setShowAgentPicker(false);
+    setShowHeaderAgentPicker(false);
+    const workflow = workflows.find((item) => item.id === pausedWorkflow.workflowId);
+    void runWorkflow(trimmed, workflow, pausedWorkflow.waiting);
+  }, [pausedWorkflow, isWorkflowRunning, workflows, runWorkflow]);
 
   const startChatPanelDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || window.innerWidth < 1024) return;
@@ -2108,6 +2124,27 @@ const ChatDrawer = ({
                 </button>
               ))}
               </div>
+            </div>
+          )}
+
+          {pausedWorkflow && workflowQuickReplyOptions.length > 0 && !isWorkflowRunning && (
+            <div className="mb-2 flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-2">
+              {workflowQuickReplyOptions.map((option) => (
+                <Button
+                  key={option}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 max-w-full px-3 text-xs"
+                  title={`Reply ${option}`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    submitWorkflowReply(option);
+                  }}
+                >
+                  <span className="truncate">{option}</span>
+                </Button>
+              ))}
             </div>
           )}
 

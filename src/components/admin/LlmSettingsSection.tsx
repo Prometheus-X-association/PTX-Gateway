@@ -30,7 +30,10 @@ import {
 } from "@/components/admin/ChatAvailabilitySelector";
 import type { WorkflowConfig } from "@/types/workflow";
 import type { AgentSkill } from "@/types/agentSkill";
-import { createSkillsFrameworkMapperTemplate } from "@/types/agentSkill";
+import {
+  SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID,
+  createSkillsFrameworkMapperTemplate,
+} from "@/types/agentSkill";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -92,7 +95,13 @@ interface LlmInsightsConfig {
 
 const BUILT_IN_WORKFLOW_TEMPLATE_IDS = new Set([
   "interactive-skill-description-refinement",
+  "interactive-skill-description-refinement-object-map",
 ]);
+
+const SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID = "skills-framework-description-agent";
+
+const FRAMEWORK_DESCRIPTION_AGENT_PROMPT =
+  "You generate framework-aligned skill descriptions from an accepted skill refinement context. Use the assigned Skills Framework Description playbook whenever framework description generation is requested. Return only valid JSON with framework, description, available, and note.";
 
 const looksLikeInteractiveSkillRefinementWorkflow = (workflow: WorkflowConfig): boolean => {
   if (BUILT_IN_WORKFLOW_TEMPLATE_IDS.has(workflow.id)) return true;
@@ -106,11 +115,37 @@ const upgradeBuiltInWorkflowTemplate = (workflow: WorkflowConfig): WorkflowConfi
     ?? EXAMPLE_WORKFLOWS.find((example) => example.id === "interactive-skill-description-refinement");
   if (!template) return workflow;
   const hasSavedGraph = (workflow.graph?.nodes?.length ?? 0) > 0 || (workflow.graph?.edges?.length ?? 0) > 0;
+  const graph = hasSavedGraph ? workflow.graph : template.workflow;
+  const upgradedGraph = {
+    ...graph,
+    nodes: (graph.nodes ?? []).map((node) => {
+      if (node.id !== "refine-framework-agent" || node.type !== "agent") return node;
+      const data = node.data as Record<string, unknown>;
+      return {
+        ...node,
+        data: {
+          ...data,
+          label: "Generate Framework Description",
+          mode: "existing",
+          agentId: SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID,
+          contextMode: "document_only",
+          useUploadedDocument: false,
+          passPrevOutput: true,
+          promptOverride: `Selected skill, accepted document-based description, and agreed source evidence/context:
+{{prevOutput}}
+
+Provide the requested framework description. Return direct JSON only.`,
+          inputSchema: "{ skillLabel, documentBasedDescription, evidence, domain, toolsOrMachines, tasksOrActivities, frameworkName }",
+          outputSchema: "{ framework, description, available, note }",
+        },
+      };
+    }),
+  };
   return {
     ...workflow,
     name: workflow.name || template.name,
     description: workflow.description || template.description,
-    graph: hasSavedGraph ? workflow.graph : template.workflow,
+    graph: upgradedGraph,
   };
 };
 
@@ -134,6 +169,22 @@ const AI_INSIGHT_PROMPT =
 
 const SWITCHABLE_CHART_PROMPT =
   "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best visualization type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide the matching data structure: data[] for cartesian/pie/radial types, nodes[]+links[] for network, hierarchy object for treemap, data[] with lat/lng fields for map. Keep labels concise and aggregate long-tail items as 'Other'. The user can switch to another compatible chart type in the UI after generation.";
+
+const createSkillsFrameworkDescriptionAgent = (): LlmAgent => ({
+  id: SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID,
+  name: "Skills Framework Description Agent",
+  description: "Generates JSON framework descriptions for the interactive skill refinement workflow",
+  systemPrompt: FRAMEWORK_DESCRIPTION_AGENT_PROMPT,
+  expectedOutput: "auto",
+  fallbackOutput: "json",
+  outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "json")!.defaultInstructions,
+  mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID],
+  targetResources: [],
+  inputSources: ["result"],
+  defaultPrompts: [],
+  enabled: true, ragSources: "none", ragMode: "none", ragTopK: 20,
+  resultContextMode: "chunked", resultChunkSize: 2000,
+});
 
 // ─── Output type options (must be before DEFAULT_AGENTS) ──────────────────────
 
@@ -280,6 +331,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     enabled: true, ragSources: "all", ragMode: "auto", ragTopK: 20,
     resultContextMode: "full", resultChunkSize: 12000,
   },
+  createSkillsFrameworkDescriptionAgent(),
 ];
 
 const DEFAULT_CONFIG: LlmInsightsConfig = {
@@ -333,6 +385,19 @@ const moveItem = <T,>(arr: T[], from: number, to: number): T[] => {
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
   return next;
+};
+
+const ensureBuiltInSkills = (skills: AgentSkill[]): AgentSkill[] => {
+  const next = [...skills];
+  if (!next.some((skill) => skill.id === "skills-framework-mapper")) {
+    next.push(createSkillsFrameworkMapperTemplate());
+  }
+  return next;
+};
+
+const ensureBuiltInAgents = (agents: LlmAgent[]): LlmAgent[] => {
+  if (agents.some((agent) => agent.id === SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID)) return agents;
+  return [...agents, createSkillsFrameworkDescriptionAgent()];
 };
 
 const emptyProvider = (): LlmProvider => ({
@@ -537,7 +602,15 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
     }
   }
 
-  return { enabled: Boolean(raw.enabled ?? false), providers, mcpServers, agents, skills, predefinedPrompts, workflows };
+  return {
+    enabled: Boolean(raw.enabled ?? false),
+    providers,
+    mcpServers,
+    agents: ensureBuiltInAgents(agents),
+    skills: ensureBuiltInSkills(skills),
+    predefinedPrompts,
+    workflows,
+  };
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
