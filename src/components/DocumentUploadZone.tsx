@@ -10,7 +10,8 @@ import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { getParamActionsMap } from "@/types/dataspace";
 import { sanitizeParams } from "@/utils/paramSanitizer";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
-import { saveSourceDocuments } from "@/utils/sourceDocumentStorage";
+import { clearSourceDocuments, saveSourceDocuments } from "@/utils/sourceDocumentStorage";
+import { clearAllRagDocsFromStorage } from "@/utils/ragDocStorage";
 
 interface DocumentUploadZoneProps {
   resource: {
@@ -232,6 +233,8 @@ const DocumentUploadZone = ({
       uploadAttemptCountRef.current = attemptCount;
       onUploadAttempt?.(attemptCount);
       onUploadSessionResolved?.(effectiveSessionId, effectiveParamValues, shouldRegenerate);
+      await clearSourceDocuments(effectiveSessionId);
+      clearAllRagDocsFromStorage();
 
       // Sanitize params - filter out #ignoreFlowData params
       const sanitizedParams = sanitizeParams(

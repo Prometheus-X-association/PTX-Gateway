@@ -1,0 +1,845 @@
+{
+  "data": {
+    "user": "IMC",
+    "result": {
+      "system_deployment": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Deliver, install and test a computer or ICT system. Set up and prepare the system for use.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "deploy system",
+              "draw up an implementation plan"
+            ]
+          }
+        ]
+      },
+      "engine_designs": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Adjust designs of products or parts of products so that they meet requirements.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "adjust desings for engineering",
+              "adjust building designs",
+              "adjust manufacturing designs",
+              "adjust engineering models",
+              "adjust construction designs",
+              "adjust engineering schemes"
+            ]
+          }
+        ]
+      },
+      "engineering_management": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The subdiscipline of civil engineering that plans, designs and studies the operation and management of the transportation of people and goods in a safe, efficient, comfortable, economical and environmentally friendly manner.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "transportation engineering analysis",
+              "transportation engineering applications",
+              "transportation engineering fieldwork",
+              "transportation engineering research",
+              "engineering for transportation",
+              "transportation engineering work",
+              "transportation engineering studies",
+              "transport engineering",
+              "transportation engineering analyses"
+            ]
+          }
+        ]
+      },
+      "research": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Participate in field research and evaluation of state and private lands and waters.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "field research peforming",
+              "perform research in the field",
+              "carrying out field research",
+              "conduct field research",
+              "carry out field research",
+              "performing research in the field",
+              "conducting field research",
+              "performing field research"
+            ]
+          }
+        ]
+      },
+      "microservices": {
+        "count": 0,
+        "skills": "No matching skill found."
+      },
+      "analytics": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Understand, extract and make use of patterns found in data. Use analytics to describe consistent happenings in observed samples in order to apply them to commercial plans, strategies, and corporate quests.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "use commercial analytics",
+              "use analytics for commercial purpose",
+              "work with analytics for commercial purposes",
+              "using analytics for commercial purposes",
+              "utilize analytics for commercial purposes"
+            ]
+          }
+        ]
+      },
+      "performance_modeling": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Wound healing techniques such as inflammation, tissue formation, tissue remodeling and skin anatomy, and the suturing materials used such as staples, synthetic sutures, absorbables, tapes, and adhesive compounds.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "wound-healing techniques",
+              "wound closure methods",
+              "wound healing techniques",
+              "wound-closure techniques",
+              "wound-closure methods"
+            ]
+          }
+        ]
+      },
+      "structural_work": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Gauge finished shells by using acceptance jigs. Use a stamping press to record the shell data on the cartridge as well as on the projectile. Finalize the tubes by dipping them in molted parrafin and packing the tubes in crates.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "carry out shell construction",
+              "carry out basic structural frameworks construction",
+              "perform shell construction",
+              "accomplish shell construction",
+              "complete shells",
+              "complete basic structural frameworks",
+              "accomplish basic structural frameworks construction",
+              "perform basic structural frameworks construction"
+            ]
+          }
+        ]
+      },
+      "software_engineering": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Work with computer-aided engineering (CAE) tools to perform analysis tasks such as Finite Element Analysis and Computional Fluid Dynamics.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "manage CAE software",
+              "apply computer-aided engineering software",
+              "be familiar with CAE software",
+              "work with CAE software",
+              "employ CAE software",
+              "use computer-aided engineering software",
+              "utilise CAE software",
+              "make use of CAE software",
+              "use CAE softwares"
+            ]
+          }
+        ]
+      },
+      "big_data": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The computer program CA Datacom/DB is a tool for creating, updating and managing databases, currently developed by the software company CA Technologies.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "CA-Datacom/DB",
+              "CA Datacom",
+              "DATACOM/DB"
+            ]
+          }
+        ]
+      },
+      "product_engineering": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Read the technical drawings of a product made by the engineer in order to suggest improvements, make models of the product or operate it.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "peruse engineering drawings",
+              "read of engineering drawings",
+              "read an engineering drawing",
+              "study engineering drawings",
+              "interpret engineering drawings",
+              "view engineering drawings",
+              "reading engineering drawings"
+            ]
+          }
+        ]
+      },
+      "collaborative_software": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Develop a mutually collaborative therapeutic relationship during treatment, fostering and gaining healthcare users' trust and cooperation.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "develop collaborative therapeutic relationship",
+              "establish a collaborative therapeutic relationship",
+              "develop mutually collaborative relationship during therapy",
+              "develop collaborative therapeutic relationships",
+              "develop a collaborative relationship during treatment"
+            ]
+          }
+        ]
+      },
+      "analytical_thinking": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Produce thoughts using logic and reasoning in order to identify the strengths and weaknesses of alternative solutions, conclusions or approaches to problems.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "analytical thinking",
+              "think logically",
+              "think in an analytical way"
+            ]
+          }
+        ]
+      },
+      "applied_research": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Development of new concepts through the use of scientific and other methods of applied research.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "scientific and technological innovation for textile products development",
+              "applied research for textile development",
+              "research applied to textile products' development",
+              "textile production innovation",
+              "innovation for textile products"
+            ]
+          }
+        ]
+      },
+      "curiosity": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Show a lively interest in novelty, an openness to experience, find subjects and topics fascinating, actively explore and discover new areas.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "demonstrating curiosity",
+              "exhibit curiosity",
+              "display curiosity",
+              "show curiosity",
+              "show interest",
+              "demonstrate interest",
+              "be curious"
+            ]
+          }
+        ]
+      },
+      "data_ethics": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Adhere to organisational European and regional specific standards and code of ethics, understanding the motives of the organisation and the common agreements and apply this awareness.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "adhere to organizational codes of ethics",
+              "comply with organisational code of ethics",
+              "adhere to organisational codes of ethics",
+              "adhere to national and European professional code of ethics",
+              "comply with organizational code of ethics",
+              "adhere to organizational code of ethics",
+              "obey organisational code of ethics"
+            ]
+          }
+        ]
+      },
+      "intelligent_systems": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The artificial intelligence theories, applied principles, architectures and systems, such as intelligent agents, multi-agent systems, expert systems, rule-based systems, neural networks, ontologies and cognition theories.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "principles of AI"
+            ]
+          }
+        ]
+      },
+      "data_engineering": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Gather relevant data, carry out on-site engineering analysis; make up reports and recommend necessary measures.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "report on well drilling",
+              "drill engineering monitoring",
+              "analysing of drill engineering",
+              "analysis of drill engineering",
+              "analysing drill engineering",
+              "analyse well drilling",
+              "monitor drill engineering",
+              "drill engineering analysis"
+            ]
+          }
+        ]
+      },
+      "optimal_design": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Fundamentals in layout and store design in order to achieve an optimal product placement.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "store design layouts",
+              "store a design layout",
+              "develop design layout",
+              "produce design layout",
+              "arrange design layout",
+              "storing a design layout",
+              "model design layout"
+            ]
+          }
+        ]
+      },
+      "systems_development": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The incremental development model is a methodology to design software systems and applications.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": []
+          }
+        ]
+      },
+      "machining": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Finish the shaping process of ceramics after forming by performing several green machining operations such as grinding, blanking and punching.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "carrying out green machining",
+              "carry out green machining",
+              "green machining performing",
+              "green machining carrying out",
+              "performing green machining"
+            ]
+          }
+        ]
+      },
+      "computer_vision": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The game engine that consists of integrated development environments and specialised design tools, designed for the rapid iteration of user-derived computer games. \n ",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": []
+          }
+        ]
+      },
+      "foundation_engineering": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Understand principles of mechanical engineering, physics, and materials science.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "fundamentals of mechanical engineering",
+              "mechanical engineering foundations",
+              "mechanical engineering fundamentals",
+              "physics, materials science, and mechanical engineering",
+              "machinery engineering",
+              "engineering in machinery",
+              "foundations of mechanical engineering",
+              "engineering in mechanical systems",
+              "mechanical engineering principles",
+              "materials science, physics, and mechanical engineering"
+            ]
+          }
+        ]
+      },
+      "tooling": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The qualities and applications of frit dust, sawdust, coal dust, and others, in the process of hot forging when strewn into dies to ensure the metal workpiece does not stick to the die.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "use of grime and powder for tooling process",
+              "use of grime and powder for casting process",
+              "use of grime and powder for fabrication process",
+              "dust usage for casting process",
+              "use of grime and powder for assembly process",
+              "dust usage for assembly process",
+              "dust usage for fabrication process",
+              "dust usage for tooling process"
+            ]
+          }
+        ]
+      },
+      "algorithms": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The self-contained step-by-step sets of operations that carry out calculations, data processing and automated reasoning, usually to solve problems.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "formulae",
+              "formulas",
+              "algorithmic",
+              "algorithm"
+            ]
+          }
+        ]
+      },
+      "data_management": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Capture, record and validate spatial data for the mine site.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "managing mine site data",
+              "management of mine site data",
+              "manage site data",
+              "collect spatial data",
+              "collect mine spatial data",
+              "managing site data",
+              "collecting mine spatial data",
+              "collecting spatial data",
+              "mine site data management",
+              "managing of mine site data"
+            ]
+          }
+        ]
+      },
+      "optimism": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Calculate the best time for insemination through monitoring of female behaviour patterns and heat cycles.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "identify ideal insemination periods",
+              "identify optimal insemination time through behaviour monitoring",
+              "identify best time for insemination",
+              "monitor behaviour patterns and heat cycles to determine best time for insemination",
+              "determine optimal time for insemination",
+              "ascertain optimal time for insemination",
+              "monitor heat cycles to determine best time for insemination",
+              "ascertain optimal insemination period",
+              "calculate optimal insemination period",
+              "determine optimal insemination period"
+            ]
+          }
+        ]
+      },
+      "environmentalism": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The environmental policies and legislation applicable in a certain domain.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "environmental law",
+              "environment legislation",
+              "legislation of the environment",
+              "environmental regulations"
+            ]
+          }
+        ]
+      },
+      "deep_foundation": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Construct foundations and assemble wooden or steel framework in order to erect a derrick.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "assemble derrick foundation",
+              "assembly of derrick foundation",
+              "derrick foundation assembly",
+              "assembling derrick foundation",
+              "making foundations for derricks",
+              "making of derrick foundations",
+              "derrick foundation making",
+              "making of foundations for derricks",
+              "assembling of derrick foundation"
+            ]
+          }
+        ]
+      },
+      "scalability": {
+        "count": 0,
+        "skills": "No matching skill found."
+      },
+      "learning_development": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Provide the necessary support to students with general learning difficulties in literacy and numeracy to facilitate learning by assessing the learner’s development needs and preferences. Design formal and informal outcomes of learning and deliver materials that facilitate learning and development. ",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "supply learning support",
+              "providing learning support",
+              "provides learning support",
+              "offer learning support",
+              "make learning support available"
+            ]
+          }
+        ]
+      },
+      "deep_learning": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The learning disorders some students face in an academic context, especially Specific Learning Difficulties such as dyslexia, dyscalculia, and concentration deficit disorders.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "learning difficulty",
+              "learning delays",
+              "learning complications",
+              "learning problems"
+            ]
+          }
+        ]
+      },
+      "communications": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Monitor and analyse data, waveforms, measurements, images or transmitted communications and emissions and identify elecrical anomalies.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "analyse electronic communications",
+              "interpreting transmitted communications",
+              "interpret transmitted communications",
+              "analysing electronic communications",
+              "transmitted communications analysing",
+              "analysing transmitted communications"
+            ]
+          }
+        ]
+      },
+      "tensorflow": {
+        "count": 0,
+        "skills": "No matching skill found."
+      },
+      "data_science": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Collect and analyse scientific data resulting from research. Interpret these data according to certain standards and viewpoints in order to comment on it.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "study scientific data",
+              "analysing scientific data",
+              "survey scientific data",
+              "review scientific data",
+              "examine scientific data",
+              "analyse science data",
+              "scrutinize"
+            ]
+          }
+        ]
+      },
+      "computer_science": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Instruct students in the theory and practice of computer science, more specifically in the development of software systems, programming languages, artificial intelligence, and software security.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "teaching computer science",
+              "provide instruction on computer science",
+              "explain computer science",
+              "teaches computer science",
+              "educate on computer science"
+            ]
+          }
+        ]
+      },
+      "product_management": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Manage the scheduling of procedures which aim to maximise sales objectives, such as forecasting market trends, product placement, and sales planning.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "arrange product management",
+              "set up product management",
+              "planning product management",
+              "plan products management",
+              "plan production management",
+              "implement product management",
+              "timetable product management"
+            ]
+          }
+        ]
+      },
+      "willingness_to_learn": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Show a positive attitude towards new and challenging demands that can only be met via lifelong learning.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "show willingness to learn",
+              "demonstrate willingness to learn",
+              "work towards own potential",
+              "direct own learning",
+              "exhibit willingness to learn",
+              "display willingness to learn",
+              "show self-knowledge"
+            ]
+          }
+        ]
+      },
+      "biasing": {
+        "count": 0,
+        "skills": "No matching skill found."
+      },
+      "machine_learning_algorithms": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Use techniques and algorithms that are able to extract mastery out of data, learn from it and make predictions, to be used for program optimisation, application adaptation, pattern recognition, filtering, search engines and computer vision.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": []
+          }
+        ]
+      },
+      "innovation": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The methods and tools used to bring about innovative changes and quality improvement in the nursing field.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "innovative tools in nursing",
+              "innovations in nursing",
+              "innovative methods in nursing",
+              "innovation in the nursing field"
+            ]
+          }
+        ]
+      },
+      "data_processing": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Enter information into a data storage and data retrieval system via processes such as scanning, manual keying or electronic data transfer in order to process large amounts of data.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "convert data",
+              "handle data",
+              "refine data",
+              "measure data",
+              "data processing",
+              "analyse data",
+              "processing data",
+              "processing of data"
+            ]
+          }
+        ]
+      },
+      "learning_design": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Provide the necessary support to students with general learning difficulties in literacy and numeracy to facilitate learning by assessing the learner’s development needs and preferences. Design formal and informal outcomes of learning and deliver materials that facilitate learning and development. ",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "supply learning support",
+              "providing learning support",
+              "provides learning support",
+              "offer learning support",
+              "make learning support available"
+            ]
+          }
+        ]
+      },
+      "problem_solving": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Systematically apply a step-by-step problem-solving process in providing social services.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "apply problem-solving in social services",
+              "apply problem solving in social services",
+              "step-by-step problem solving process in social service",
+              "apply problem-solving techniques in social services"
+            ]
+          }
+        ]
+      },
+      "teamwork": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Encourage students to cooperate with others in their learning by working in teams, for example through group activities.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "facilitating teamwork between students",
+              "facilitate students’ teamwork",
+              "encourage teamwork between students",
+              "assist teamwork between students",
+              "support teamwork between students",
+              "facilitates teamwork between students"
+            ]
+          }
+        ]
+      },
+      "management": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "To manage and drive change effectively to improve business performance and competitive edge.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "revise management",
+              "altering management",
+              "change management",
+              "rework management"
+            ]
+          }
+        ]
+      },
+      "collaboration": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "Cooperate with colleagues in order to ensure that operations run effectively.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": [
+              "collaborate with colleagues",
+              "work cooperatively",
+              "work together with colleagues",
+              "work in collaboration with co-workers",
+              "work in collaboration with colleague",
+              "work in cooperation with colleagues",
+              "work together with co-workers",
+              "collaborate with co-workers",
+              "work collaboratively",
+              "cooperate with co-workers",
+              "work in cooperation with co-workers"
+            ]
+          }
+        ]
+      },
+      "ci_cd": {
+        "count": 0,
+        "skills": "No matching skill found."
+      },
+      "dataset": {
+        "count": 1,
+        "skills": [
+          {
+            "description": {
+              "literal": "The methods of artificial intelligence, machine learning, statistics and databases used to extract content from a dataset.",
+              "mimetype": "plain/text"
+            },
+            "alternative_labels": []
+          }
+        ]
+      }
+    }
+  },
+  "contract": "https://contract.visionstrust.com/contracts/65f97c07ae20c15f69d42d0b",
+  "params": ""
+}

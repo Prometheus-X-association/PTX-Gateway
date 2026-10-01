@@ -960,16 +960,24 @@ const ChatDrawer = ({
   const hasDocument = Boolean(docText || localAttachments.length > 0);
 
   useEffect(() => {
-    const stored = loadSourceDocuments(processSessionId);
-    const restored = stored.map((item) => ({
-      name: item.name,
-      mimeType: item.mimeType,
-      size: item.size,
-      base64: item.base64,
-    }));
-    setLocalAttachments(restored);
-    setLocalAttachmentSource(restored.length > 0 ? "gateway" : null);
-    setLocalDocText(null);
+    let cancelled = false;
+    const restoreSourceDocuments = async () => {
+      const stored = await loadSourceDocuments(processSessionId);
+      if (cancelled) return;
+      const restored = stored.map((item) => ({
+        name: item.name,
+        mimeType: item.mimeType,
+        size: item.size,
+        base64: item.base64,
+      }));
+      setLocalAttachments(restored);
+      setLocalAttachmentSource(restored.length > 0 ? "gateway" : null);
+      setLocalDocText(null);
+    };
+    void restoreSourceDocuments();
+    return () => {
+      cancelled = true;
+    };
   }, [processSessionId]);
 
   useEffect(() => {

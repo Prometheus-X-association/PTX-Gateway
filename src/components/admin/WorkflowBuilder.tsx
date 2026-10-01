@@ -2217,41 +2217,72 @@ return '<div style="overflow-x:auto"><table style="border-collapse:collapse;widt
             description: "Uses the resultData retrieval tool to list skill labels and current descriptions without sending full JSON to the LLM",
             inputSchema: "resultData outside prompt",
             outputSchema: "{ totalSkills, examples, skills, manifest }",
-            code: `const normalize = value => String(value ?? '').replace(/_/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
+            code: `const normalize = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+const titleCase = value => String(value ?? '')
+  .replace(/[_-]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .replace(/\b\w/g, char => char.toLocaleUpperCase());
 const seen = new Set();
-const records = tools.listNodes({ start: 0, limit: input.maxItems || 1000 });
-const skills = records
-  .map((item) => {
-    const node = item.data || {};
-    const label = String(node.label ?? item.label ?? node.id ?? '').trim();
-    const description = String(
-      node.description ??
-      node.skill_description ??
-      node.document_based_description?.description ??
-      node.data?.description ??
-      ''
-    ).trim();
-    return {
-      index: item.index + 1,
-      id: String(node.id ?? item.id ?? item.index),
-      label,
-      display: label.replace(/_/g, ' '),
-      normalized: normalize(label),
-      description,
-    };
-  })
-  .filter((skill) => skill.label)
-  .filter((skill) => {
-    if (seen.has(skill.normalized)) return false;
-    seen.add(skill.normalized);
-    return true;
-  });
-if (skills.length === 0) throw new Error('No skill labels found in resultData nodes.');
+const root = input.result?.data?.content?.data?.result || input.result?.content?.data?.result || input.result?.data?.result || input.result?.result || input.sourceData?.data?.result || input.sourceData?.result || null;
+let skills = [];
+let manifest = tools.manifest();
+if (root && typeof root === 'object' && !Array.isArray(root)) {
+  for (const [key, record] of Object.entries(root)) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+    const skillRecords = Array.isArray(record.skills) ? record.skills : [];
+    skillRecords.forEach((skillRecord, skillIndex) => {
+      const label = String(record.label || record.skill_name || record.name || key).trim();
+      const normalized = normalize(label);
+      if (!label || seen.has(normalized + ':' + skillIndex)) return;
+      seen.add(normalized + ':' + skillIndex);
+      skills.push({
+        index: skills.length + 1,
+        id: key,
+        resultKey: key,
+        skillIndex,
+        label,
+        display: titleCase(label),
+        normalized,
+        description: String(skillRecord?.description?.literal ?? skillRecord?.description ?? '').trim(),
+        alternativeLabels: Array.isArray(skillRecord?.alternative_labels) ? skillRecord.alternative_labels.map(String).filter(Boolean) : [],
+        count: Number(record.count ?? skillRecords.length) || skillRecords.length,
+      });
+    });
+  }
+  manifest = { ...manifest, shape: 'object_map', rootPath: 'data.result', totalResultKeys: Object.keys(root).length };
+} else {
+  const records = tools.listNodes({ start: 0, limit: input.maxItems || 1000 });
+  skills = records
+    .map((item) => {
+      const node = item.data || {};
+      const label = String(node.label ?? item.label ?? node.id ?? '').trim();
+      const normalized = normalize(label);
+      return {
+        index: item.index + 1,
+        id: String(node.id ?? item.id ?? item.index),
+        label,
+        display: label.replace(/_/g, ' '),
+        normalized,
+        description: String(node.description ?? node.skill_description ?? node.document_based_description?.description ?? node.data?.description ?? '').trim(),
+      };
+    })
+    .filter((skill) => skill.label)
+    .filter((skill) => {
+      if (seen.has(skill.normalized)) return false;
+      seen.add(skill.normalized);
+      return true;
+    });
+}
+if (skills.length === 0) throw new Error('No matched skills found. Expected nodes[] or data.result entries with skills arrays; entries such as "No matching skill found." are skipped.');
+const examples = skills.slice(0, 5).map((skill) => skill.display);
 return {
   totalSkills: skills.length,
-  examples: skills.slice(0, 3).map((skill) => skill.display),
+  totalSkillsText: String(skills.length),
+  examples,
+  examplesText: examples.join(', '),
   skills,
-  manifest: tools.manifest(),
+  manifest,
 };`,
           } satisfies RetrievalNodeData,
         },
@@ -2261,7 +2292,7 @@ return {
           position: { x: 260, y: 300 },
           data: {
             label: "Ask Skill Selection",
-            question: `I found {{prevOutput.totalSkills}} skills. Examples: {{prevOutput.examples}}.
+            question: `I found {{prevOutput.totalSkillsText}} skills. Examples: {{prevOutput.examplesText}}.
 
 Which exact skill should be refined? Use the full skill label; underscores may be written as spaces.`,
             answerKey: "selectedSkill",
@@ -3168,6 +3199,277 @@ return '<section style="font-family:system-ui,sans-serif;max-width:900px;margin:
 ];
 
 
+const cloneExampleWorkflow = (workflow: ExampleWorkflow): ExampleWorkflow => (
+  JSON.parse(JSON.stringify(workflow)) as ExampleWorkflow
+);
+
+const OBJECT_MAP_SKILL_REFINEMENT_INPUT = {
+  data: {
+    user: "IMC",
+    result: {
+      system_deployment: {
+        count: 1,
+        skills: [
+          {
+            description: {
+              literal: "Deliver, install and test a computer or ICT system. Set up and prepare the system for use.",
+              mimetype: "plain/text",
+            },
+            alternative_labels: [
+              "deploy system",
+              "draw up an implementation plan",
+            ],
+          },
+        ],
+      },
+      microservices: {
+        count: 0,
+        skills: "No matching skill found.",
+      },
+      analytics: {
+        count: 1,
+        skills: [
+          {
+            description: {
+              literal: "Understand, extract and make use of patterns found in data.",
+              mimetype: "plain/text",
+            },
+            alternative_labels: [
+              "use commercial analytics",
+              "use analytics for commercial purpose",
+            ],
+          },
+        ],
+      },
+    },
+  },
+};
+
+const OBJECT_MAP_SKILL_RETRIEVAL_CODE = `const normalize = value => String(value ?? '').replace(/_/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
+const titleCase = value => String(value ?? '')
+  .replace(/[_-]+/g, ' ')
+  .replace(/\\s+/g, ' ')
+  .trim()
+  .replace(/\\b\\w/g, char => char.toLocaleUpperCase());
+const root =
+  input.result?.data?.content?.data?.result ||
+  input.result?.content?.data?.result ||
+  input.result?.data?.result ||
+  input.result?.result ||
+  input.sourceData?.data?.result ||
+  input.sourceData?.result ||
+  null;
+if (!root || typeof root !== 'object' || Array.isArray(root)) {
+  throw new Error('Expected resultData with an object map at data.result, where each key has { count, skills }.');
+}
+const skills = [];
+const seen = new Set();
+for (const [key, record] of Object.entries(root)) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+  const skillRecords = Array.isArray(record.skills) ? record.skills : [];
+  skillRecords.forEach((skillRecord, skillIndex) => {
+    const description = String(skillRecord?.description?.literal ?? skillRecord?.description ?? '').trim();
+    const alternativeLabels = Array.isArray(skillRecord?.alternative_labels)
+      ? skillRecord.alternative_labels.map(String).filter(Boolean)
+      : [];
+    const label = String(record.label || record.skill_name || record.name || key).trim();
+    const normalized = normalize(label);
+    if (!label || seen.has(normalized + ':' + skillIndex)) return;
+    seen.add(normalized + ':' + skillIndex);
+    skills.push({
+      index: skills.length + 1,
+      id: key,
+      resultKey: key,
+      skillIndex,
+      label,
+      display: titleCase(label),
+      normalized,
+      description,
+      alternativeLabels,
+      count: Number(record.count ?? skillRecords.length) || skillRecords.length,
+      hasMatch: true,
+    });
+  });
+}
+if (skills.length === 0) {
+  throw new Error('No matched skills found. Expected data.result entries with skills as an array; entries such as "No matching skill found." are skipped.');
+}
+return {
+  totalSkills: skills.length,
+  examples: skills.slice(0, 5).map((skill) => skill.display),
+  examplesText: skills.slice(0, 5).map((skill) => skill.display).join(', '),
+  totalSkillsText: String(skills.length),
+  skills,
+  manifest: {
+    shape: 'object_map',
+    rootPath: 'data.result',
+    totalResultKeys: Object.keys(root).length,
+    selectableMatchedSkills: skills.length,
+    skippedNoMatchRecords: Object.values(root).filter(record => record && typeof record === 'object' && !Array.isArray(record) && !Array.isArray(record.skills)).length,
+  },
+};`;
+
+const OBJECT_MAP_SKILL_VALIDATE_CODE = `const state = input.prevOutput || {};
+const normalize = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
+const wanted = normalize(state.selectedSkill || state.userAnswer || '');
+const skills = Array.isArray(state.skills) ? state.skills : [];
+const skill = skills.find(item => {
+  const labels = [
+    item.label,
+    item.display,
+    item.id,
+    item.resultKey,
+    ...(Array.isArray(item.alternativeLabels) ? item.alternativeLabels : []),
+  ];
+  return labels.some(label => normalize(label) === wanted);
+}) || null;
+return {
+  ...state,
+  selectedSkillFound: Boolean(skill),
+  selectedSkillInput: state.selectedSkill || state.userAnswer || '',
+  skill,
+  validationMessage: skill
+    ? ''
+    : 'Skill not found. Choose one exact extracted key/label such as system_deployment or system deployment; alternative labels are also accepted exactly.',
+};`;
+
+const OBJECT_MAP_PREPARE_DOCUMENT_INPUT_CODE = `const state = input.prevOutput || {};
+const selected = state.skill && typeof state.skill === 'object' ? state.skill : {};
+const label = String(selected.label || selected.display || state.selectedSkillInput || '').trim();
+return {
+  selectedSkillInput: String(state.selectedSkillInput || state.selectedSkill || state.userAnswer || label).trim(),
+  skill: {
+    id: String(selected.id || selected.resultKey || ''),
+    resultKey: String(selected.resultKey || selected.id || ''),
+    skillIndex: Number(selected.skillIndex || 0),
+    label,
+    display: String(selected.display || label).trim(),
+    normalized: String(selected.normalized || label).trim(),
+    existingDescription: String(selected.description || ''),
+    alternativeLabels: Array.isArray(selected.alternativeLabels) ? selected.alternativeLabels : [],
+  },
+  evidenceSource: 'uploaded_document_only',
+};`;
+
+const OBJECT_MAP_SKILL_UPDATE_CODE = `const state = input.prevOutput || {};
+const result = JSON.parse(JSON.stringify(input.result || {}));
+const normalize = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
+const wanted = normalize(state.skillLabel || state.skill?.label || state.selectedSkillInput);
+const wantedKey = String(state.skill?.resultKey || state.skill?.id || '').trim();
+const wantedIndex = Number(state.skill?.skillIndex || 0);
+const selectedDescription = String(state.selectedUpdateDescription || state.documentBasedDescription || '').slice(0, 4000);
+const root =
+  result?.data?.content?.data?.result ||
+  result?.content?.data?.result ||
+  result?.data?.result ||
+  result?.result ||
+  null;
+if (!root || typeof root !== 'object' || Array.isArray(root)) {
+  throw new Error('Could not locate object-map result root at data.result.');
+}
+let updated = false;
+for (const [key, record] of Object.entries(root)) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+  const recordLabels = [key, record.label, record.skill_name, record.name].map(normalize);
+  const keyMatches = wantedKey ? key === wantedKey : false;
+  const labelMatches = recordLabels.includes(wanted);
+  if (!keyMatches && !labelMatches) continue;
+  if (!Array.isArray(record.skills)) record.skills = [];
+  if (!record.skills[wantedIndex] || typeof record.skills[wantedIndex] !== 'object') {
+    record.skills[wantedIndex] = { description: { literal: '', mimetype: 'plain/text' }, alternative_labels: [] };
+  }
+  const skillRecord = record.skills[wantedIndex];
+  if (!skillRecord.description || typeof skillRecord.description !== 'object') {
+    skillRecord.description = { literal: String(skillRecord.description || ''), mimetype: 'plain/text' };
+  }
+  skillRecord.description.literal = selectedDescription || String(skillRecord.description.literal || '');
+  skillRecord.description.mimetype = skillRecord.description.mimetype || 'plain/text';
+  skillRecord.document_based_description = {
+    description: String(state.documentBasedDescription || '').slice(0, 4000),
+    evidence: Array.isArray(state.evidence) ? state.evidence : [],
+  };
+  skillRecord.framework_descriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
+  skillRecord.selected_description_source = state.selectedUpdateSource || 'Document-based description';
+  skillRecord.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement_object_map';
+  record.document_based_description = skillRecord.document_based_description;
+  record.framework_descriptions = skillRecord.framework_descriptions;
+  record.selected_description_source = skillRecord.selected_description_source;
+  record.description_updated_by = skillRecord.description_updated_by;
+  updated = true;
+  break;
+}
+if (!updated) {
+  throw new Error('Selected skill was not found in data.result during update.');
+}
+return result;`;
+
+const createObjectMapSkillRefinementTemplate = (): ExampleWorkflow | null => {
+  const base = EXAMPLE_WORKFLOWS.find((example) => example.id === "interactive-skill-description-refinement");
+  if (!base) return null;
+  const template = cloneExampleWorkflow(base);
+  template.id = "interactive-skill-description-refinement-object-map";
+  template.name = "Interactive Skill Description Refinement - Object Map";
+  template.description = "Duplicate of interactive skill refinement for result JSON shaped as data.result.{skill_key}.{count,skills[]}, skipping no-match entries and updating the selected skills[index].description.literal.";
+  template.testFixture = {
+    inputMode: "json",
+    input: JSON.stringify(OBJECT_MAP_SKILL_REFINEMENT_INPUT, null, 2),
+    documentText: "The implementation consultant deployed enterprise systems by installing ICT components, testing integrations, preparing users, and handing over the environment for use. The consultant also used analytics to identify patterns in operational data and turn them into commercial recommendations.",
+    prompt: "Start refinement for system deployment.",
+  };
+  const trigger = template.workflow.nodes.find((node) => node.id === "refine-trigger");
+  if (trigger) {
+    const data = trigger.data as TriggerNodeData;
+    data.label = "Start Object-Map Skill Refinement";
+    data.defaultPrompt = "Start skill description refinement for object-map result JSON.";
+    data.outputSchema = "{ userMessage, conversationHistory, data.result }";
+  }
+  const retrieval = template.workflow.nodes.find((node) => node.id === "refine-retrieve-skills");
+  if (retrieval) {
+    const data = retrieval.data as RetrievalNodeData;
+    data.label = "Retrieve Object-Map Skills";
+    data.description = "Lists matched skills from data.result object-map records and skips entries whose skills value is not an array";
+    data.inputSchema = "resultData shaped as { data: { result: { [skill_key]: { count, skills } } } }";
+    data.outputSchema = "{ totalSkills, examples, skills: Array<{ resultKey, skillIndex, label, description, alternativeLabels }>, manifest }";
+    data.code = OBJECT_MAP_SKILL_RETRIEVAL_CODE;
+  }
+  const askSkill = template.workflow.nodes.find((node) => node.id === "refine-ask-skill");
+  if (askSkill) {
+    const data = askSkill.data as UserInputNodeData;
+    data.question = `I found {{prevOutput.totalSkillsText}} matched skills in the result object. Examples: {{prevOutput.examplesText}}.
+
+Which exact skill should be refined? You may use the object key with underscores, the same key with spaces, or one exact alternative label.`;
+  }
+  const validate = template.workflow.nodes.find((node) => node.id === "refine-validate-skill");
+  if (validate) {
+    const data = validate.data as PluginNodeData;
+    data.description = "Matches selectedSkill against object-map keys, display labels, and exact alternative labels";
+    data.inputSchema = "{ skills, selectedSkill } from object-map retrieval";
+    data.outputSchema = "{ selectedSkillFound, skill: { resultKey, skillIndex, label, description, alternativeLabels }, skills, totalSkills }";
+    data.code = OBJECT_MAP_SKILL_VALIDATE_CODE;
+  }
+  const prepare = template.workflow.nodes.find((node) => node.id === "refine-prepare-document-input");
+  if (prepare) {
+    const data = prepare.data as PluginNodeData;
+    data.outputSchema = "{ skill: { resultKey, skillIndex, label, existingDescription, alternativeLabels }, selectedSkillInput, evidenceSource }";
+    data.code = OBJECT_MAP_PREPARE_DOCUMENT_INPUT_CODE;
+  }
+  const update = template.workflow.nodes.find((node) => node.id === "refine-update-result");
+  if (update) {
+    const data = update.data as PluginNodeData;
+    data.description = "Updates selected data.result object-map skills[index].description.literal";
+    data.inputSchema = "{ selectedUpdateDescription, selectedUpdateSource, skill.resultKey, skill.skillIndex, documentBasedDescription, evidence, frameworkDescriptions }";
+    data.code = OBJECT_MAP_SKILL_UPDATE_CODE;
+  }
+  return template;
+};
+
+const objectMapSkillRefinementTemplate = createObjectMapSkillRefinementTemplate();
+if (objectMapSkillRefinementTemplate) {
+  const insertAfter = EXAMPLE_WORKFLOWS.findIndex((example) => example.id === "interactive-skill-description-refinement");
+  EXAMPLE_WORKFLOWS.splice(insertAfter >= 0 ? insertAfter + 1 : EXAMPLE_WORKFLOWS.length, 0, objectMapSkillRefinementTemplate);
+}
+
+
 const NODE_USAGE_EXAMPLES: Record<string, ExampleWorkflow> = {
   trigger: {
     id: "node-example-trigger",
@@ -3442,6 +3744,12 @@ const WORKFLOW_TEST_EXAMPLES = [
     label: "AI engineer knowledge graph",
     path: "/examples/ai-engineer-knowledge-graph.json",
     prompt: "Analyze this AI engineer profile knowledge graph.",
+  },
+  {
+    id: "imc-skill-object-map",
+    label: "IMC skill object map",
+    path: "/examples/imc-skill-object-map.json",
+    prompt: "Start skill description refinement for system_deployment.",
   },
 ] as const;
 

@@ -60,3 +60,14 @@ export function loadRagDocFromStorage(key: string): string | null {
     return null;
   }
 }
+
+export function clearAllRagDocsFromStorage(): void {
+  try {
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(`${PREFIX}:`)) localStorage.removeItem(key);
+    }
+  } catch {
+    // Storage unavailable — nothing to clear.
+  }
+}

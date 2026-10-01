@@ -12,7 +12,8 @@ import HumanValidationPage from "@/components/HumanValidationPage";
 import { ProcessSessionProvider } from "@/contexts/ProcessSessionContext";
 import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { resolveResultUrl, ResultUrlInfo } from "@/utils/resultUrlResolver";
-import { buildRagDocStorageKey, saveRagDocToStorage } from "@/utils/ragDocStorage";
+import { buildRagDocStorageKey, clearAllRagDocsFromStorage, saveRagDocToStorage } from "@/utils/ragDocStorage";
+import { clearAllSourceDocuments } from "@/utils/sourceDocumentStorage";
 import { generatePdcPayload, PdcPayload } from "@/utils/pdcPayloadGenerator";
 import { useAuth } from "@/contexts/AuthContext";
 import UserMenu from "@/components/UserMenu";
@@ -553,8 +554,14 @@ const OrgGatewayContent = ({
       : (selectedAnalytics.data.llm_context ?? null);
   }, [selectedAnalytics]);
 
-  const handleAnalyticsSelect = (option: AnalyticsOption) => {
+  const clearBrowserDocuments = useCallback(async () => {
+    await clearAllSourceDocuments();
+    clearAllRagDocsFromStorage();
+  }, []);
+
+  const handleAnalyticsSelect = async (option: AnalyticsOption) => {
     // New process session starts when user picks software/service chain.
+    await clearBrowserDocuments();
     resetSession();
     clearPersistedOrgFlow(organization.slug);
     setPersistedFlow(null);
@@ -650,15 +657,24 @@ const OrgGatewayContent = ({
     const preselected = findPreselectedAnalytics(searchParams, softwareResources, serviceChains);
     if (!preselected) return;
 
-    resetSession();
-    clearPersistedOrgFlow(organization.slug);
-    setPersistedFlow(null);
-    setProcessingFailed(false);
-    setForcedResultData(null);
-    setForcedResultNotice(null);
-    setSelectedAnalytics(preselected);
-    setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
-    goToStep(getStepIndex("Choose Data"));
+    let cancelled = false;
+    const startPreselectedFlow = async () => {
+      await clearBrowserDocuments();
+      if (cancelled) return;
+      resetSession();
+      clearPersistedOrgFlow(organization.slug);
+      setPersistedFlow(null);
+      setProcessingFailed(false);
+      setForcedResultData(null);
+      setForcedResultNotice(null);
+      setSelectedAnalytics(preselected);
+      setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
+      goToStep(getStepIndex("Choose Data"));
+    };
+    void startPreselectedFlow();
+    return () => {
+      cancelled = true;
+    };
   }, [
     skipSelection,
     selectedAnalytics,
@@ -670,6 +686,7 @@ const OrgGatewayContent = ({
     sessionId,
     getStepIndex,
     goToStep,
+    clearBrowserDocuments,
   ]);
 
   const analyticsTargetId = useMemo(
@@ -729,6 +746,11 @@ const OrgGatewayContent = ({
   }, [organization.name, getStepIndex, goToStep]);
 
   const currentStepName = steps[currentStep];
+
+  useEffect(() => {
+    if (currentStepName !== "Select Type") return;
+    void clearBrowserDocuments();
+  }, [currentStepName, clearBrowserDocuments]);
 
   // Preload the RAG model as soon as Processing step begins so it's ready by Results
   useEffect(() => {
