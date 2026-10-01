@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BookOpen, Copy, Download, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { BookOpen, Copy, Download, Loader2, Pencil, Plus, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,8 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentSkill, AgentSkillInputField, AgentSkillInputType, AgentSkillOutputType, AgentSkillReference } from "@/types/agentSkill";
 import { createSkillsFrameworkMapperTemplate, serializeAgentSkillMarkdown } from "@/types/agentSkill";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 const uid = () => crypto.randomUUID();
 
@@ -44,13 +46,118 @@ const downloadSkill = (skill: AgentSkill) => {
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 };
 
+const extractJsonObject = (raw: string): Record<string, unknown> => {
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // Try to recover a JSON object embedded in model prose.
+  }
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const parsed = JSON.parse(cleaned.slice(start, end + 1));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  }
+  throw new Error("The generated response was not valid JSON.");
+};
+
+const slugKey = (value: string, fallback: string) => {
+  const slug = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return slug || fallback;
+};
+
+const normalizeGeneratedSkill = (raw: Record<string, unknown>): AgentSkill => {
+  const outputTypes = new Set<AgentSkillOutputType>(["text", "json", "html", "mixed"]);
+  const requiredInputs = Array.isArray(raw.requiredInputs)
+    ? raw.requiredInputs
+    : Array.isArray(raw.required_inputs)
+      ? raw.required_inputs
+      : [];
+  const references = Array.isArray(raw.references)
+    ? raw.references
+    : Array.isArray(raw.supportingReferences)
+      ? raw.supportingReferences
+      : Array.isArray(raw.supporting_references)
+        ? raw.supporting_references
+        : [];
+  const name = String(raw.name || raw.skillName || "Generated Agent Skill").trim() || "Generated Agent Skill";
+  const outputType = outputTypes.has(raw.outputType as AgentSkillOutputType)
+    ? raw.outputType as AgentSkillOutputType
+    : outputTypes.has(raw.output_type as AgentSkillOutputType)
+      ? raw.output_type as AgentSkillOutputType
+      : "text";
+
+  return {
+    id: uid(),
+    name,
+    description: String(raw.description || "").trim(),
+    objective: String(raw.objective || "").trim(),
+    instructions: String(raw.instructions || raw.workflow || "").trim(),
+    requiredInputs: requiredInputs.slice(0, 12).map((item, index) => {
+      const field = item && typeof item === "object" ? item as Record<string, unknown> : {};
+      const label = String(field.label || field.name || field.key || `Input ${index + 1}`).trim();
+      const type = ["text", "number", "boolean", "json", "document"].includes(String(field.type))
+        ? String(field.type) as AgentSkillInputType
+        : "text";
+      return {
+        id: uid(),
+        key: slugKey(String(field.key || label), `input_${index + 1}`),
+        label,
+        type,
+        description: String(field.description || "").trim(),
+        required: field.required !== false,
+        defaultValue: field.defaultValue === undefined && field.default_value === undefined
+          ? undefined
+          : String(field.defaultValue ?? field.default_value),
+      };
+    }),
+    outputTemplate: typeof raw.outputTemplate === "string"
+      ? raw.outputTemplate.trim()
+      : typeof raw.output_template === "string"
+        ? raw.output_template.trim()
+        : JSON.stringify(raw.outputTemplate || raw.output_schema || { result: "" }, null, 2),
+    outputType,
+    references: references.slice(0, 8).map((item, index) => {
+      const reference = item && typeof item === "object" ? item as Record<string, unknown> : {};
+      return {
+        id: uid(),
+        name: String(reference.name || `Reference ${index + 1}`).trim(),
+        description: String(reference.description || "").trim(),
+        content: String(reference.content || reference.rules || "").trim(),
+      };
+    }).filter((reference) => reference.name && reference.content),
+    enabled: true,
+    version: 1,
+  };
+};
+
+const SKILL_GENERATION_SYSTEM_PROMPT = `You generate reusable agent skills for an admin configuration UI. Return JSON only.
+Required shape:
+{
+  "name": "short skill name",
+  "description": "when an agent should use this skill, including exclusions",
+  "objective": "reliable outcome this skill produces",
+  "instructions": "numbered operational procedure",
+  "requiredInputs": [{"key":"snake_case","label":"Display label","type":"text|number|boolean|json|document","description":"validation and usage guidance","required":true,"defaultValue":"optional"}],
+  "outputType": "text|json|html|mixed",
+  "outputTemplate": "text template or JSON schema string",
+  "references": [{"name":"Reference name","description":"when used","content":"policy, schema, or domain rules"}]
+}
+Make the skill practical, specific, and safe to attach to an LLM agent. Do not include secrets, API keys, or implementation claims that were not requested.`;
+
 interface AgentSkillsManagementProps {
   skills: AgentSkill[];
   onChange: (skills: AgentSkill[]) => void;
+  organizationId?: string;
 }
 
-export const AgentSkillsManagement = ({ skills, onChange }: AgentSkillsManagementProps) => {
+export const AgentSkillsManagement = ({ skills, onChange, organizationId }: AgentSkillsManagementProps) => {
   const [editingId, setEditingId] = useState<string | null>(skills[0]?.id ?? null);
+  const [generationPrompt, setGenerationPrompt] = useState("");
+  const [isGeneratingSkill, setIsGeneratingSkill] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
   const editingIndex = skills.findIndex((skill) => skill.id === editingId);
   const skill = editingIndex >= 0 ? skills[editingIndex] : null;
 
@@ -68,6 +175,98 @@ export const AgentSkillsManagement = ({ skills, onChange }: AgentSkillsManagemen
     if (editingId === id) setEditingId(next[0]?.id ?? null);
   };
 
+  const generateSkill = async () => {
+    if (!generationPrompt.trim() || isGeneratingSkill) return;
+    setIsGeneratingSkill(true);
+    setGenerationError(null);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 90_000);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-with-result`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(organizationId ? { "x-organization-id": organizationId } : {}),
+        },
+        body: JSON.stringify({
+          messages: [{
+            role: "user",
+            content: `Create one reusable agent skill from this admin prompt:
+
+${generationPrompt.trim()}`,
+          }],
+          result: {
+            existingSkills: skills.map(({ id, name, description }) => ({ id, name, description })),
+          },
+          systemPrompt: SKILL_GENERATION_SYSTEM_PROMPT,
+          outputType: "json",
+        }),
+      });
+      if (!response.ok || !response.body) {
+        const responseText = await response.text();
+        let detail = responseText;
+        try {
+          const parsed = JSON.parse(responseText) as { error?: string };
+          detail = parsed.error || responseText;
+        } catch {
+          // Keep the original response text.
+        }
+        throw new Error(`Skill generation failed (${response.status})${detail ? `: ${detail}` : ""}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulated = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          try {
+            const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+            if (event.type === "token" && event.content) accumulated += event.content;
+            if (event.type === "error") throw new Error(event.message || "Skill generation failed");
+          } catch (error) {
+            if (error instanceof SyntaxError) continue;
+            throw error;
+          }
+        }
+      }
+
+      const generated = normalizeGeneratedSkill(extractJsonObject(accumulated));
+      const completed: AgentSkill = {
+        ...generated,
+        description: generated.description || "Use this skill when the user's request matches the generated operating procedure.",
+        objective: generated.objective || "Produce a reliable, reviewable result for the requested operation.",
+        instructions: generated.instructions || "1. Validate the supplied inputs.\n2. Follow the requested domain rules.\n3. Return the output in the configured format.",
+        outputTemplate: generated.outputTemplate || "Return a concise answer with the result, assumptions, and any required follow-up actions.",
+      };
+      add(completed);
+      setGenerationPrompt("");
+      toast.success("Agent skill generated and loaded into the form");
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === "AbortError"
+        ? "Skill generation timed out. Try a more focused prompt."
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      setGenerationError(message);
+      toast.error("Failed to generate agent skill");
+    } finally {
+      window.clearTimeout(timeoutId);
+      setIsGeneratingSkill(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -83,6 +282,28 @@ export const AgentSkillsManagement = ({ skills, onChange }: AgentSkillsManagemen
             <Plus className="h-3.5 w-3.5" />New Skill
           </Button>
         </div>
+      </div>
+
+      <div className="rounded-lg border bg-background p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h4 className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4" />Generate from prompt</h4>
+            <p className="mt-1 text-xs text-muted-foreground">Describe the repeatable operation and the generated draft will populate the skill form.</p>
+          </div>
+          <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={isGeneratingSkill || !generationPrompt.trim()} onClick={() => void generateSkill()}>
+            {isGeneratingSkill ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            Generate skill
+          </Button>
+        </div>
+        <Textarea
+          className="mt-3 min-h-[92px] text-sm"
+          value={generationPrompt}
+          placeholder="Example: Create a skill that reviews a supplier contract, extracts renewal dates and termination clauses, flags risks, and returns JSON for downstream workflow nodes."
+          onChange={(e) => setGenerationPrompt(e.target.value)}
+        />
+        {generationError && (
+          <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">{generationError}</p>
+        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">

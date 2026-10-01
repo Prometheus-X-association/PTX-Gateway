@@ -2232,7 +2232,7 @@ const LlmSettingsSection = () => {
           </TabsContent>
 
           <TabsContent value="skills" className="mt-0 rounded-xl border bg-muted/10 p-4 sm:p-5">
-            <AgentSkillsManagement skills={llm.skills} onChange={updateSkills} />
+            <AgentSkillsManagement skills={llm.skills} organizationId={user?.organization?.id} onChange={updateSkills} />
           </TabsContent>
 
           <TabsContent value="workflows" className="mt-0 rounded-xl border bg-muted/10 p-4 sm:p-5">
