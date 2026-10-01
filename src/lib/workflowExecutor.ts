@@ -31,6 +31,12 @@ export interface ExecutorContext {
   onStepDone: (step: WorkflowStepResult) => void;
   onStepStart?: (nodeId: string, input: unknown) => void;
   stopAfterNodeId?: string;
+  /** Test/debug runs can start at one node instead of the trigger. */
+  startNodeId?: string;
+  /** Edge used to compute the starting node input when startNodeId is not the trigger. */
+  startFromEdge?: WorkflowEdge;
+  /** Outputs from earlier debug steps, used when starting from a selected node. */
+  initialNodeOutputs?: Record<string, unknown>;
   resume?: {
     waiting: WorkflowWaitingState;
     answer: string;
@@ -162,6 +168,9 @@ export async function executeWorkflow(
 
   const results: WorkflowStepResult[] = [];
   const outputByNodeId = new Map<string, unknown>();
+  if (ctx.initialNodeOutputs) {
+    Object.entries(ctx.initialNodeOutputs).forEach(([nodeId, value]) => outputByNodeId.set(nodeId, value));
+  }
   if (ctx.resume?.waiting.nodeOutputs) {
     Object.entries(ctx.resume.waiting.nodeOutputs).forEach(([nodeId, value]) => outputByNodeId.set(nodeId, value));
   }
@@ -520,7 +529,9 @@ export async function executeWorkflow(
   let error: string | undefined;
 
   try {
-    await processNode(ctx.resume?.waiting.nodeId ?? trigger.id);
+    const startNodeId = ctx.resume?.waiting.nodeId ?? ctx.startNodeId ?? trigger.id;
+    const startFromEdge = ctx.resume ? undefined : ctx.startFromEdge;
+    await processNode(startNodeId, startFromEdge);
   } catch (e) {
     const err = e as Error;
     if (err.name === "AbortError" || err.message?.includes("AbortError")) {

@@ -192,6 +192,7 @@ const normalizeEdgeHandles = (nodes: Node[], edges: Edge[]): Edge[] => edges.map
 });
 
 type TestNodeStatus = "running" | "success" | "error";
+type WorkflowTestRunMode = "workflow" | "node";
 type WorkflowPopupKey = "generator" | "test";
 type WorkflowPopupPosition = { x: number; y: number };
 interface WorkflowPopupDragState {
@@ -267,11 +268,13 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
     : [];
   const isOutput = type === "output";
   const testStatus = data.__testStatus as TestNodeStatus | undefined;
+  const waitingForInput = Boolean(data.__waitingForInput);
 
   return (
     <div
       className={`rounded-lg border border-l-4 bg-background shadow-sm min-w-[180px] ${isRouter ? "w-[240px]" : "max-w-[220px]"} cursor-pointer transition-all
-        ${NODE_ACCENTS[type] ?? NODE_ACCENTS.agent} ${selected ? "ring-2 ring-primary/60 shadow-md" : "hover:shadow-md"}`}
+        ${NODE_ACCENTS[type] ?? NODE_ACCENTS.agent}
+        ${waitingForInput ? "border-fuchsia-500 ring-2 ring-fuchsia-500/70 shadow-lg shadow-fuchsia-500/20" : selected ? "ring-2 ring-primary/60 shadow-md" : "hover:shadow-md"}`}
     >
       {!isCondition && !isRouter && HANDLE_POSITIONS.map(({ side, position }) => (
         <Handle key={`port-${side}`} id={`port-${side}`} type="source" position={position}
@@ -282,7 +285,7 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
           className="!h-3 !w-3 !border-2 !border-muted-foreground !bg-background" />
       ))}
 
-      <div className="flex items-center gap-2 border-b bg-muted/30 px-3 py-2">
+      <div className={`flex items-center gap-2 border-b px-3 py-2 ${waitingForInput ? "bg-fuchsia-500/10" : "bg-muted/30"}`}>
         <span className={`flex h-6 w-6 items-center justify-center rounded-md ${NODE_LIBRARY.find((item) => item.type === type)?.iconBg ?? "bg-muted"}`}>
           <Icon className={`h-3.5 w-3.5 shrink-0 ${NODE_LIBRARY.find((item) => item.type === type)?.color ?? "text-foreground"}`} />
         </span>
@@ -290,9 +293,16 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
           <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{type}</p>
           <p className="truncate text-xs font-semibold text-foreground">{label}</p>
         </div>
-        {testStatus && (
-          <span className={`ml-auto h-2.5 w-2.5 shrink-0 rounded-full ${testStatus === "running" ? "animate-pulse bg-sky-500" : testStatus === "success" ? "bg-emerald-500" : "bg-destructive"}`} title={`Test: ${testStatus}`} />
-        )}
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {waitingForInput && (
+            <span className="flex items-center gap-1 rounded-full bg-fuchsia-600 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-white shadow-sm">
+              <Send className="h-2.5 w-2.5" /> Reply
+            </span>
+          )}
+          {testStatus && (
+            <span className={`h-2.5 w-2.5 rounded-full ${testStatus === "running" ? "animate-pulse bg-sky-500" : testStatus === "success" ? "bg-emerald-500" : "bg-destructive"}`} title={`Test: ${testStatus}`} />
+          )}
+        </div>
       </div>
 
       <div className="px-3 py-2 text-foreground">
@@ -340,9 +350,16 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
         </p>
       )}
       {type === "user_input" && (
-        <p className="text-[10px] text-muted-foreground truncate">
-          {(data as UserInputNodeData).question || "Wait for user reply"}
-        </p>
+        <div className="space-y-1">
+          <p className="text-[10px] text-muted-foreground truncate">
+            {(data as UserInputNodeData).question || "Wait for user reply"}
+          </p>
+          {waitingForInput && (
+            <div className="rounded-md border border-fuchsia-500/30 bg-fuchsia-500/10 px-2 py-1 text-[9px] font-medium text-fuchsia-700 dark:text-fuchsia-200">
+              Waiting for test reply in the Test workflow panel
+            </div>
+          )}
+        </div>
       )}
       {isOutput && <p className="text-[10px] text-muted-foreground">Final workflow response</p>}
       </div>
@@ -2217,12 +2234,12 @@ return '<div style="overflow-x:auto"><table style="border-collapse:collapse;widt
             description: "Uses the resultData retrieval tool to list skill labels and current descriptions without sending full JSON to the LLM",
             inputSchema: "resultData outside prompt",
             outputSchema: "{ totalSkills, examples, skills, manifest }",
-            code: `const normalize = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+            code: `const normalize = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
 const titleCase = value => String(value ?? '')
   .replace(/[_-]+/g, ' ')
-  .replace(/\s+/g, ' ')
+  .replace(/\\s+/g, ' ')
   .trim()
-  .replace(/\b\w/g, char => char.toLocaleUpperCase());
+  .replace(/\\b\\w/g, char => char.toLocaleUpperCase());
 const seen = new Set();
 const root = input.result?.data?.content?.data?.result || input.result?.content?.data?.result || input.result?.data?.result || input.result?.result || input.sourceData?.data?.result || input.sourceData?.result || null;
 let skills = [];
@@ -2230,12 +2247,14 @@ let manifest = tools.manifest();
 if (root && typeof root === 'object' && !Array.isArray(root)) {
   for (const [key, record] of Object.entries(root)) {
     if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
-    const skillRecords = Array.isArray(record.skills) ? record.skills : [];
+    const matchedSkillRecords = Array.isArray(record.skills) ? record.skills : [];
+    const skillRecords = matchedSkillRecords.length > 0 ? matchedSkillRecords : [null];
     skillRecords.forEach((skillRecord, skillIndex) => {
       const label = String(record.label || record.skill_name || record.name || key).trim();
       const normalized = normalize(label);
       if (!label || seen.has(normalized + ':' + skillIndex)) return;
       seen.add(normalized + ':' + skillIndex);
+      const hasMatch = Boolean(skillRecord && typeof skillRecord === 'object');
       skills.push({
         index: skills.length + 1,
         id: key,
@@ -2244,9 +2263,10 @@ if (root && typeof root === 'object' && !Array.isArray(root)) {
         label,
         display: titleCase(label),
         normalized,
-        description: String(skillRecord?.description?.literal ?? skillRecord?.description ?? '').trim(),
-        alternativeLabels: Array.isArray(skillRecord?.alternative_labels) ? skillRecord.alternative_labels.map(String).filter(Boolean) : [],
-        count: Number(record.count ?? skillRecords.length) || skillRecords.length,
+        description: hasMatch ? String(skillRecord?.description?.literal ?? skillRecord?.description ?? '').trim() : '',
+        alternativeLabels: hasMatch && Array.isArray(skillRecord?.alternative_labels) ? skillRecord.alternative_labels.map(String).filter(Boolean) : [],
+        count: Number(record.count ?? matchedSkillRecords.length) || matchedSkillRecords.length,
+        hasMatch,
       });
     });
   }
@@ -2274,7 +2294,7 @@ if (root && typeof root === 'object' && !Array.isArray(root)) {
       return true;
     });
 }
-if (skills.length === 0) throw new Error('No matched skills found. Expected nodes[] or data.result entries with skills arrays; entries such as "No matching skill found." are skipped.');
+if (skills.length === 0) throw new Error('No skill keys found. Expected nodes[] or data.result object-map entries.');
 const examples = skills.slice(0, 5).map((skill) => skill.display);
 return {
   totalSkills: skills.length,
@@ -2513,21 +2533,74 @@ Previous proposal:
           position: { x: 260, y: 1185 },
           data: {
             label: "Ask Framework Descriptions",
-            question: "Do you want to add descriptions from standardized or open skill frameworks such as ESCO, ROME, SFIA, or another framework?",
-            answerKey: "addFramework",
-            inputType: "yes_no",
+            question: "Do you want to add descriptions from standardized or open skill frameworks such as ESCO, ROME, SFIA, or another framework? You can reply no, yes, or type the framework directly, for example ESCO.",
+            answerKey: "frameworkRequest",
+            inputType: "text",
             inputSchema: "{ accepted document description }",
-            outputSchema: "{ addFramework, frameworkDescriptions? }",
+            outputSchema: "{ frameworkRequest }",
           } satisfies UserInputNodeData,
+        },
+        {
+          id: "refine-parse-framework-request",
+          type: "plugin",
+          position: { x: 260, y: 1310 },
+          data: {
+            label: "Parse Framework Request",
+            description: "Understands no/skip answers, yes answers, and direct framework names such as ESCO",
+            inputSchema: "{ frameworkRequest, userAnswer }",
+            outputSchema: "{ addFramework, frameworkName, frameworkNameProvided, needsFrameworkName }",
+            code: `const state = input.prevOutput || {};
+const raw = String(state.frameworkRequest || state.userAnswer || '').trim();
+const normalized = raw.toLocaleLowerCase().replace(/\\s+/g, ' ').trim();
+const isNo = /^(no|n|nope|nah|none|skip|enough|stop|not now|no thanks|no thank you)(\\b|[.!?,]|$)/i.test(normalized)
+  || /\\b(i\\s+)?do\\s+not\\s+want\\b/i.test(normalized)
+  || /\\b(i\\s+)?don't\\s+want\\b/i.test(normalized)
+  || /\\bwithout\\s+(a\\s+)?(framework|esco|rome|sfia)\\b/i.test(normalized);
+const yesOnly = /^(yes|y|yeah|yep|ok|okay|sure|please|go ahead|add it|add framework|add a framework|use a framework)$/i.test(normalized);
+const knownFramework = raw.match(/\\b(ESCO|ROME|SFIA|O\\*?NET|ONET)\\b/i)?.[1];
+const canonicalFramework = knownFramework
+  ? knownFramework.toUpperCase().replace(/^ONET$/, 'O*NET')
+  : '';
+let frameworkName = canonicalFramework;
+if (!frameworkName && raw && !isNo && !yesOnly) {
+  frameworkName = raw
+    .replace(/^(yes|y|yeah|yep|ok|okay|sure|please)\\b[\\s,.:;-]*/i, '')
+    .replace(/^(use|add|include|from|with|generate|provide|create)\\b[\\s,.:;-]*/i, '')
+    .replace(/^(a|an|the)\\s+/i, '')
+    .replace(/\\b(description|descriptions|framework|skill framework|standardized|standardised|open skill frameworks?)\\b/ig, '')
+    .replace(/\\s+/g, ' ')
+    .trim();
+}
+const addFramework = !isNo && Boolean(yesOnly || frameworkName);
+return {
+  ...state,
+  frameworkRequest: raw,
+  addFramework,
+  frameworkName,
+  frameworkNameProvided: Boolean(addFramework && frameworkName),
+  needsFrameworkName: Boolean(addFramework && !frameworkName),
+  frameworkRequestUnderstoodAs: isNo ? 'no' : frameworkName ? 'framework_name' : yesOnly ? 'yes_needs_framework_name' : 'no',
+};`,
+          } satisfies PluginNodeData,
         },
         {
           id: "refine-framework-condition",
           type: "condition",
-          position: { x: 260, y: 1335 },
+          position: { x: 260, y: 1435 },
           data: {
             label: "Add Framework?",
             expression: "prevOutput?.addFramework === true",
             inputSchema: "{ addFramework }",
+          } satisfies ConditionNodeData,
+        },
+        {
+          id: "refine-framework-name-provided",
+          type: "condition",
+          position: { x: 520, y: 1435 },
+          data: {
+            label: "Framework Provided?",
+            expression: "prevOutput?.frameworkNameProvided === true",
+            inputSchema: "{ frameworkNameProvided, frameworkName }",
           } satisfies ConditionNodeData,
         },
         {
@@ -2583,7 +2656,12 @@ Provide the requested framework description. Return direct JSON only.`,
             outputSchema: "{ frameworkDescriptions[] }",
             code: `const frameworkResult = input.prevOutput || {};
 const previousAsk = input.getNodeOutput('refine-ask-framework-name') || {};
-const previousState = previousAsk && typeof previousAsk === 'object' ? previousAsk : {};
+const previousProvided = input.getNodeOutput('refine-framework-name-provided') || {};
+const previousParsed = input.getNodeOutput('refine-parse-framework-request') || {};
+const previousFrameworkAsk = input.getNodeOutput('refine-ask-frameworks') || {};
+const previousAccepted = input.getNodeOutput('refine-ask-satisfied') || {};
+const previousState = [previousAsk, previousProvided, previousParsed, previousFrameworkAsk, previousAccepted]
+  .find(item => item && typeof item === 'object' && !Array.isArray(item) && (item.documentBasedDescription || item.frameworkDescriptions || item.frameworkName)) || {};
 const existing = Array.isArray(previousState.frameworkDescriptions) ? previousState.frameworkDescriptions : [];
 const requestedFramework = String(previousState.frameworkName || previousState.userAnswer || frameworkResult.framework || '').trim();
 const normalizeDescription = value => {
@@ -2608,9 +2686,16 @@ const normalizedFrameworkResult = {
   available: Boolean(frameworkResult.available !== false && description),
   note: frameworkResult.available === false ? String(frameworkResult.note || 'No corresponding framework description identified.') : String(frameworkResult.note || ''),
 };
+const allFrameworkDescriptions = [...existing, normalizedFrameworkResult];
+const latestStatus = normalizedFrameworkResult.available === false ? 'Not available' : 'Generated';
+const latestBody = normalizedFrameworkResult.available === false
+  ? (normalizedFrameworkResult.note || 'No corresponding framework description identified.')
+  : (normalizedFrameworkResult.description || normalizedFrameworkResult.note || 'No description returned.');
+const latestFrameworkPreview = latestStatus + ' framework description for ' + normalizedFrameworkResult.framework + ':\\n' + latestBody;
 return {
   ...previousState,
-  frameworkDescriptions: [...existing, normalizedFrameworkResult],
+  frameworkDescriptions: allFrameworkDescriptions,
+  latestFrameworkPreview,
 };`,
           } satisfies PluginNodeData,
         },
@@ -2620,7 +2705,11 @@ return {
           position: { x: 560, y: 1785 },
           data: {
             label: "Ask Another Framework",
-            question: "Do you want to add another framework description, or is this enough?",
+            question: `Framework result:
+
+{{prevOutput.latestFrameworkPreview}}
+
+Do you want to add another framework description, or is this enough?`,
             answerKey: "addAnotherFramework",
             inputType: "yes_no",
             inputSchema: "{ frameworkDescriptions[] }",
@@ -2647,9 +2736,22 @@ return {
             inputSchema: "{ document description, frameworkDescriptions[] }",
             outputSchema: "{ tableHtml, skill, documentBasedDescription, evidence, frameworkDescriptions, updateDescriptionOptions }",
             code: `const state = input.prevOutput || {};
-const skillLabel = String(state.skillLabel || state.skill?.label || state.skill?.display || state.selectedSkillInput || '');
-const docDescription = String(state.documentBasedDescription || '').slice(0, 4000);
-const evidence = Array.isArray(state.evidence) ? state.evidence : [];
+const acceptedState = input.getNodeOutput('refine-ask-satisfied') || {};
+const cleanState = input.getNodeOutput('refine-clean-document-description') || {};
+const frameworkAskState = input.getNodeOutput('refine-ask-frameworks') || {};
+const parseFrameworkState = input.getNodeOutput('refine-parse-framework-request') || {};
+const skillLabel = String(state.skillLabel || state.skill?.label || state.skill?.display || state.selectedSkillInput || acceptedState.skillLabel || acceptedState.skill?.label || '');
+const firstText = (...values) => values.map(value => String(value ?? '').trim()).find(Boolean) || '';
+const docDescription = firstText(
+  state.documentBasedDescription,
+  acceptedState.documentBasedDescription,
+  frameworkAskState.documentBasedDescription,
+  parseFrameworkState.documentBasedDescription,
+  cleanState.documentBasedDescription
+).slice(0, 4000);
+const evidence = Array.isArray(state.evidence) && state.evidence.length ? state.evidence
+  : Array.isArray(acceptedState.evidence) && acceptedState.evidence.length ? acceptedState.evidence
+    : Array.isArray(cleanState.evidence) ? cleanState.evidence : [];
 const frameworks = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
 const esc = value => String(value ?? '')
   .replace(/&/g, '&amp;')
@@ -2679,8 +2781,8 @@ const updateDescriptionOptions = [
     })),
 ];
 const updateDescriptionChoicesText = updateDescriptionOptions
-  .map((item, index) => (index + 1) + '. ' + item.key + ' - ' + item.description)
-  .join('\\n');
+  .map((item, index) => (index + 1) + '. ' + item.key + ' - ' + (item.description || '(no description available)'))
+  .join('\\n\\n');
 const tableHtml = '<!doctype html><html><head><meta charset="utf-8"><style>' +
   'body{margin:0;padding:0;background:transparent;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#0f172a}' +
   'table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.45}' +
@@ -2749,7 +2851,7 @@ Do you want to update this selected skill description in the resultData visualiz
 Available choices:
 {{prevOutput.updateDescriptionChoicesText}}
 
-Reply with "document-based" or one exact framework name from the choices above.`,
+Reply with a number such as 1 or 2, "document-based", or one framework name from the choices above.`,
             answerKey: "descriptionChoice",
             inputType: "text",
             inputSchema: "{ updateDescriptionOptions }",
@@ -2766,21 +2868,49 @@ Reply with "document-based" or one exact framework name from the choices above.`
             inputSchema: "{ descriptionChoice, updateDescriptionOptions }",
             outputSchema: "{ selectedUpdateDescription, selectedUpdateSource, updateDescriptionValid }",
             code: `const state = input.prevOutput || {};
-const normalize = value => String(value ?? '').replace(/_/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
-const choice = normalize(state.descriptionChoice || state.userAnswer || '');
+const normalize = value => String(value ?? '')
+  .replace(/[_-]+/g, ' ')
+  .replace(/[^\\p{L}\\p{N}*+.# ]+/gu, ' ')
+  .replace(/\\s+/g, ' ')
+  .trim()
+  .toLocaleLowerCase();
+const compact = value => normalize(value).replace(/\\s+/g, '');
+const editDistance = (a, b) => {
+  a = compact(a); b = compact(b);
+  if (!a || !b) return Math.max(a.length, b.length);
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let previous = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const temp = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1));
+      previous = temp;
+    }
+  }
+  return row[b.length];
+};
+const choiceRaw = String(state.descriptionChoice || state.userAnswer || '').trim();
+const choice = normalize(choiceRaw);
+const choiceNumber = choiceRaw.match(/^\\s*(\\d+)\\s*$/)?.[1];
 const options = Array.isArray(state.updateDescriptionOptions) ? state.updateDescriptionOptions : [];
-const selected = options.find(item =>
-  normalize(item.key) === choice ||
-  normalize(item.label) === choice ||
-  (normalize(item.key) === 'document-based' && ['document', 'document based', 'document-based', 'document based description'].includes(choice))
-) || null;
+const optionByNumber = choiceNumber ? options[Number(choiceNumber) - 1] : null;
+const documentAliases = ['document', 'doc', 'document based', 'document-based', 'document based description', 'document description', 'source document', 'uploaded document'];
+const selected = optionByNumber || options.find(item => {
+  const key = normalize(item.key);
+  const label = normalize(item.label);
+  if (key === choice || label === choice || compact(key) === compact(choice) || compact(label) === compact(choice)) return true;
+  if (key === 'document based' && documentAliases.some(alias => editDistance(choice, alias) <= 2 || compact(choice).includes(compact(alias)))) return true;
+  const maxTypoDistance = compact(choice).length <= 4 ? 2 : 2;
+  return editDistance(choice, key) <= maxTypoDistance || editDistance(choice, label) <= maxTypoDistance;
+}) || null;
 const selectedDescription = String(selected?.description || '').slice(0, 4000);
 return {
   ...state,
   selectedUpdateSource: selected ? selected.label : '',
   selectedUpdateDescription: selected ? selectedDescription : '',
   updateDescriptionValid: Boolean(selected && selectedDescription.trim()),
-  updateDescriptionValidationMessage: selected ? '' : 'Description source not found. Choose document-based or one exact framework name.',
+  updateDescriptionValidationMessage: selected ? '' : 'Description source not found. Choose a number such as 1 or 2, document-based, or one exact framework name.',
 };`,
           } satisfies PluginNodeData,
         },
@@ -2819,25 +2949,21 @@ return 'No update applied. The generated descriptions for ' + skill + ' were sho
             outputSchema: "Updated resultData JSON",
             code: `const state = input.prevOutput || {};
 const result = JSON.parse(JSON.stringify(input.result || {}));
-const normalize = value => String(value ?? '').replace(/_/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
-const wanted = normalize(state.skillLabel || state.skill?.label || state.selectedSkillInput);
+const normalize = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
+const prepared = input.getNodeOutput('refine-prepare-document-input') || {};
+const validated = input.getNodeOutput('refine-validate-skill') || {};
+const selectedSkill = state.skill && typeof state.skill === 'object' ? state.skill
+  : prepared.skill && typeof prepared.skill === 'object' ? prepared.skill
+    : validated.skill && typeof validated.skill === 'object' ? validated.skill
+      : {};
+const wanted = normalize(state.skillLabel || selectedSkill.label || selectedSkill.display || state.selectedSkillInput);
+const wantedKey = String(selectedSkill.resultKey || selectedSkill.id || '').trim();
+const wantedIndex = Number.isFinite(Number(selectedSkill.skillIndex)) ? Number(selectedSkill.skillIndex) : 0;
 const selectedDescription = String(state.selectedUpdateDescription || state.documentBasedDescription || '').slice(0, 4000);
-const nodes = Array.isArray(result?.data?.nodes)
-  ? result.data.nodes
-  : Array.isArray(result?.nodes)
-    ? result.nodes
-    : [];
-const node = nodes.find(item => normalize(item?.label ?? item?.id) === wanted);
-if (node) {
-  node.description = selectedDescription || node.description || '';
-  node.document_based_description = {
-    description: String(state.documentBasedDescription || '').slice(0, 4000),
-    evidence: Array.isArray(state.evidence) ? state.evidence : [],
-  };
-  node.framework_descriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
-  node.selected_description_source = state.selectedUpdateSource || 'Document-based description';
-  node.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement';
-}
+const documentDescription = String(state.documentBasedDescription || '').slice(0, 4000);
+const evidence = Array.isArray(state.evidence) ? state.evidence : [];
+const frameworkDescriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
+let updated = false;
 const root =
   result?.data?.content?.data?.result ||
   result?.content?.data?.result ||
@@ -2847,22 +2973,50 @@ const root =
 if (root && typeof root === 'object' && !Array.isArray(root)) {
   for (const [key, record] of Object.entries(root)) {
     if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
-    const skillName = normalize(record.label || record.skill_name || key);
-    if (skillName !== wanted) continue;
-    if (!Array.isArray(record.skills)) record.skills = [{ description: { literal: '', mimetype: 'plain/text' } }];
-    if (!record.skills[0] || typeof record.skills[0] !== 'object') record.skills[0] = { description: { literal: '', mimetype: 'plain/text' } };
-    if (!record.skills[0].description || typeof record.skills[0].description !== 'object') record.skills[0].description = { literal: '', mimetype: 'plain/text' };
-    record.skills[0].description.literal = selectedDescription || String(record.skills[0].description.literal || '');
-    record.skills[0].description.mimetype = record.skills[0].description.mimetype || 'plain/text';
-    record.document_based_description = {
-      description: String(state.documentBasedDescription || '').slice(0, 4000),
-      evidence: Array.isArray(state.evidence) ? state.evidence : [],
-    };
-    record.framework_descriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
-    record.selected_description_source = state.selectedUpdateSource || 'Document-based description';
-    record.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement';
+    const recordLabels = [key, record.label, record.skill_name, record.name].map(normalize);
+    const keyMatches = wantedKey ? key === wantedKey : false;
+    const labelMatches = wanted ? recordLabels.includes(wanted) : false;
+    if (!keyMatches && !labelMatches) continue;
+    if (!Array.isArray(record.skills)) record.skills = [];
+    if (!record.skills[wantedIndex] || typeof record.skills[wantedIndex] !== 'object') {
+      record.skills[wantedIndex] = { description: { literal: '', mimetype: 'plain/text' }, alternative_labels: [] };
+    }
+    const skillRecord = record.skills[wantedIndex];
+    if (!skillRecord.description || typeof skillRecord.description !== 'object') {
+      skillRecord.description = { literal: String(skillRecord.description || ''), mimetype: 'plain/text' };
+    }
+    skillRecord.description.literal = selectedDescription || String(skillRecord.description.literal || '');
+    skillRecord.description.mimetype = skillRecord.description.mimetype || 'plain/text';
+    skillRecord.document_based_description = { description: documentDescription, evidence };
+    skillRecord.framework_descriptions = frameworkDescriptions;
+    skillRecord.selected_description_source = state.selectedUpdateSource || 'Document-based description';
+    skillRecord.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement';
+    record.document_based_description = skillRecord.document_based_description;
+    record.framework_descriptions = skillRecord.framework_descriptions;
+    record.selected_description_source = skillRecord.selected_description_source;
+    record.description_updated_by = skillRecord.description_updated_by;
+    updated = true;
     break;
   }
+}
+if (!updated) {
+  const nodes = Array.isArray(result?.data?.nodes)
+    ? result.data.nodes
+    : Array.isArray(result?.nodes)
+      ? result.nodes
+      : [];
+  const node = nodes.find(item => normalize(item?.label ?? item?.id) === wanted || (wantedKey && String(item?.id ?? '') === wantedKey));
+  if (node) {
+    node.description = selectedDescription || node.description || '';
+    node.document_based_description = { description: documentDescription, evidence };
+    node.framework_descriptions = frameworkDescriptions;
+    node.selected_description_source = state.selectedUpdateSource || 'Document-based description';
+    node.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement';
+    updated = true;
+  }
+}
+if (!updated) {
+  throw new Error('Selected skill was not found in resultData update target.');
 }
 return result;`,
           } satisfies PluginNodeData,
@@ -2903,8 +3057,11 @@ return result;`,
         { id: "refine-e10", source: "refine-satisfied-condition", target: "refine-ask-frameworks", sourceHandle: "true" },
         { id: "refine-e11", source: "refine-satisfied-condition", target: "refine-alternative-agent", sourceHandle: "false" },
         { id: "refine-e12", source: "refine-alternative-agent", target: "refine-clean-document-description" },
-        { id: "refine-e13", source: "refine-ask-frameworks", target: "refine-framework-condition" },
-        { id: "refine-e14", source: "refine-framework-condition", target: "refine-ask-framework-name", sourceHandle: "true" },
+        { id: "refine-e13", source: "refine-ask-frameworks", target: "refine-parse-framework-request" },
+        { id: "refine-e13a", source: "refine-parse-framework-request", target: "refine-framework-condition" },
+        { id: "refine-e14", source: "refine-framework-condition", target: "refine-framework-name-provided", sourceHandle: "true" },
+        { id: "refine-e14a", source: "refine-framework-name-provided", target: "refine-framework-agent", sourceHandle: "true" },
+        { id: "refine-e14b", source: "refine-framework-name-provided", target: "refine-ask-framework-name", sourceHandle: "false" },
         { id: "refine-e15", source: "refine-framework-condition", target: "refine-format-final", sourceHandle: "false" },
         { id: "refine-e16", source: "refine-ask-framework-name", target: "refine-framework-agent" },
         { id: "refine-e17", source: "refine-framework-agent", target: "refine-merge-framework" },
@@ -3266,10 +3423,12 @@ const skills = [];
 const seen = new Set();
 for (const [key, record] of Object.entries(root)) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
-  const skillRecords = Array.isArray(record.skills) ? record.skills : [];
+  const matchedSkillRecords = Array.isArray(record.skills) ? record.skills : [];
+  const skillRecords = matchedSkillRecords.length > 0 ? matchedSkillRecords : [null];
   skillRecords.forEach((skillRecord, skillIndex) => {
-    const description = String(skillRecord?.description?.literal ?? skillRecord?.description ?? '').trim();
-    const alternativeLabels = Array.isArray(skillRecord?.alternative_labels)
+    const hasMatch = Boolean(skillRecord && typeof skillRecord === 'object');
+    const description = hasMatch ? String(skillRecord?.description?.literal ?? skillRecord?.description ?? '').trim() : '';
+    const alternativeLabels = hasMatch && Array.isArray(skillRecord?.alternative_labels)
       ? skillRecord.alternative_labels.map(String).filter(Boolean)
       : [];
     const label = String(record.label || record.skill_name || record.name || key).trim();
@@ -3286,13 +3445,13 @@ for (const [key, record] of Object.entries(root)) {
       normalized,
       description,
       alternativeLabels,
-      count: Number(record.count ?? skillRecords.length) || skillRecords.length,
-      hasMatch: true,
+      count: Number(record.count ?? matchedSkillRecords.length) || matchedSkillRecords.length,
+      hasMatch,
     });
   });
 }
 if (skills.length === 0) {
-  throw new Error('No matched skills found. Expected data.result entries with skills as an array; entries such as "No matching skill found." are skipped.');
+  throw new Error('No skill keys found. Expected data.result object-map entries.');
 }
 return {
   totalSkills: skills.length,
@@ -3304,8 +3463,8 @@ return {
     shape: 'object_map',
     rootPath: 'data.result',
     totalResultKeys: Object.keys(root).length,
-    selectableMatchedSkills: skills.length,
-    skippedNoMatchRecords: Object.values(root).filter(record => record && typeof record === 'object' && !Array.isArray(record) && !Array.isArray(record.skills)).length,
+    extractedSkills: skills.length,
+    noMatchRecords: Object.values(root).filter(record => record && typeof record === 'object' && !Array.isArray(record) && !Array.isArray(record.skills)).length,
   },
 };`;
 
@@ -3354,52 +3513,73 @@ return {
 const OBJECT_MAP_SKILL_UPDATE_CODE = `const state = input.prevOutput || {};
 const result = JSON.parse(JSON.stringify(input.result || {}));
 const normalize = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\\s+/g, ' ').trim().toLocaleLowerCase();
-const wanted = normalize(state.skillLabel || state.skill?.label || state.selectedSkillInput);
-const wantedKey = String(state.skill?.resultKey || state.skill?.id || '').trim();
-const wantedIndex = Number(state.skill?.skillIndex || 0);
+const prepared = input.getNodeOutput('refine-prepare-document-input') || {};
+const validated = input.getNodeOutput('refine-validate-skill') || {};
+const selectedSkill = state.skill && typeof state.skill === 'object' ? state.skill
+  : prepared.skill && typeof prepared.skill === 'object' ? prepared.skill
+    : validated.skill && typeof validated.skill === 'object' ? validated.skill
+      : {};
+const wanted = normalize(state.skillLabel || selectedSkill.label || selectedSkill.display || state.selectedSkillInput);
+const wantedKey = String(selectedSkill.resultKey || selectedSkill.id || '').trim();
+const wantedIndex = Number.isFinite(Number(selectedSkill.skillIndex)) ? Number(selectedSkill.skillIndex) : 0;
 const selectedDescription = String(state.selectedUpdateDescription || state.documentBasedDescription || '').slice(0, 4000);
+const documentDescription = String(state.documentBasedDescription || '').slice(0, 4000);
+const evidence = Array.isArray(state.evidence) ? state.evidence : [];
+const frameworkDescriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
+let updated = false;
 const root =
   result?.data?.content?.data?.result ||
   result?.content?.data?.result ||
   result?.data?.result ||
   result?.result ||
   null;
-if (!root || typeof root !== 'object' || Array.isArray(root)) {
-  throw new Error('Could not locate object-map result root at data.result.');
-}
-let updated = false;
-for (const [key, record] of Object.entries(root)) {
-  if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
-  const recordLabels = [key, record.label, record.skill_name, record.name].map(normalize);
-  const keyMatches = wantedKey ? key === wantedKey : false;
-  const labelMatches = recordLabels.includes(wanted);
-  if (!keyMatches && !labelMatches) continue;
-  if (!Array.isArray(record.skills)) record.skills = [];
-  if (!record.skills[wantedIndex] || typeof record.skills[wantedIndex] !== 'object') {
-    record.skills[wantedIndex] = { description: { literal: '', mimetype: 'plain/text' }, alternative_labels: [] };
+if (root && typeof root === 'object' && !Array.isArray(root)) {
+  for (const [key, record] of Object.entries(root)) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+    const recordLabels = [key, record.label, record.skill_name, record.name].map(normalize);
+    const keyMatches = wantedKey ? key === wantedKey : false;
+    const labelMatches = wanted ? recordLabels.includes(wanted) : false;
+    if (!keyMatches && !labelMatches) continue;
+    if (!Array.isArray(record.skills)) record.skills = [];
+    if (!record.skills[wantedIndex] || typeof record.skills[wantedIndex] !== 'object') {
+      record.skills[wantedIndex] = { description: { literal: '', mimetype: 'plain/text' }, alternative_labels: [] };
+    }
+    const skillRecord = record.skills[wantedIndex];
+    if (!skillRecord.description || typeof skillRecord.description !== 'object') {
+      skillRecord.description = { literal: String(skillRecord.description || ''), mimetype: 'plain/text' };
+    }
+    skillRecord.description.literal = selectedDescription || String(skillRecord.description.literal || '');
+    skillRecord.description.mimetype = skillRecord.description.mimetype || 'plain/text';
+    skillRecord.document_based_description = { description: documentDescription, evidence };
+    skillRecord.framework_descriptions = frameworkDescriptions;
+    skillRecord.selected_description_source = state.selectedUpdateSource || 'Document-based description';
+    skillRecord.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement_object_map';
+    record.document_based_description = skillRecord.document_based_description;
+    record.framework_descriptions = skillRecord.framework_descriptions;
+    record.selected_description_source = skillRecord.selected_description_source;
+    record.description_updated_by = skillRecord.description_updated_by;
+    updated = true;
+    break;
   }
-  const skillRecord = record.skills[wantedIndex];
-  if (!skillRecord.description || typeof skillRecord.description !== 'object') {
-    skillRecord.description = { literal: String(skillRecord.description || ''), mimetype: 'plain/text' };
-  }
-  skillRecord.description.literal = selectedDescription || String(skillRecord.description.literal || '');
-  skillRecord.description.mimetype = skillRecord.description.mimetype || 'plain/text';
-  skillRecord.document_based_description = {
-    description: String(state.documentBasedDescription || '').slice(0, 4000),
-    evidence: Array.isArray(state.evidence) ? state.evidence : [],
-  };
-  skillRecord.framework_descriptions = Array.isArray(state.frameworkDescriptions) ? state.frameworkDescriptions : [];
-  skillRecord.selected_description_source = state.selectedUpdateSource || 'Document-based description';
-  skillRecord.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement_object_map';
-  record.document_based_description = skillRecord.document_based_description;
-  record.framework_descriptions = skillRecord.framework_descriptions;
-  record.selected_description_source = skillRecord.selected_description_source;
-  record.description_updated_by = skillRecord.description_updated_by;
-  updated = true;
-  break;
 }
 if (!updated) {
-  throw new Error('Selected skill was not found in data.result during update.');
+  const nodes = Array.isArray(result?.data?.nodes)
+    ? result.data.nodes
+    : Array.isArray(result?.nodes)
+      ? result.nodes
+      : [];
+  const node = nodes.find(item => normalize(item?.label ?? item?.id) === wanted || (wantedKey && String(item?.id ?? '') === wantedKey));
+  if (node) {
+    node.description = selectedDescription || node.description || '';
+    node.document_based_description = { description: documentDescription, evidence };
+    node.framework_descriptions = frameworkDescriptions;
+    node.selected_description_source = state.selectedUpdateSource || 'Document-based description';
+    node.description_updated_by = 'agentic_workflow_interactive_skill_description_refinement_object_map';
+    updated = true;
+  }
+}
+if (!updated) {
+  throw new Error('Selected skill was not found in resultData update target.');
 }
 return result;`;
 
@@ -3813,6 +3993,9 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [testExecutionOrder, setTestExecutionOrder] = useState<string[]>([]);
   const [testStopReason, setTestStopReason] = useState<string | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  const [testWaiting, setTestWaiting] = useState<WorkflowWaitingState | null>(null);
+  const [testWaitingMode, setTestWaitingMode] = useState<WorkflowTestRunMode>("workflow");
+  const [testReply, setTestReply] = useState("");
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const propertiesResizeOrigin = useRef({ pointerX: 0, width: 320 });
   const testAbortRef = useRef<AbortController | null>(null);
@@ -3904,14 +4087,15 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     ...(node.type === "output" ? {
       style: { ...node.style, background: "transparent", border: "none", padding: 0, width: "auto" },
     } : {}),
-    data: { ...node.data, __testStatus: exampleRuns[node.id]?.status },
+    data: { ...node.data, __testStatus: exampleRuns[node.id]?.status, __waitingForInput: exampleWaiting?.nodeId === node.id },
   }));
   const exampleCanvasEdges = exampleEdges.map((edge) => {
     const sourceRun = exampleRuns[edge.source];
     const targetRun = exampleRuns[edge.target];
-    const active = sourceRun?.status === "success" && Boolean(targetRun);
+    const targetWaiting = exampleWaiting?.nodeId === edge.target;
+    const active = sourceRun?.status === "success" && (Boolean(targetRun) || targetWaiting);
     return active
-      ? { ...edge, animated: targetRun.status === "running", style: { ...EDGE_STYLE, stroke: targetRun.status === "error" ? "#ef4444" : "#10b981", strokeWidth: 2.2 } }
+      ? { ...edge, animated: targetRun?.status === "running" || targetWaiting, style: { ...EDGE_STYLE, stroke: targetRun?.status === "error" ? "#ef4444" : targetWaiting ? "#c026d3" : "#10b981", strokeWidth: 2.2 } }
       : edge;
   });
   const examplePluginGenerationContext: PluginGenerationContext = exampleSelectedNode ? {
@@ -3971,14 +4155,15 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     ...(node.type === "output" ? {
       style: { ...node.style, background: "transparent", border: "none", padding: 0, width: "auto" },
     } : {}),
-    data: { ...node.data, __testStatus: testRuns[node.id]?.status },
+    data: { ...node.data, __testStatus: testRuns[node.id]?.status, __waitingForInput: testWaiting?.nodeId === node.id },
   }));
   const canvasEdges = edges.map((edge) => {
     const sourceRun = testRuns[edge.source];
     const targetRun = testRuns[edge.target];
-    const active = sourceRun?.status === "success" && Boolean(targetRun);
+    const targetWaiting = testWaiting?.nodeId === edge.target;
+    const active = sourceRun?.status === "success" && (Boolean(targetRun) || targetWaiting);
     return active
-      ? { ...edge, animated: targetRun.status === "running", style: { ...EDGE_STYLE, stroke: targetRun.status === "error" ? "#ef4444" : "#10b981", strokeWidth: 2.2 } }
+      ? { ...edge, animated: targetRun?.status === "running" || targetWaiting, style: { ...EDGE_STYLE, stroke: targetRun?.status === "error" ? "#ef4444" : targetWaiting ? "#c026d3" : "#10b981", strokeWidth: 2.2 } }
       : edge;
   });
 
@@ -4146,6 +4331,13 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       setTestDocumentText(ex.testFixture.documentText ?? "");
       setTestPrompt(ex.testFixture.prompt);
     }
+    setTestRuns({});
+    setTestExecutionOrder([]);
+    setTestStopReason(null);
+    setTestError(null);
+    setTestWaiting(null);
+    setTestWaitingMode("workflow");
+    setTestReply("");
     setShowExamples(false);
   };
 
@@ -4565,6 +4757,11 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       setSelectedEdgeId(null);
       setTestRuns({});
       setTestExecutionOrder([]);
+      setTestStopReason(null);
+      setTestError(null);
+      setTestWaiting(null);
+      setTestWaitingMode("workflow");
+      setTestReply("");
       setWorkflowImportStatus({
         type: "success",
         message: `Imported ${nextNodes.length} nodes and ${nextEdges.length} connections. Review org-specific agents, skills, providers, MCP tools, and credentials before running.`,
@@ -4654,6 +4851,9 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       setTestRuns({});
       setTestExecutionOrder([]);
       setTestStopReason(null);
+      setTestWaiting(null);
+      setTestWaitingMode("workflow");
+      setTestReply("");
     } catch (error) {
       setTestExampleId("custom");
       setTestError("Could not load example data: " + (error instanceof Error ? error.message : String(error)));
@@ -4758,7 +4958,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     }
   };
 
-  const runWorkflowTest = async (stopAfterNodeId?: string) => {
+  const runWorkflowTest = async ({ mode = "workflow", nodeId, resumeWaiting, resumeAnswer = "" }: { mode?: WorkflowTestRunMode; nodeId?: string; resumeWaiting?: WorkflowWaitingState; resumeAnswer?: string } = {}) => {
     if (isTesting) return;
     let resultData: unknown = testInput;
     if (testInputMode === "json") {
@@ -4770,11 +4970,35 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       }
     }
     const documentText = testDocumentText.trim() || (testInputMode === "text" ? testInput : null);
+    const selectedTestNode = mode === "node" && nodeId ? nodes.find((node) => node.id === nodeId) : null;
+    const priorNodeOutputs = Object.fromEntries(Object.entries(testRuns)
+      .filter(([, run]) => run.status === "success" && run.output !== undefined)
+      .map(([id, run]) => [id, run.output]));
+    const incomingEdge = selectedTestNode && selectedTestNode.type !== "trigger"
+      ? [...edges.filter((edge) => edge.target === selectedTestNode.id && testRuns[edge.source]?.status === "success" && testRuns[edge.source]?.output !== undefined)]
+        .sort((a, b) => testExecutionOrder.lastIndexOf(b.source) - testExecutionOrder.lastIndexOf(a.source))[0]
+      : undefined;
 
-    setTestRuns({});
-    setTestExecutionOrder([]);
+    if (mode === "node" && !selectedTestNode) {
+      setTestError("Select a node before running a single-node test.");
+      return;
+    }
+    if (mode === "node" && selectedTestNode?.type !== "trigger" && !incomingEdge) {
+      setTestError(`No previous-node output is available for "${String(selectedTestNode?.data.label || selectedTestNode?.id)}". Run the connected previous node first.`);
+      setTestStopReason("Single-node test was not started.");
+      return;
+    }
+
+    if (!resumeWaiting && mode === "workflow") {
+      setTestRuns({});
+      setTestExecutionOrder([]);
+    }
     setTestStopReason(null);
     setTestError(null);
+    if (!resumeWaiting) {
+      setTestWaiting(null);
+      setTestWaitingMode(mode);
+    }
     setIsTesting(true);
     const controller = new AbortController();
     testAbortRef.current = controller;
@@ -4793,7 +5017,11 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
         supabaseUrl: import.meta.env.VITE_SUPABASE_URL as string,
         signal: controller.signal,
         stopOnError: true,
-        stopAfterNodeId,
+        startNodeId: !resumeWaiting && mode === "node" ? selectedTestNode?.id : undefined,
+        startFromEdge: !resumeWaiting && mode === "node" ? incomingEdge as WorkflowEdge | undefined : undefined,
+        initialNodeOutputs: mode === "node" ? priorNodeOutputs : undefined,
+        stopAfterNodeId: mode === "node" ? (resumeWaiting?.nodeId ?? selectedTestNode?.id) : undefined,
+        resume: resumeWaiting ? { waiting: resumeWaiting, answer: resumeAnswer } : undefined,
         onStepStart: (nodeId, input) => {
           setTestExecutionOrder((current) => current.includes(nodeId) ? current : [...current, nodeId]);
           setTestRuns((current) => ({
@@ -4881,7 +5109,18 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
           return output;
         },
       });
-      setTestStopReason(run.stopReason ?? (run.aborted ? "Test run stopped." : "Workflow run finished."));
+      setTestWaiting(run.waiting ?? null);
+      if (run.waiting) {
+        setTestWaitingMode(mode);
+        setSelectedNodeId(run.waiting.nodeId);
+        setSelectedEdgeId(null);
+        setTestStopReason(mode === "node" ? "Node test paused for a user reply." : "Workflow paused for a user reply.");
+      } else {
+        setTestReply("");
+        setTestStopReason(mode === "node" && selectedTestNode
+          ? `Node test stopped after "${String(selectedTestNode.data.label || selectedTestNode.id)}". Run the next node when you are ready.`
+          : run.stopReason ?? (run.aborted ? "Test run stopped." : "Workflow run finished."));
+      }
       if (run.error) setTestError(run.error);
     } catch (error) {
       const aborted = error instanceof DOMException && error.name === "AbortError";
@@ -5967,6 +6206,9 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                       setTestExecutionOrder([]);
                       setTestStopReason(null);
                       setTestError(null);
+                      setTestWaiting(null);
+                      setTestWaitingMode("workflow");
+                      setTestReply("");
                     }}>
                       <CheckCircle2 className="h-3.5 w-3.5" /> Use this JSON
                     </Button>
@@ -6013,10 +6255,67 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
               {isTesting ? (
                 <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => testAbortRef.current?.abort()}><CircleStop className="h-3.5 w-3.5" /> Stop test</Button>
               ) : (
-                <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={isLoadingTestExample} onClick={() => void runWorkflowTest()}><Play className="h-3.5 w-3.5" /> Run test</Button>
+                <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={isLoadingTestExample} onClick={() => void runWorkflowTest({ mode: "workflow" })}><Play className="h-3.5 w-3.5" /> Run workflow</Button>
               )}
               {Object.keys(testRuns).length > 0 && <span className="text-[10px] text-muted-foreground">{Object.values(testRuns).filter((run) => run.status === "success").length}/{nodes.length} nodes completed</span>}
             </div>
+            {testWaiting && (
+              <div className="space-y-2 rounded-xl border border-fuchsia-500/40 bg-fuchsia-500/5 p-3 shadow-sm shadow-fuchsia-500/10">
+                <div className="flex items-start gap-2">
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500/10 text-fuchsia-600">
+                    <Send className="h-3.5 w-3.5" />
+                  </span>
+                  <div>
+                    <p className="text-xs font-semibold">Waiting for user input</p>
+                    <p className="text-[9px] leading-relaxed text-muted-foreground">The highlighted Ask User node on the canvas is paused. Reply here to continue the workflow test.</p>
+                  </div>
+                </div>
+                <div className="space-y-2 rounded-lg bg-background/70 p-2.5">
+                  <div className="max-w-[92%] rounded-xl rounded-bl-sm border bg-background px-3 py-2 text-[11px] leading-relaxed shadow-sm">
+                    <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Workflow asks</p>
+                    <p>{testWaiting.question}</p>
+                    {testWaiting.options?.length ? <p className="mt-1 text-[9px] text-muted-foreground">Options: {testWaiting.options.join(", ")}</p> : null}
+                  </div>
+                  {testReply.trim() && (
+                    <div className="ml-auto max-w-[85%] rounded-xl rounded-br-sm bg-primary px-3 py-2 text-[11px] leading-relaxed text-primary-foreground shadow-sm">
+                      <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide opacity-80">User reply</p>
+                      <p>{testReply}</p>
+                    </div>
+                  )}
+                </div>
+                {testWaiting.inputType === "yes_no" ? (
+                  <div className="flex flex-wrap gap-2">
+                    {["yes", "no"].map((answer) => (
+                      <Button key={answer} type="button" size="sm" variant={testReply === answer ? "secondary" : "outline"} className="h-7 text-[10px] capitalize" disabled={isTesting} onClick={() => setTestReply(answer)}>{answer}</Button>
+                    ))}
+                  </div>
+                ) : testWaiting.inputType === "select" && testWaiting.options?.length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {testWaiting.options.map((option) => (
+                      <Button key={option} type="button" size="sm" variant={testReply === option ? "secondary" : "outline"} className="h-7 text-[10px]" disabled={isTesting} onClick={() => setTestReply(option)}>{option}</Button>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="flex items-center gap-2">
+                  <Input
+                    className="h-8 border-fuchsia-500/40 text-xs focus-visible:ring-fuchsia-500"
+                    disabled={isTesting}
+                    value={testReply}
+                    onChange={(event) => setTestReply(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey && testReply.trim()) {
+                        event.preventDefault();
+                        void runWorkflowTest({ mode: testWaitingMode, resumeWaiting: testWaiting, resumeAnswer: testReply.trim() });
+                      }
+                    }}
+                    placeholder={testWaiting.inputType === "yes_no" ? "Type yes or no" : "Type the user's reply"}
+                  />
+                  <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={isTesting || !testReply.trim()} onClick={() => void runWorkflowTest({ mode: testWaitingMode, resumeWaiting: testWaiting, resumeAnswer: testReply.trim() })}>
+                    <Send className="h-3.5 w-3.5" /> Send reply
+                  </Button>
+                </div>
+              </div>
+            )}
             {(testStopReason || testError) && (
               <div className={`rounded-lg border p-2.5 text-[10px] leading-relaxed ${testError ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300"}`}>
                 <p className="font-semibold">{testError ? "Execution stopped" : "Run result"}</p>
@@ -6167,20 +6466,17 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                     className="h-7 gap-1.5 text-xs"
                     disabled={isTesting}
                     onClick={() => {
-                      if (!showTestPanel) {
-                        setShowTestPanel(true);
-                        setShowWorkflowGenerator(false);
-                        setShowExamples(false);
-                        return;
-                      }
-                      void runWorkflowTest(selectedNode.id);
+                      setShowTestPanel(true);
+                      setShowWorkflowGenerator(false);
+                      setShowExamples(false);
+                      void runWorkflowTest({ mode: "node", nodeId: selectedNode.id });
                     }}
                   >
                     {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
-                    {showTestPanel ? "Run to this node" : "Set up node test"}
+                    Run this node
                   </Button>
                   <span className="text-[10px] leading-relaxed text-muted-foreground">
-                    Tests the workflow from the trigger through this node, then stops.
+                    Runs only this node using available previous-node output, then stops. Use the top Test workflow button for a full run.
                   </span>
                 </div>
                 {selectedNode.type === "trigger" && <TriggerPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
