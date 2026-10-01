@@ -119,6 +119,7 @@ const EmbedGatewayContent = () => {
   const [validatedOrgId, setValidatedOrgId] = useState<string | undefined>(undefined);
   const [gatewayFeatures, setGatewayFeatures] = useState<Record<string, unknown> | null>(null);
   const [orgExecutionToken, setOrgExecutionToken] = useState<string | null>(null);
+  const [orgExecutionTokenExpiresAt, setOrgExecutionTokenExpiresAt] = useState<number | null>(null);
   const themeCleanupRef = useRef<(() => void) | null>(null);
   
   const { sessionId, resetSession } = useProcessSession();
@@ -140,6 +141,26 @@ const EmbedGatewayContent = () => {
   const revealEmbedDocument = () => {
     document.documentElement.removeAttribute("data-ptx-embed-pending");
   };
+
+  const issuePublicExecutionToken = useCallback(async () => {
+    if (!orgSlug) throw new Error("Missing org parameter");
+
+    const { data: tokenData, error: tokenError } = await supabase.functions.invoke("pdc-auth", {
+      body: {
+        action: "issue_public",
+        org_slug: orgSlug,
+        ttl_seconds: 3600,
+      },
+    });
+
+    if (tokenError || !tokenData?.ok || !tokenData?.token) {
+      throw new Error(tokenData?.error || tokenError?.message || "Failed to initialize processing token");
+    }
+
+    setOrgExecutionToken(tokenData.token as string);
+    const expiresAt = typeof tokenData.expires_at === "string" ? Date.parse(tokenData.expires_at) : NaN;
+    setOrgExecutionTokenExpiresAt(Number.isFinite(expiresAt) ? expiresAt : Date.now() + 3600 * 1000);
+  }, [orgSlug]);
 
   useEffect(() => {
     return () => {
@@ -226,19 +247,7 @@ const EmbedGatewayContent = () => {
             : null
         );
 
-        const { data: tokenData, error: tokenError } = await supabase.functions.invoke("pdc-auth", {
-          body: {
-            action: "issue_public",
-            org_slug: orgSlug,
-            ttl_seconds: 3600,
-          },
-        });
-
-        if (tokenError || !tokenData?.ok || !tokenData?.token) {
-          throw new Error(tokenData?.error || tokenError?.message || "Failed to initialize processing token");
-        }
-
-        setOrgExecutionToken(tokenData.token as string);
+        await issuePublicExecutionToken();
         setEmbedAllowed(true);
       } catch (err) {
         setGatewayFeatures(null);
@@ -248,7 +257,27 @@ const EmbedGatewayContent = () => {
     };
 
     validateEmbedAccess();
-  }, [embedToken, orgSlug]);
+  }, [embedToken, issuePublicExecutionToken, orgSlug]);
+
+  useEffect(() => {
+    if (!embedAllowed || !orgExecutionTokenExpiresAt) return;
+
+    const refreshLeadTimeMs = 5 * 60 * 1000;
+    const refreshDelay = Math.max(30 * 1000, orgExecutionTokenExpiresAt - Date.now() - refreshLeadTimeMs);
+    const timer = window.setTimeout(() => {
+      issuePublicExecutionToken().catch((err) => {
+        console.error("Failed to refresh embed execution token:", err);
+        setOrgExecutionToken(null);
+        setOrgExecutionTokenExpiresAt(null);
+        setEmbedAllowed(false);
+        setGatewayFeatures(null);
+        setEmbedError("This gateway access could not refresh its processing token. Reload the embedded gateway or contact your administrator.");
+        revealEmbedDocument();
+      });
+    }, refreshDelay);
+
+    return () => window.clearTimeout(timer);
+  }, [embedAllowed, issuePublicExecutionToken, orgExecutionTokenExpiresAt]);
 
   // Optional legacy light/dark override for hand-written embeds.
   useEffect(() => {
