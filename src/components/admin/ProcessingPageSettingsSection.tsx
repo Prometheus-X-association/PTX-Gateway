@@ -7,11 +7,9 @@ import { Save } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { isRecord, mergeGlobalFeatureSection } from "@/utils/globalConfigFeatures";
 
 const DEFAULT_PENDING_WAIT_SECONDS = 60;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const sanitizePendingWaitSeconds = (value: number): number =>
   Number.isFinite(value) && value > 0 ? Math.round(value) : DEFAULT_PENDING_WAIT_SECONDS;
@@ -53,33 +51,25 @@ const ProcessingPageSettingsSection = () => {
   }, [user?.organization?.id]);
 
   const saveSettings = async () => {
-    if (!user?.organization?.id || !configId) return;
+    if (!user?.organization?.id) {
+      toast.error("No active organization selected");
+      return;
+    }
     setIsSaving(true);
     try {
-      const { data: existing, error: fetchError } = await supabase
-        .from("global_configs")
-        .select("features")
-        .eq("id", configId)
-        .maybeSingle();
-      if (fetchError) throw fetchError;
-
-      const existingFeatures = isRecord(existing?.features) ? existing.features : {};
-      const existingProcessingPage = isRecord(existingFeatures.processingPage)
-        ? existingFeatures.processingPage
-        : {};
-      const nextFeatures = {
-        ...existingFeatures,
-        processingPage: {
-          ...existingProcessingPage,
-          pendingWaitSeconds: sanitizePendingWaitSeconds(pendingWaitSeconds),
-        },
-      };
-
-      const { error } = await supabase
-        .from("global_configs")
-        .update({ features: nextFeatures })
-        .eq("id", configId);
-      if (error) throw error;
+      const savedId = await mergeGlobalFeatureSection(user.organization.id, (existingFeatures) => {
+        const existingProcessingPage = isRecord(existingFeatures.processingPage)
+          ? existingFeatures.processingPage
+          : {};
+        return {
+          ...existingFeatures,
+          processingPage: {
+            ...existingProcessingPage,
+            pendingWaitSeconds: sanitizePendingWaitSeconds(pendingWaitSeconds),
+          },
+        };
+      });
+      setConfigId(savedId);
       toast.success("Processing page settings saved");
     } catch {
       toast.error("Failed to save processing page settings");

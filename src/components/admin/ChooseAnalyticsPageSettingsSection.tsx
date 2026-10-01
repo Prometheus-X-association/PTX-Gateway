@@ -14,6 +14,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { AnalyticsPagePluginType, CredentialEntry, CredentialPluginConfig } from "@/types/dataspace";
 import { buildCredentialSrcdoc, createCredentialPngObjectUrl } from "@/utils/credentialPreview";
+import { mergeGlobalFeatureSection } from "@/utils/globalConfigFeatures";
 
 const PLUGIN_TYPES: { value: AnalyticsPagePluginType; label: string; description: string }[] = [
   {
@@ -161,15 +162,14 @@ const ChooseAnalyticsPageSettingsSection = () => {
   }, [user?.organization?.id]);
 
   const persist = async (next: CredentialPluginConfig[]) => {
-    if (!configId) { toast.error("No global config found"); return; }
+    if (!user?.organization?.id) { toast.error("No active organization selected"); return; }
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase.from("global_configs").select("features").eq("id", configId).maybeSingle();
-      const ef = isRecord(existing?.features) ? existing.features : {};
-      const ap = isRecord(ef.analyticsPage) ? ef.analyticsPage : {};
-      const nextFeatures: unknown = { ...ef, analyticsPage: { ...ap, credentialPlugins: next } };
-      const { error } = await supabase.from("global_configs").update({ features: nextFeatures as never }).eq("id", configId);
-      if (error) throw error;
+      const savedId = await mergeGlobalFeatureSection(user.organization.id, (ef) => {
+        const ap = isRecord(ef.analyticsPage) ? ef.analyticsPage : {};
+        return { ...ef, analyticsPage: { ...ap, credentialPlugins: next } };
+      });
+      setConfigId(savedId);
       setPlugins(next);
       toast.success("Saved");
     } catch { toast.error("Failed to save"); }

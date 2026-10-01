@@ -84,6 +84,44 @@ const clampChatLauncherPosition = (position: ChatLauncherPosition, width: number
   y: Math.min(Math.max(CHAT_LAUNCHER_MARGIN, position.y), Math.max(CHAT_LAUNCHER_MARGIN, window.innerHeight - height - CHAT_LAUNCHER_MARGIN)),
 });
 
+const addTargetCandidate = (candidates: Set<string>, value: unknown, prefix?: "software" | "serviceChain") => {
+  if (typeof value !== "string") return;
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  candidates.add(trimmed);
+  if (prefix) candidates.add(`${prefix}:${trimmed}`);
+};
+
+const buildSelectedTargetCandidates = (
+  selectedAnalytics: AnalyticsOption | null | undefined,
+  selectedAnalyticsTargetId: string | null | undefined,
+): Set<string> => {
+  const candidates = new Set<string>();
+  addTargetCandidate(candidates, selectedAnalyticsTargetId);
+
+  if (!selectedAnalytics) return candidates;
+
+  if (selectedAnalytics.type === "software") {
+    addTargetCandidate(candidates, selectedAnalytics.data.id, "software");
+    addTargetCandidate(candidates, selectedAnalytics.data.resource_url, "software");
+    addTargetCandidate(candidates, selectedAnalytics.data.contract_url, "software");
+    return candidates;
+  }
+
+  addTargetCandidate(candidates, selectedAnalytics.data.id, "serviceChain");
+  addTargetCandidate(candidates, selectedAnalytics.data.catalog_id, "serviceChain");
+  addTargetCandidate(candidates, selectedAnalytics.data.contract_url, "serviceChain");
+  return candidates;
+};
+
+const targetListMatchesSelection = (
+  targetResources: string[] | undefined,
+  selectedTargetCandidates: Set<string>,
+): boolean => {
+  if (selectedTargetCandidates.size === 0) return false;
+  return (targetResources || []).some((target) => selectedTargetCandidates.has(target));
+};
+
 
 const BUILT_IN_WORKFLOW_TEMPLATE_IDS = new Set([
   "interactive-skill-description-refinement",
@@ -100,11 +138,12 @@ const upgradeBuiltInWorkflowTemplate = (workflow: WorkflowConfig): WorkflowConfi
   const template = EXAMPLE_WORKFLOWS.find((example) => example.id === workflow.id)
     ?? EXAMPLE_WORKFLOWS.find((example) => example.id === "interactive-skill-description-refinement");
   if (!template) return workflow;
+  const hasSavedGraph = (workflow.graph?.nodes?.length ?? 0) > 0 || (workflow.graph?.edges?.length ?? 0) > 0;
   return {
     ...workflow,
     name: workflow.name || template.name,
     description: workflow.description || template.description,
-    graph: template.workflow,
+    graph: hasSavedGraph ? workflow.graph : template.workflow,
   };
 };
 
@@ -2700,25 +2739,29 @@ const ResultsView = ({
     }
     return selectedAnalyticsTargetId || null;
   }, [selectedAnalytics, selectedAnalyticsTargetId]);
+  const selectedTargetCandidates = useMemo(
+    () => buildSelectedTargetCandidates(selectedAnalytics, selectedAnalyticsTargetId),
+    [selectedAnalytics, selectedAnalyticsTargetId],
+  );
   const compatibleLlmAgents = useMemo(() => llmAgents.filter((agent) =>
-    selectedTargetId ? agent.targetResources.includes(selectedTargetId) : false
-  ), [llmAgents, selectedTargetId]);
+    targetListMatchesSelection(agent.targetResources, selectedTargetCandidates)
+  ), [llmAgents, selectedTargetCandidates]);
   const compatibleLlmWorkflows = useMemo(() => llmWorkflows.filter((workflow) => {
     const targets = workflow.targetResources || [];
-    return workflow.enabled !== false && (selectedTargetId ? targets.includes(selectedTargetId) : false);
-  }), [llmWorkflows, selectedTargetId]);
+    return workflow.enabled !== false && targetListMatchesSelection(targets, selectedTargetCandidates);
+  }), [llmWorkflows, selectedTargetCandidates]);
   const hasCompatibleChat = llmFreeChatEnabled || compatibleLlmAgents.length > 0 || compatibleLlmWorkflows.length > 0;
   const compatibleExportApiConfigs = useMemo(() => {
     return exportApiConfigs.filter((config) => {
       if (!(config.is_active ?? true)) {
         return false;
       }
-      if (!selectedTargetId || !(config.target_resources || []).includes(selectedTargetId)) {
+      if (!targetListMatchesSelection(config.target_resources, selectedTargetCandidates)) {
         return false;
       }
       return true;
     });
-  }, [exportApiConfigs, selectedTargetId]);
+  }, [exportApiConfigs, selectedTargetCandidates]);
   const importButtonText = useMemo(() => {
     if (compatibleExportApiConfigs.length === 0) return "Import to LMS";
     if (compatibleExportApiConfigs.length === 1) {
@@ -2734,13 +2777,12 @@ const ResultsView = ({
     return labels.length === 1 ? labels[0] : "Import to LMS";
   }, [compatibleExportApiConfigs]);
   const activeCustomVisualizations = useMemo(() => {
-    if (!selectedTargetId) return [];
     return customVisualizations.filter((visualization) =>
       visualization.is_active &&
       Boolean(visualization.render_code?.trim()) &&
-      (visualization.target_resources || []).includes(selectedTargetId)
+      targetListMatchesSelection(visualization.target_resources, selectedTargetCandidates)
     );
-  }, [customVisualizations, selectedTargetId]);
+  }, [customVisualizations, selectedTargetCandidates]);
 
   useEffect(() => {
     setActiveTab((current) => {

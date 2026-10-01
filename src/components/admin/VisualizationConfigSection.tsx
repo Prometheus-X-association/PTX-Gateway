@@ -13,6 +13,7 @@ import {
   getVisualizationSettingsFromOrgSettings,
   mergeVisualizationSettingsIntoOrgSettings,
 } from "@/utils/visualizationSettings";
+import { isRecord, mergeGlobalFeatureSection } from "@/utils/globalConfigFeatures";
 
 const DEFAULT_VISUALIZATION: VisualizationSettings = {
   favicon_url: "",
@@ -109,45 +110,19 @@ const VisualizationConfigSection = () => {
         .eq("id", user.organization.id);
       if (error) throw error;
 
-      if (configId) {
-        const { data: existingConfig, error: existingError } = await supabase
-          .from("global_configs")
-          .select("features")
-          .eq("id", configId)
-          .maybeSingle();
-        if (existingError) throw existingError;
-        const existingFeatures = existingConfig?.features && typeof existingConfig.features === "object"
-          ? (existingConfig.features as Record<string, unknown>)
+      const savedId = await mergeGlobalFeatureSection(user.organization.id, (existingFeatures) => {
+        const currentProcessingPage = isRecord(existingFeatures.processingPage)
+          ? existingFeatures.processingPage
           : {};
-        const currentProcessingPage = existingFeatures.processingPage && typeof existingFeatures.processingPage === "object"
-          ? (existingFeatures.processingPage as Record<string, unknown>)
-          : {};
-        const { error: updateConfigError } = await supabase
-          .from("global_configs")
-          .update({
-            features: {
-              ...existingFeatures,
-              processingPage: {
-                ...currentProcessingPage,
-                stepProgressLayout,
-              },
-            },
-          })
-          .eq("id", configId);
-        if (updateConfigError) throw updateConfigError;
-      } else {
-        const { error: insertConfigError } = await supabase
-          .from("global_configs")
-          .insert({
-            organization_id: user.organization.id,
-            features: {
-              processingPage: {
-                stepProgressLayout,
-              },
-            },
-          });
-        if (insertConfigError) throw insertConfigError;
-      }
+        return {
+          ...existingFeatures,
+          processingPage: {
+            ...currentProcessingPage,
+            stepProgressLayout,
+          },
+        };
+      });
+      setConfigId(savedId);
 
       toast.success("Visualization settings saved");
       await refreshAuth();

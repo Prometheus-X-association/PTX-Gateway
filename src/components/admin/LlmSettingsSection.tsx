@@ -34,6 +34,7 @@ import { createSkillsFrameworkMapperTemplate } from "@/types/agentSkill";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { readGlobalFeatures } from "@/utils/globalConfigFeatures";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -104,11 +105,12 @@ const upgradeBuiltInWorkflowTemplate = (workflow: WorkflowConfig): WorkflowConfi
   const template = EXAMPLE_WORKFLOWS.find((example) => example.id === workflow.id)
     ?? EXAMPLE_WORKFLOWS.find((example) => example.id === "interactive-skill-description-refinement");
   if (!template) return workflow;
+  const hasSavedGraph = (workflow.graph?.nodes?.length ?? 0) > 0 || (workflow.graph?.edges?.length ?? 0) > 0;
   return {
     ...workflow,
     name: workflow.name || template.name,
     description: workflow.description || template.description,
-    graph: template.workflow,
+    graph: hasSavedGraph ? workflow.graph : template.workflow,
   };
 };
 
@@ -1885,43 +1887,6 @@ const LlmSettingsSection = () => {
   const removeMcp = (i: number) =>
     patchLlm({ mcpServers: llm.mcpServers.filter((_, j) => j !== i) });
 
-  const saveProviderEditor = () => {
-    if (!providerEditor) return;
-    const provider = {
-      ...providerEditor.draft,
-      name: providerEditor.draft.name.trim(),
-      apiBaseUrl: providerEditor.draft.apiBaseUrl.trim(),
-      model: providerEditor.draft.model.trim(),
-    };
-    if (!provider.name || !provider.apiBaseUrl || !provider.model) {
-      toast.error("Provider name, API base URL, and model are required");
-      return;
-    }
-    patchLlm({
-      providers: providerEditor.mode === "create"
-        ? [...llm.providers, provider]
-        : llm.providers.map((item) => item.id === provider.id ? provider : item),
-    });
-    setProviderEditor(null);
-    toast.success(providerEditor.mode === "create" ? "Provider added" : "Provider updated");
-  };
-
-  const saveMcpEditor = () => {
-    if (!mcpEditor) return;
-    const server = { ...mcpEditor.draft, name: mcpEditor.draft.name.trim(), url: mcpEditor.draft.url.trim() };
-    if (!server.name || !server.url) {
-      toast.error("MCP server name and endpoint URL are required");
-      return;
-    }
-    patchLlm({
-      mcpServers: mcpEditor.mode === "create"
-        ? [...llm.mcpServers, server]
-        : llm.mcpServers.map((item) => item.id === server.id ? server : item),
-    });
-    setMcpEditor(null);
-    toast.success(mcpEditor.mode === "create" ? "MCP server added" : "MCP server updated");
-  };
-
   const updateAgent = (i: number, updated: LlmAgent) =>
     patchLlm({ agents: llm.agents.map((a, j) => (j === i ? updated : a)) });
   const removeAgent = (i: number) =>
@@ -1936,9 +1901,8 @@ const LlmSettingsSection = () => {
   const moveGlobalPrompt = (from: number, to: number) =>
     patchLlm({ predefinedPrompts: moveItem(llm.predefinedPrompts, from, to) });
 
-  const handleSave = async () => {
-    if (!user?.organization?.id) return;
-    const invalidSkill = llm.skills.find((skill) => {
+  const validateLlmConfig = (config: LlmInsightsConfig): boolean => {
+    const invalidSkill = config.skills.find((skill) => {
       const inputKeys = skill.requiredInputs.map((field) => field.key.trim()).filter(Boolean);
       const hasInvalidInput = skill.requiredInputs.some((field) => !field.key.trim() || !field.label.trim());
       const hasDuplicateInput = new Set(inputKeys).size !== inputKeys.length;
@@ -1949,23 +1913,90 @@ const LlmSettingsSection = () => {
     });
     if (invalidSkill) {
       toast.error(`Complete the required fields and use unique input keys for “${invalidSkill.name || "Unnamed skill"}”`);
-      return;
+      return false;
     }
+    return true;
+  };
+
+  const persistLlmConfig = async (nextLlm: LlmInsightsConfig, successMessage = "Agent operations saved") => {
+    if (!user?.organization?.id) {
+      toast.error("No active organization selected");
+      return false;
+    }
+    if (!validateLlmConfig(nextLlm)) return false;
     setIsSaving(true);
     try {
-      const { error } = await supabase.from("global_configs").upsert({
-        id: configId,
+      const currentFeatures = await readGlobalFeatures(user.organization.id);
+      const { llmInsights: _drop, ...currentFeaturesRest } = currentFeatures;
+      const payload = {
+        ...(configId ? { id: configId } : {}),
         organization_id: user.organization.id,
         ...globalSnapshot,
-        features: { ...featuresRest, llmInsights: llm },
-      });
+        features: { ...featuresRest, ...currentFeaturesRest, llmInsights: nextLlm },
+      };
+      const { data, error } = await supabase
+        .from("global_configs")
+        .upsert(payload, { onConflict: "organization_id" })
+        .select("id")
+        .single();
       if (error) throw error;
-      toast.success("Agent operations saved");
-    } catch {
-      toast.error("Failed to save agent operations");
+      setConfigId(data.id);
+      setFeaturesRest(currentFeaturesRest);
+      setLlm(nextLlm);
+      toast.success(successMessage);
+      return true;
+    } catch (error) {
+      console.error("Failed to save agent operations:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to save agent operations");
+      return false;
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const saveProviderEditor = async () => {
+    if (!providerEditor) return;
+    const provider = {
+      ...providerEditor.draft,
+      name: providerEditor.draft.name.trim(),
+      apiBaseUrl: providerEditor.draft.apiBaseUrl.trim(),
+      model: providerEditor.draft.model.trim(),
+    };
+    if (!provider.name || !provider.apiBaseUrl || !provider.model) {
+      toast.error("Provider name, API base URL, and model are required");
+      return;
+    }
+    const nextLlm = {
+      ...llm,
+      providers: providerEditor.mode === "create"
+        ? [...llm.providers, provider]
+        : llm.providers.map((item) => item.id === provider.id ? provider : item),
+    };
+    setLlm(nextLlm);
+    const saved = await persistLlmConfig(nextLlm, providerEditor.mode === "create" ? "Provider added and saved" : "Provider updated and saved");
+    if (saved) setProviderEditor(null);
+  };
+
+  const saveMcpEditor = async () => {
+    if (!mcpEditor) return;
+    const server = { ...mcpEditor.draft, name: mcpEditor.draft.name.trim(), url: mcpEditor.draft.url.trim() };
+    if (!server.name || !server.url) {
+      toast.error("MCP server name and endpoint URL are required");
+      return;
+    }
+    const nextLlm = {
+      ...llm,
+      mcpServers: mcpEditor.mode === "create"
+        ? [...llm.mcpServers, server]
+        : llm.mcpServers.map((item) => item.id === server.id ? server : item),
+    };
+    setLlm(nextLlm);
+    const saved = await persistLlmConfig(nextLlm, mcpEditor.mode === "create" ? "MCP server added and saved" : "MCP server updated and saved");
+    if (saved) setMcpEditor(null);
+  };
+
+  const handleSave = async () => {
+    await persistLlmConfig(llm);
   };
 
   if (isLoading) {
@@ -2285,7 +2316,7 @@ const LlmSettingsSection = () => {
             )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setProviderEditor(null)}>Cancel</Button>
-              <Button type="button" className="gap-1.5" onClick={saveProviderEditor}>
+              <Button type="button" className="gap-1.5" onClick={saveProviderEditor} disabled={isSaving}>
                 <Save className="h-4 w-4" /> Save provider
               </Button>
             </DialogFooter>
@@ -2311,7 +2342,7 @@ const LlmSettingsSection = () => {
             )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setMcpEditor(null)}>Cancel</Button>
-              <Button type="button" className="gap-1.5" onClick={saveMcpEditor}>
+              <Button type="button" className="gap-1.5" onClick={saveMcpEditor} disabled={isSaving}>
                 <Save className="h-4 w-4" /> Save MCP server
               </Button>
             </DialogFooter>

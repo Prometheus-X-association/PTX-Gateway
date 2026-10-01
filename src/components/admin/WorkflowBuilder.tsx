@@ -4005,6 +4005,13 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const workflowBuilderRootRef = useRef<HTMLDivElement>(null);
   const workflowActionStripRef = useRef<HTMLDivElement>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  const onChangeRef = useRef(onChange);
+  const workflowRef = useRef(workflow);
+  workflowRef.current = workflow;
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   const scrollWorkflowActions = useCallback((direction: -1 | 1) => {
     const strip = workflowActionStripRef.current;
@@ -4234,8 +4241,31 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
 
   // Keep parent in sync
   const commit = useCallback((ns: Node[], es: Edge[]) => {
-    onChange({ nodes: ns as WorkflowNode[], edges: es as WorkflowEdge[] });
-  }, [onChange]);
+    onChangeRef.current({ nodes: ns as WorkflowNode[], edges: es as WorkflowEdge[] });
+  }, []);
+
+  useEffect(() => {
+    const currentWorkflow = workflowRef.current;
+    const nextWorkflow = currentWorkflow.nodes.length === 0 ? defaultWorkflow() : currentWorkflow;
+    const nextNodes = nextWorkflow.nodes as Node[];
+    const nextEdges = normalizeEdgeHandles(nextNodes, nextWorkflow.edges as Edge[]);
+
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+    setTestRuns({});
+    setTestExecutionOrder([]);
+    setTestStopReason(null);
+    setTestError(null);
+    setTestWaiting(null);
+    setTestWaitingMode("workflow");
+    setTestReply("");
+
+    if (currentWorkflow.nodes.length === 0) {
+      commit(nextNodes, nextEdges);
+    }
+  }, [workflowId, commit]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     const next = applyNodeChanges(changes, nodes);

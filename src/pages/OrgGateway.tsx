@@ -428,6 +428,7 @@ const OrgGatewayContent = ({
   dataSelectionSettings,
   processingPageSettings,
   verticalStepBarTopText,
+  allowContinueOnPdcError,
   softwareResources,
   dataResources,
   serviceChains,
@@ -440,6 +441,7 @@ const OrgGatewayContent = ({
   dataSelectionSettings: DataSelectionSettings | null;
   processingPageSettings: ProcessingPageSettings | null;
   verticalStepBarTopText: string;
+  allowContinueOnPdcError: boolean;
   softwareResources: SoftwareResource[];
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
@@ -465,7 +467,7 @@ const OrgGatewayContent = ({
   // Build dynamic steps based on config
   const steps = useMemo(() => {
     const baseSteps = ["Select Type", "Choose Data", "Processing", "Results"];
-    let dynamicSteps = [...baseSteps];
+    const dynamicSteps = [...baseSteps];
 
     if (showHumanValidation) {
       dynamicSteps.splice(2, 0, "Validation");
@@ -499,32 +501,10 @@ const OrgGatewayContent = ({
   }, [analyticsQueryParams, selectedData?.processSessionId, sessionId]);
   const [persistedFlow, setPersistedFlow] = useState<PersistedOrgFlowState | null>(null);
   const [processingFailed, setProcessingFailed] = useState(false);
-  const [allowContinueOnPdcError, setAllowContinueOnPdcError] = useState(false);
   const [forcedResultData, setForcedResultData] = useState<unknown | null>(null);
   const [forcedResultNotice, setForcedResultNotice] = useState<string | null>(null);
   const hasPreselection = hasPreselectionTarget(searchParams);
   const skipSelection = hasPreselection && searchParams.get("skip_selection") !== "false";
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchGlobalFeatureFlags = async () => {
-      const { data } = await supabase
-        .from("global_configs")
-        .select("features")
-        .eq("organization_id", organization.id)
-        .maybeSingle();
-
-      const features = (data?.features as Record<string, unknown> | null) ?? null;
-      if (!isMounted) return;
-      setAllowContinueOnPdcError(Boolean(features?.allowContinueOnPdcError));
-    };
-
-    void fetchGlobalFeatureFlags();
-    return () => {
-      isMounted = false;
-    };
-  }, [organization.id]);
 
   // Calculate actual step indices based on config
   const getStepIndex = useCallback((stepName: string): number => {
@@ -1095,6 +1075,7 @@ const OrgGateway = () => {
   const [dataSelectionSettings, setDataSelectionSettings] = useState<DataSelectionSettings | null>(null);
   const [processingPageSettings, setProcessingPageSettings] = useState<ProcessingPageSettings | null>(null);
   const [verticalStepBarTopText, setVerticalStepBarTopText] = useState("");
+  const [allowContinueOnPdcError, setAllowContinueOnPdcError] = useState(false);
   const themeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -1133,6 +1114,7 @@ const OrgGateway = () => {
         setDataSelectionSettings(null);
         setProcessingPageSettings(null);
         setVerticalStepBarTopText("");
+        setAllowContinueOnPdcError(false);
 
         themeCleanupRef.current?.();
         themeCleanupRef.current = null;
@@ -1180,21 +1162,20 @@ const OrgGateway = () => {
         }
         setOrgExecutionToken(tokenData.token as string);
 
-        const { data: globalConfigData } = await supabase
-          .from("global_configs")
-          .select("features")
-          .eq("organization_id", orgData.id)
-          .maybeSingle();
-        const resultPageExportConfigs = getResultPageExportApiConfigs(globalConfigData?.features);
-        const resultPageCustomVisualizations = getResultPageCustomVisualizations(globalConfigData?.features);
-        const dataSelectionConfig = getDataSelectionSettings(globalConfigData?.features);
-        const processingPageConfig = getProcessingPageSettings(globalConfigData?.features);
-        const credPlugins = getCredentialPlugins(globalConfigData?.features);
+        const gatewayFeatures = isRecord(tokenData.gateway_features)
+          ? tokenData.gateway_features
+          : {};
+        const resultPageExportConfigs = getResultPageExportApiConfigs(gatewayFeatures);
+        const resultPageCustomVisualizations = getResultPageCustomVisualizations(gatewayFeatures);
+        const dataSelectionConfig = getDataSelectionSettings(gatewayFeatures);
+        const processingPageConfig = getProcessingPageSettings(gatewayFeatures);
+        const credPlugins = getCredentialPlugins(gatewayFeatures);
         setCustomVisualizations(resultPageCustomVisualizations);
         setCredentialPlugins(credPlugins);
         setDataSelectionSettings(dataSelectionConfig);
         setProcessingPageSettings(processingPageConfig);
         setVerticalStepBarTopText(processingPageConfig?.verticalStepBarTopText ?? "");
+        setAllowContinueOnPdcError(Boolean(gatewayFeatures.allowContinueOnPdcError));
 
         // Fetch PDC config for this organization
         const { data: pdcData } = await supabase
@@ -1205,8 +1186,8 @@ const OrgGateway = () => {
           .maybeSingle();
 
         if (pdcData) {
-          const legacyExportConfigs = Array.isArray((pdcData as any).export_api_configs) 
-            ? (pdcData as any).export_api_configs 
+          const legacyExportConfigs = Array.isArray(pdcData.export_api_configs)
+            ? (pdcData.export_api_configs as unknown as ExportApiConfig[])
             : [];
           const exportConfigs = resultPageExportConfigs.length > 0 ? resultPageExportConfigs : legacyExportConfigs;
           setPdcConfig({
@@ -1398,6 +1379,7 @@ const OrgGateway = () => {
         dataSelectionSettings={dataSelectionSettings}
         processingPageSettings={processingPageSettings}
         verticalStepBarTopText={verticalStepBarTopText}
+        allowContinueOnPdcError={allowContinueOnPdcError}
         credentialPlugins={credentialPlugins}
       />
     </ProcessSessionProvider>

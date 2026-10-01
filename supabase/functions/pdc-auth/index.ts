@@ -9,6 +9,8 @@ const corsHeaders = {
 const LOCAL_SUPABASE_URL_FALLBACK = "http://kong:8000";
 const LOCAL_SUPABASE_ANON_KEY_FALLBACK =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+const LOCAL_SUPABASE_SERVICE_ROLE_KEY_FALLBACK =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
 const LOCAL_SUPABASE_JWT_FALLBACK = "super-secret-jwt-token-with-at-least-32-characters-long";
 
 type IssuePublicBody = {
@@ -57,10 +59,56 @@ const getSupabaseUrl = (): string | null =>
 const getSupabaseAnonKey = (): string | null =>
   Deno.env.get("SUPABASE_ANON_KEY") || LOCAL_SUPABASE_ANON_KEY_FALLBACK;
 
+const getSupabaseServiceRoleKey = (): string | null =>
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || LOCAL_SUPABASE_SERVICE_ROLE_KEY_FALLBACK;
+
 const getExecutionTokenSecret = (): string | null =>
   Deno.env.get("PDC_EXECUTE_TOKEN_SECRET") ||
   Deno.env.get("SUPABASE_INTERNAL_JWT_SECRET") ||
   LOCAL_SUPABASE_JWT_FALLBACK;
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+// Only settings consumed by the public gateway are returned. Administrative
+// sections such as LLM provider credentials remain server-side.
+const buildPublicGatewayFeatures = (features: unknown): Record<string, unknown> => {
+  const source = asRecord(features);
+  const gatewayFeatures: Record<string, unknown> = {};
+
+  for (const section of ["analyticsPage", "dataSelection", "processingPage"] as const) {
+    const value = asRecord(source[section]);
+    if (Object.keys(value).length > 0) gatewayFeatures[section] = value;
+  }
+
+  const resultPage = asRecord(source.resultPage);
+  const publicResultPage: Record<string, unknown> = {};
+  if (Array.isArray(resultPage.customVisualizations)) {
+    publicResultPage.customVisualizations = resultPage.customVisualizations;
+  }
+  if (Array.isArray(resultPage.customVisualizationLibraryBundles)) {
+    publicResultPage.customVisualizationLibraryBundles = resultPage.customVisualizationLibraryBundles;
+  }
+  if (Object.keys(publicResultPage).length > 0) {
+    gatewayFeatures.resultPage = publicResultPage;
+  }
+
+  for (const flag of [
+    "enableFileUpload",
+    "enableApiConnections",
+    "enableTextInput",
+    "enableCustomApi",
+    "allowContinueOnPdcError",
+    "maxFileSizeMB",
+    "maxFilesCount",
+  ] as const) {
+    if (source[flag] !== undefined) gatewayFeatures[flag] = source[flag];
+  }
+
+  return gatewayFeatures;
+};
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -70,9 +118,10 @@ serve(async (req) => {
   try {
     const supabaseUrl = getSupabaseUrl();
     const supabaseAnonKey = getSupabaseAnonKey();
+    const supabaseServiceRoleKey = getSupabaseServiceRoleKey();
     const executeTokenSecret = getExecutionTokenSecret();
 
-    if (!supabaseUrl || !supabaseAnonKey || !executeTokenSecret) {
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey || !executeTokenSecret) {
       return new Response(
         JSON.stringify({ error: "Server not configured: missing required env vars" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -98,6 +147,7 @@ serve(async (req) => {
     const ttlSeconds = Math.max(60, Math.min(body.ttl_seconds ?? 3600, 24 * 60 * 60));
 
     const client = createClient(supabaseUrl, supabaseAnonKey);
+    const serviceClient = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     const { data: org, error: orgError } = await client
       .from("organizations")
@@ -120,6 +170,13 @@ serve(async (req) => {
       .eq("is_active", true)
       .maybeSingle();
 
+    const { data: globalConfig } = await serviceClient
+      .from("global_configs")
+      .select("features")
+      .eq("organization_id", org.id)
+      .maybeSingle();
+    const gatewayFeatures = buildPublicGatewayFeatures(globalConfig?.features);
+
     const nowSeconds = Math.floor(Date.now() / 1000);
     const expSeconds = nowSeconds + ttlSeconds;
 
@@ -141,6 +198,7 @@ serve(async (req) => {
         token,
         organization_id: org.id,
         expires_at: new Date(expSeconds * 1000).toISOString(),
+        gateway_features: gatewayFeatures,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

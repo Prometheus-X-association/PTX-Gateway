@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { CustomVisualizationConfig, CustomVisualizationLibraryBundle, CustomVisualizationLibraryFile, ExportApiConfig, ExportApiOidcConfig, OidcClientConfig } from "@/types/dataspace";
+import { mergeGlobalFeatureSection } from "@/utils/globalConfigFeatures";
 
 interface TemplateTagHelp {
   tag: string;
@@ -2285,25 +2286,24 @@ const ResultPageSettingsSection = () => {
       const nextOidcClients = overrides?.oidcClients ?? oidcClients;
       const nextCustomVisualizations = overrides?.customVisualizations ?? customVisualizations;
       const nextLibraryBundles = overrides?.customVisualizationLibraryBundles ?? customVisualizationLibraryBundles;
-      const nextFeatures = {
-        ...globalFeatures,
-        resultPage: {
-          ...(isRecord(globalFeatures.resultPage) ? globalFeatures.resultPage : {}),
-          exportApiConfigs: nextExportApis,
-          oidcClients: nextOidcClients,
-          customVisualizations: nextCustomVisualizations,
-          customVisualizationLibraryBundles: nextLibraryBundles,
-        },
-      };
-
-      const { error } = await supabase
-        .from("global_configs")
-        .upsert({
-          organization_id: user.organization.id,
-          features: nextFeatures,
-        }, { onConflict: "organization_id" });
-
-      if (error) throw error;
+      const nextFeatures = await (async () => {
+        let savedFeatures: Record<string, unknown> = {};
+        await mergeGlobalFeatureSection(user.organization.id, (currentFeatures) => {
+          savedFeatures = {
+            ...currentFeatures,
+            resultPage: {
+              ...(isRecord(currentFeatures.resultPage) ? currentFeatures.resultPage : {}),
+              exportApiConfigs: nextExportApis,
+              oidcClients: nextOidcClients,
+              customVisualizations: nextCustomVisualizations,
+              customVisualizationLibraryBundles: nextLibraryBundles,
+            },
+          };
+          return savedFeatures;
+        });
+        return savedFeatures;
+      })();
+      setGlobalFeatures(nextFeatures);
       toast.success(successMessage);
       setIsUsingLegacyExportApis(false);
       await fetchSettings();

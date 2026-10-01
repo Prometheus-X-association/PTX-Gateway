@@ -12,9 +12,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { DataPagePluginConfig, DataSelectionSettings } from "@/types/dataspace";
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+import { isRecord, mergeGlobalFeatureSection } from "@/utils/globalConfigFeatures";
 
 const defaultSettings: DataSelectionSettings = {
   customApiDebugOnly: true,
@@ -142,18 +140,13 @@ const DataSelectionSettingsSection = () => {
   };
 
   const saveSettings = async () => {
-    if (!user?.organization?.id || !configId) return;
+    if (!user?.organization?.id) {
+      toast.error("No active organization selected");
+      return;
+    }
     setIsSaving(true);
     try {
-      const { data: existing, error: fetchError } = await supabase
-        .from("global_configs")
-        .select("features")
-        .eq("id", configId)
-        .maybeSingle();
-      if (fetchError) throw fetchError;
-
-      const existingFeatures = isRecord(existing?.features) ? existing.features : {};
-      const nextFeatures = {
+      const savedId = await mergeGlobalFeatureSection(user.organization.id, (existingFeatures) => ({
         ...existingFeatures,
         dataSelection: {
           customApiDebugOnly: settings.customApiDebugOnly ?? true,
@@ -165,13 +158,8 @@ const DataSelectionSettingsSection = () => {
           uploadAcceptedFileTypes: settings.uploadAcceptedFileTypes || ".txt,.json,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv",
           dataPagePlugins: settings.dataPagePlugins || [],
         },
-      };
-
-      const { error } = await supabase
-        .from("global_configs")
-        .update({ features: nextFeatures })
-        .eq("id", configId);
-      if (error) throw error;
+      }));
+      setConfigId(savedId);
       toast.success("Data selection settings saved");
     } catch (err) {
       toast.error("Failed to save data selection settings");
