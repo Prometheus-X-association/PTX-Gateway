@@ -2931,9 +2931,19 @@ const ResultsView = ({
 
 
   useEffect(() => {
+    setLlmInsightsEnabled(false);
+    setLlmFreeChatEnabled(false);
+    setLlmAgents([]);
+    setLlmWorkflows([]);
+    setLlmGlobalPrompts([]);
+  }, [organizationId, orgExecutionToken, selectedTargetId]);
+
+  useEffect(() => {
     let isMounted = true;
+    let requestVersion = 0;
 
     const fetchLlmInsightStatus = async () => {
+      const version = ++requestVersion;
       if (!organizationId && !orgExecutionToken) {
         setLlmInsightsEnabled(false);
         setLlmFreeChatEnabled(false);
@@ -2941,10 +2951,6 @@ const ResultsView = ({
       }
 
       try {
-        setLlmInsightsEnabled(false);
-        setLlmFreeChatEnabled(false);
-        setLlmAgents([]);
-        setLlmWorkflows([]);
         const headers: Record<string, string> = {};
         if (organizationId) {
           headers["x-organization-id"] = organizationId;
@@ -2959,7 +2965,7 @@ const ResultsView = ({
           },
         });
 
-        if (!isMounted) return;
+        if (!isMounted || version !== requestVersion || error || !data?.ok) return;
         setLlmInsightsEnabled(
           !error && Boolean(data?.ok) && Boolean(data?.enabled) && Boolean(data?.configured)
         );
@@ -3001,19 +3007,38 @@ const ResultsView = ({
         if (Array.isArray(data?.workflows)) {
           setLlmWorkflows((data.workflows as WorkflowConfig[]).map(upgradeBuiltInWorkflowTemplate));
         }
-      } catch {
-        if (isMounted) {
-          setLlmInsightsEnabled(false);
-          setLlmFreeChatEnabled(false);
-        }
+      } catch (error) {
+        console.error("Failed to refresh chat configuration:", error);
       }
     };
 
     void fetchLlmInsightStatus();
+    const refresh = () => { void fetchLlmInsightStatus(); };
+    window.addEventListener("focus", refresh);
 
     return () => {
       isMounted = false;
+      window.removeEventListener("focus", refresh);
     };
+  }, [organizationId, orgExecutionToken, selectedTargetId, isChatOpen]);
+
+  const loadLatestWorkflow = useCallback(async (workflowId: string): Promise<WorkflowConfig> => {
+    const { data, error } = await supabase.functions.invoke("llm-insights", {
+      headers: organizationId ? { "x-organization-id": organizationId } : {},
+      body: {
+        action: "status",
+        org_execution_token: orgExecutionToken || undefined,
+        target_resource_id: selectedTargetId || undefined,
+      },
+    });
+    if (error || !data?.ok) throw new Error("Could not load the latest workflow. Please try again.");
+    const latest = Array.isArray(data.workflows)
+      ? data.workflows as WorkflowConfig[]
+      : [];
+    setLlmWorkflows(latest);
+    const workflow = latest.find((item) => item.id === workflowId && item.enabled);
+    if (!data.enabled || !workflow) throw new Error("This workflow is no longer available for this result.");
+    return workflow;
   }, [organizationId, orgExecutionToken, selectedTargetId]);
 
   // Fetch result data automatically for normal flow.
@@ -4184,6 +4209,7 @@ const ResultsView = ({
             processSessionId={processSessionId}
             uploadConfig={uploadConfig}
             workflows={compatibleLlmWorkflows}
+            loadLatestWorkflow={loadLatestWorkflow}
             onDocUploaded={(text) => {
               setStoredDocText(text);
               const key = buildRagDocStorageKey(resultUrlInfo, organizationId);

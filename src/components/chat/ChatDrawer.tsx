@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink, GripVertical } from "lucide-react";
+import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink, GripVertical, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import type { RagWorkerHandle } from "@/lib/useRagWorker";
 import type { UploadConfig } from "@/components/DocumentUploadZone";
 import type { AgentWorkflow, WorkflowConfig, WorkflowWaitingState } from "@/types/workflow";
 import { executeWorkflow, getWorkflowFinalOutput } from "@/lib/workflowExecutor";
+import { loadWorkflowForNewRun } from "@/lib/workflowRun";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
 import { loadSourceDocuments, saveSourceDocuments } from "@/utils/sourceDocumentStorage";
 
@@ -17,6 +18,9 @@ type MessageRole = "user" | "assistant";
 
 interface ToolEvent {
   name: string;
+  displayName?: string;
+  toolType?: "mcp" | "skill";
+  skillId?: string;
   result?: string;
 }
 
@@ -35,6 +39,9 @@ interface SSEEvent {
   type: "token" | "tool_call" | "tool_result" | "output_type" | "done" | "error";
   content?: string;
   name?: string;
+  displayName?: string;
+  toolType?: "mcp" | "skill";
+  skillId?: string;
   result?: string;
   message?: string;
   outputType?: "text" | "json" | "html" | "mixed";
@@ -81,6 +88,7 @@ interface ChatDrawerProps {
   onDocUploaded?: (text: string) => void;
   /** Named workflow configs — active ones can be selected and run from the chat */
   workflows?: WorkflowConfig[];
+  loadLatestWorkflow: (workflowId: string) => Promise<WorkflowConfig>;
 }
 
 interface LauncherAnchor {
@@ -803,9 +811,15 @@ const ChatMessageBubble = ({ msg, outputFormat }: { msg: ChatMessageData; output
         {msg.toolEvents && msg.toolEvents.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-2 opacity-70">
             {msg.toolEvents.map((t, i) => (
-              <span key={i} className="inline-flex items-center gap-1 text-[10px] bg-background/30 rounded-full px-2 py-0.5">
-                <Wrench className="h-2.5 w-2.5" />
-                {t.name.split("__").pop()}
+              <span
+                key={`${t.toolType ?? "mcp"}-${t.skillId ?? t.name}-${i}`}
+                className="inline-flex items-center gap-1 text-[10px] bg-background/30 rounded-full px-2 py-0.5"
+                title={t.toolType === "skill" ? "Agent skill" : "MCP tool"}
+              >
+                {t.toolType === "skill"
+                  ? <BookOpen className="h-2.5 w-2.5" />
+                  : <Wrench className="h-2.5 w-2.5" />}
+                {t.toolType === "skill" ? `Skill: ${t.displayName || t.skillId || "Agent Skill"}` : t.name.split("__").pop()}
               </span>
             ))}
           </div>
@@ -899,6 +913,7 @@ const ChatDrawer = ({
   uploadConfig,
   onDocUploaded,
   workflows = [],
+  loadLatestWorkflow,
 }: ChatDrawerProps) => {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [input, setInput] = useState("");
@@ -916,7 +931,7 @@ const ChatDrawer = ({
   const [isUploading, setIsUploading] = useState(false);
   const [showDocPopover, setShowDocPopover] = useState(false);
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false);
-  const [pausedWorkflow, setPausedWorkflow] = useState<{ workflowId: string; waiting: WorkflowWaitingState } | null>(null);
+  const [pausedWorkflow, setPausedWorkflow] = useState<{ workflowId: string; config: WorkflowConfig; waiting: WorkflowWaitingState } | null>(null);
   const workflowRunningRef = useRef(false);
   // Compact progress summary updated in chatbox text only
   const [workflowProgress, setWorkflowProgress] = useState<{
@@ -1074,14 +1089,29 @@ const ChatDrawer = ({
     }
   }, [uploadConfig, onDocUploaded, processSessionId]);
 
-  const runWorkflow = useCallback(async (userMsg: string, workflowOverride?: WorkflowConfig, resumeWaiting?: WorkflowWaitingState) => {
-    const workflowConfig = workflowOverride ?? (
+  const runWorkflow = useCallback(async (userMsg: string | undefined, workflowOverride?: WorkflowConfig, resumeWaiting?: WorkflowWaitingState) => {
+    let workflowConfig = workflowOverride ?? (
       resumeWaiting?.workflowId
         ? workflows.find((workflow) => workflow.id === resumeWaiting.workflowId)
         : selectedWorkflow
     );
-    if (!workflowConfig || workflowConfig.graph.nodes.length === 0) return;
+    if (!workflowConfig) return;
     if (workflowRunningRef.current) return;
+    workflowRunningRef.current = true;
+    setIsWorkflowRunning(true);
+    if (!resumeWaiting) {
+      try {
+        workflowConfig = await loadWorkflowForNewRun(workflowConfig.id, loadLatestWorkflow);
+      } catch (error) {
+        setMessages((prev) => [...prev,
+          { id: uid(), role: "user", content: userMsg ?? "Run workflow" },
+          { id: uid(), role: "assistant", content: error instanceof Error ? error.message : String(error) },
+        ]);
+        workflowRunningRef.current = false;
+        setIsWorkflowRunning(false);
+        return;
+      }
+    }
     const exitWorkflowMode = () => {
       setPausedWorkflow(null);
       setActiveWorkflowId((current) => current === workflowConfig.id ? null : current);
@@ -1090,6 +1120,8 @@ const ChatDrawer = ({
     // Pre-flight checks before running the workflow.
     const workflow: AgentWorkflow = workflowConfig.graph;
     const triggerNode = workflow.nodes.find((node) => node.type === "trigger");
+    // Resolve preset/automatic prompts from the freshly loaded graph too.
+    userMsg ??= (triggerNode?.data as import("@/types/workflow").TriggerNodeData | undefined)?.defaultPrompt || "Run workflow";
     const configuredTriggerSources = triggerNode
       ? (triggerNode.data as import("@/types/workflow").TriggerNodeData).inputSources
       : undefined;
@@ -1099,7 +1131,7 @@ const ChatDrawer = ({
       if (node.type !== "agent") return false;
       const data = node.data as import("@/types/workflow").AgentNodeData;
       return data.requiresDocument === true || /uploaded document|attached document|document text/i.test(
-        `${data.inlineSystemPrompt || ""}\n${data.promptOverride || ""}`
+        `${data.mode === "inline" ? data.inlineSystemPrompt || "" : ""}\n${data.promptOverride || ""}`
       );
     });
     // A node may independently make a document mandatory even if the trigger
@@ -1117,6 +1149,8 @@ const ChatDrawer = ({
         : "an uploaded document (attach one via the paperclip button)");
     }
     if (preflight.length > 0) {
+      workflowRunningRef.current = false;
+      setIsWorkflowRunning(false);
       setMessages((prev) => [
         ...prev,
         { id: uid(), role: "user" as MessageRole, content: userMsg },
@@ -1128,8 +1162,6 @@ const ChatDrawer = ({
       return;
     }
 
-    workflowRunningRef.current = true;
-    setIsWorkflowRunning(true);
     setWorkflowProgress(null);
     if (!resumeWaiting) setPausedWorkflow(null);
     partialResultsRef.current = [];
@@ -1146,8 +1178,13 @@ const ChatDrawer = ({
     const statusId = uid();
     setMessages((prev) => [...prev, {
       id: statusId, role: "assistant",
-      content: "⚡ Running workflow…", streaming: true,
+      content: "⚡ Running workflow…", streaming: true, toolEvents: [],
     }]);
+
+    // Agent nodes stream MCP and skill activity separately from their text.
+    // Keep those events on the workflow bubble so they remain visible after
+    // the status line is replaced by the final workflow output.
+    const workflowToolEvents: ToolEvent[] = [];
 
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 
@@ -1248,6 +1285,7 @@ const ChatDrawer = ({
               result: contextPayload,
               inputData: inlineResult,
               workflowId: workflowConfig.id,
+              mode: "run",
               nodeId,
               organizationId,
               org_execution_token: orgExecutionToken,
@@ -1263,7 +1301,10 @@ const ChatDrawer = ({
             }),
           });
 
-          if (!resp.ok || !resp.body) throw new Error(`Agent step failed: ${resp.status}`);
+          if (!resp.ok || !resp.body) {
+            const detail = await resp.json().catch(() => null);
+            throw new Error(detail?.error || `Agent step failed: ${resp.status}`);
+          }
 
           let text = "";
           const reader = resp.body.getReader();
@@ -1277,10 +1318,26 @@ const ChatDrawer = ({
             buf = lines.pop() ?? "";
             for (const line of lines) {
               if (!line.startsWith("data: ")) continue;
-              try {
-                const ev = JSON.parse(line.slice(6)) as { type: string; content?: string };
-                if (ev.type === "token" && ev.content) text += ev.content;
-              } catch { /* skip */ }
+              let ev: SSEEvent;
+              try { ev = JSON.parse(line.slice(6)) as SSEEvent; } catch { continue; }
+              if (ev.type === "error") throw new Error(ev.message || "Workflow agent failed");
+              if (ev.type === "token" && ev.content) text += ev.content;
+              else if (ev.type === "tool_call" && ev.name) {
+                const toolEvent: ToolEvent = {
+                  name: ev.name,
+                  displayName: ev.displayName,
+                  toolType: ev.toolType,
+                  skillId: ev.skillId,
+                };
+                workflowToolEvents.push(toolEvent);
+                setMessages((prev) => prev.map((message) => message.id === statusId
+                  ? { ...message, toolEvents: [...workflowToolEvents] }
+                  : message
+                ));
+              } else if (ev.type === "tool_result" && ev.name) {
+                const index = workflowToolEvents.findLastIndex((event) => event.name === ev.name && !event.result);
+                if (index >= 0) workflowToolEvents[index].result = ev.result;
+              }
             }
           }
           return text;
@@ -1289,6 +1346,7 @@ const ChatDrawer = ({
         onStepDone: (step) => {
           const label = progressMap.get(step.nodeId) ?? step.nodeType;
           partialResultsRef.current = [...partialResultsRef.current, step];
+          if (step.nodeType === "agent" && step.error) throw new Error(step.error);
           setWorkflowProgress((prev) => {
             let newKnownTotal = prev?.knownTotal ?? 0;
             if (step.output && typeof step.output === "object") {
@@ -1370,7 +1428,7 @@ const ChatDrawer = ({
           : m
         ));
       } else if (waiting) {
-        setPausedWorkflow({ workflowId: workflowConfig.id, waiting });
+        setPausedWorkflow({ workflowId: workflowConfig.id, config: workflowConfig, waiting });
         const waitingInput = waiting.input && typeof waiting.input === "object"
           ? waiting.input as Record<string, unknown>
           : null;
@@ -1391,6 +1449,7 @@ const ChatDrawer = ({
             id: uid(),
             role: "assistant",
             content: questionText,
+            toolEvents: [...workflowToolEvents],
             htmlViz: waitingHtml ?? undefined,
             htmlVizPlacement: waitingHtml ? "before" : undefined,
             streaming: false,
@@ -1441,7 +1500,7 @@ const ChatDrawer = ({
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, workflows, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange]);
+  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -1552,9 +1611,7 @@ const ChatDrawer = ({
     const timer = window.setTimeout(() => {
       void (async () => {
         for (const wf of pending) {
-          const trigger = wf.graph.nodes.find((n) => n.type === "trigger");
-          const prompt = (trigger?.data as { defaultPrompt?: string } | undefined)?.defaultPrompt || "Run workflow";
-          await runWorkflow(prompt, wf);
+          await runWorkflow(undefined, wf);
         }
       })();
     }, 400);
@@ -1710,7 +1767,12 @@ const ChatDrawer = ({
               accText += event.content;
               setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: accText } : m));
             } else if (event.type === "tool_call" && event.name) {
-              toolEvents.push({ name: event.name });
+              toolEvents.push({
+                name: event.name,
+                displayName: event.displayName,
+                toolType: event.toolType,
+                skillId: event.skillId,
+              });
               setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, toolEvents: [...toolEvents] } : m));
             } else if (event.type === "tool_result" && event.name) {
               const idx = toolEvents.findLastIndex((t) => t.name === event.name && !t.result);
@@ -1802,7 +1864,7 @@ const ChatDrawer = ({
       const trimmed = input.trim();
       setInput("");
       if (pausedWorkflow) {
-        const workflow = workflows.find((item) => item.id === pausedWorkflow.workflowId);
+        const workflow = pausedWorkflow.config;
         void runWorkflow(trimmed, workflow, pausedWorkflow.waiting);
       } else if (selectedWorkflow && activeWorkflowId) {
         void runWorkflow(trimmed);
@@ -1842,9 +1904,9 @@ const ChatDrawer = ({
     setShowPrompts(false);
     setShowAgentPicker(false);
     setShowHeaderAgentPicker(false);
-    const workflow = workflows.find((item) => item.id === pausedWorkflow.workflowId);
+    const workflow = pausedWorkflow.config;
     void runWorkflow(trimmed, workflow, pausedWorkflow.waiting);
-  }, [pausedWorkflow, isWorkflowRunning, workflows, runWorkflow]);
+  }, [pausedWorkflow, isWorkflowRunning, runWorkflow]);
 
   const startChatPanelDrag = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || window.innerWidth < 1024) return;
@@ -2038,7 +2100,7 @@ const ChatDrawer = ({
                             e.preventDefault();
                             setShowPrompts(false);
                             setActiveWorkflowId(wf.id);
-                            void runWorkflow(defaultPrompt ?? "Run workflow", wf);
+                            void runWorkflow(undefined, wf);
                           }}
                           className={`w-full text-left px-3 py-2.5 hover:bg-muted transition-colors border-b border-border/40 last:border-0 ${wf.id === selectedWorkflow?.id ? "bg-primary/5" : ""}`}
                         >
@@ -2264,7 +2326,7 @@ const ChatDrawer = ({
                   const trimmed = input.trim();
                   setInput("");
                   if (pausedWorkflow) {
-                    const workflow = workflows.find((item) => item.id === pausedWorkflow.workflowId);
+                    const workflow = pausedWorkflow.config;
                     void runWorkflow(trimmed, workflow, pausedWorkflow.waiting);
                   } else if (selectedWorkflow && activeWorkflowId) {
                     void runWorkflow(trimmed);

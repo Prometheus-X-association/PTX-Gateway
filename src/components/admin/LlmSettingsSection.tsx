@@ -122,7 +122,8 @@ const upgradeBuiltInWorkflowTemplate = (workflow: WorkflowConfig): WorkflowConfi
     ?? EXAMPLE_WORKFLOWS.find((example) => example.id === "interactive-skill-description-refinement");
   if (!template) return workflow;
   const hasSavedGraph = (workflow.graph?.nodes?.length ?? 0) > 0 || (workflow.graph?.edges?.length ?? 0) > 0;
-  const graph = hasSavedGraph ? workflow.graph : template.workflow;
+  if (hasSavedGraph) return workflow;
+  const graph = template.workflow;
   const upgradedGraph = {
     ...graph,
     nodes: (graph.nodes ?? []).map((node) => {

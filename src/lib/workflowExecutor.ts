@@ -366,8 +366,11 @@ export async function executeWorkflow(
 
       } else if (node.type === "agent") {
         const d = node.data as AgentNodeData;
+        if (d.mode !== "inline" && !d.agentId?.trim()) {
+          throw new Error("Select an existing agent for this workflow node before running it.");
+        }
         const contextMode = d.contextMode ?? (
-          /using only (?:the )?(?:uploaded|attached|raw) document/i.test(`${d.inlineSystemPrompt ?? ""}\n${d.promptOverride ?? ""}`)
+          /using only (?:the )?(?:uploaded|attached|raw) document/i.test(`${d.mode === "inline" ? d.inlineSystemPrompt ?? "" : ""}\n${d.promptOverride ?? ""}`)
             ? "document_only"
             : "combined"
         );

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveSavedWorkflowAgent } from "./workflowAgent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -156,6 +157,8 @@ interface ChatRequest {
   /** Workflow/node IDs let inline workflow providers be resolved server-side. */
   workflowId?: string;
   nodeId?: string;
+  /** Result chat resolves saved nodes; builder tests execute the unsaved canvas. */
+  mode?: "run" | "test";
   org_execution_token?: string;
   agentId?: string;
   /** Inline agent: system prompt provided directly, bypassing agent lookup */
@@ -1087,6 +1090,34 @@ serve(async (req: Request) => {
 
   if (!llmConfig.enabled) return sendError("LLM insights are disabled", 400);
 
+  const savedWorkflowNodeData = (() => {
+    if (!body.workflowId || !body.nodeId || !Array.isArray((llmConfig as { workflows?: unknown[] }).workflows)) return null;
+    for (const rawWorkflow of (llmConfig as { workflows?: unknown[] }).workflows ?? []) {
+      const workflow = toObject(rawWorkflow);
+      if (String(workflow.id || "") !== body.workflowId) continue;
+      if (body.mode === "run" && workflow.enabled === false) return null;
+      const graph = toObject(workflow.graph);
+      const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+      const node = nodes.map(toObject).find((item) => String(item.id || "") === body.nodeId);
+      return node?.type === "agent" ? toObject(node.data) : null;
+    }
+    return null;
+  })();
+  if (body.mode === "run") {
+    if (!savedWorkflowNodeData) return sendError("Saved workflow agent node was not found. Start a new workflow run.", 400);
+    try {
+      const resolved = resolveSavedWorkflowAgent(savedWorkflowNodeData);
+      // Clear stale inline fields when the saved node now references an agent.
+      body = {
+        ...body,
+        ...resolved,
+        agentProviders: resolved.agentProviders as LlmProvider[] | undefined,
+      };
+    } catch (error) {
+      return sendError(error instanceof Error ? error.message : String(error), 400);
+    }
+  }
+
   // Resolve active agent first (provider resolution depends on it)
   const activeAgent = body.agentId && Array.isArray(llmConfig.agents)
     ? llmConfig.agents.find((a) => a.id === body.agentId && a.enabled !== false) ?? null
@@ -1098,12 +1129,11 @@ serve(async (req: Request) => {
   const defaultChatPrompt =
     "You are a data analyst assistant. The user is viewing a result dataset. Answer questions clearly and concisely.";
   const systemPromptBase =
-    body.systemPrompt?.trim() ||          // inline agent override
-    activeAgent?.systemPrompt?.trim() ||
+    (activeAgent ? activeAgent.systemPrompt?.trim() : body.systemPrompt?.trim()) ||
     llmConfig.chatSystemPrompt?.trim() ||
     defaultChatPrompt;
 
-  const selectedSkillIds = activeAgent?.skillIds ?? body.skillIds ?? [];
+  const selectedSkillIds = (activeAgent ? activeAgent.skillIds : body.skillIds) ?? [];
   const selectedSkills = Array.isArray(llmConfig.skills)
     ? llmConfig.skills.filter((skill) =>
         skill.enabled !== false && skill.id && selectedSkillIds.includes(skill.id)
@@ -1224,8 +1254,8 @@ serve(async (req: Request) => {
 
   // Append output instructions as a dedicated section
   const outputInstructions = activeAgent?.outputInstructions?.trim();
-  const configuredOutputType = body.outputType ?? activeAgent?.expectedOutput ?? "text";
-  const fallbackOutputType = body.fallbackOutputType ?? activeAgent?.fallbackOutput ??
+  const configuredOutputType = (activeAgent ? activeAgent.expectedOutput : body.outputType) ?? "text";
+  const fallbackOutputType = (activeAgent ? activeAgent.fallbackOutput : body.fallbackOutputType) ??
     (configuredOutputType === "auto" ? "text" : configuredOutputType);
   const outputBlock = configuredOutputType === "auto"
     ? `\n## Output Format\nUse ${fallbackOutputType} when no skill is activated. When a skill is activated, its declared output type and output template override this fallback. If multiple skills activate, the most recently activated skill wins.${outputInstructions ? `\n\nFallback instructions only:\n${outputInstructions}` : ""}`
@@ -1247,22 +1277,10 @@ serve(async (req: Request) => {
   ];
 
   // Resolve providers — agent-specific first, then global (filtered or all)
-  const savedWorkflowNodeData = (() => {
-    if (!body.workflowId || !body.nodeId || !Array.isArray((llmConfig as { workflows?: unknown[] }).workflows)) return null;
-    for (const rawWorkflow of (llmConfig as { workflows?: unknown[] }).workflows ?? []) {
-      const workflow = toObject(rawWorkflow);
-      if (String(workflow.id || "") !== body.workflowId) continue;
-      const graph = toObject(workflow.graph);
-      const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
-      const node = nodes.map(toObject).find((item) => String(item.id || "") === body.nodeId);
-      return node ? toObject(node.data) : null;
-    }
-    return null;
-  })();
-  const savedProviderIds = Array.isArray(savedWorkflowNodeData?.providerIds)
+  const savedProviderIds = body.mode !== "test" && Array.isArray(savedWorkflowNodeData?.providerIds)
     ? savedWorkflowNodeData.providerIds.map(String)
     : undefined;
-  const savedAgentProviders = Array.isArray(savedWorkflowNodeData?.agentProviders)
+  const savedAgentProviders = body.mode !== "test" && Array.isArray(savedWorkflowNodeData?.agentProviders)
     ? savedWorkflowNodeData.agentProviders as LlmProvider[]
     : undefined;
   const inlineProviderAgent: LlmAgent | null = !activeAgent && (Array.isArray(savedAgentProviders) || Array.isArray(savedProviderIds) || Array.isArray(body.agentProviders) || Array.isArray(body.providerIds))
@@ -1398,21 +1416,34 @@ serve(async (req: Request) => {
 
           for (const tc of message.tool_calls) {
             const toolName = tc.function.name;
-            send({ type: "tool_call", name: toolName });
             let args: unknown;
             try { args = JSON.parse(tc.function.arguments); } catch { args = {}; }
 
+            const requestedSkillId = toolName === "activate_agent_skill" && typeof args === "object" && args !== null
+              ? String((args as Record<string, unknown>).skill_id || "")
+              : "";
+            const requestedSkill = requestedSkillId
+              ? selectedSkills.find((item) => item.id === requestedSkillId)
+              : undefined;
+            send({
+              type: "tool_call",
+              name: toolName,
+              ...(toolName === "activate_agent_skill" ? {
+                toolType: "skill",
+                skillId: requestedSkillId,
+                displayName: requestedSkill?.name || requestedSkillId || "Agent Skill",
+              } : { toolType: "mcp" }),
+            });
+
             const result = toolName === "activate_agent_skill"
               ? (() => {
-                  const skillId = typeof args === "object" && args !== null
-                    ? String((args as Record<string, unknown>).skill_id || "")
-                    : "";
-                  const skill = selectedSkills.find((item) => item.id === skillId);
-                  if (skill) {
-                    activeOutputType = skill.outputType || "text";
+                  if (requestedSkill) {
+                    activeOutputType = requestedSkill.outputType || "text";
                     send({ type: "output_type", outputType: activeOutputType });
                   }
-                  return skill ? formatAgentSkill(skill) : `Assigned skill "${skillId}" was not found or is disabled.`;
+                  return requestedSkill
+                    ? formatAgentSkill(requestedSkill)
+                    : `Assigned skill "${requestedSkillId}" was not found or is disabled.`;
                 })()
               : await callMcpTool(mcpToolBindings, toolName, args);
             send({ type: "tool_result", name: toolName, result: result.slice(0, 500) });
