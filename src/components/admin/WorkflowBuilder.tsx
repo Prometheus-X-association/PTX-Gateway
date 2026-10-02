@@ -808,6 +808,33 @@ const AgentPanel = ({ node, agents, skills, globalProviders, defaultUseUploadedD
         </>
       )}
 
+      <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
+        <Label className="text-xs">Result Data Context</Label>
+        <Select value={d.resultContextMode ?? "inherit"}
+          onValueChange={(value: "inherit" | "full" | "chunked") => onChange({ ...d, resultContextMode: value === "inherit" ? undefined : value })}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="inherit">{mode === "existing" ? "Inherit saved agent setting" : "Default (full result)"}</SelectItem>
+            <SelectItem value="full">Full result</SelectItem>
+            <SelectItem value="chunked">Chunk + manifest</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[10px] text-muted-foreground">
+          Applies to result data and injected previous node input. Full result uses server size limits; Chunk + manifest sends all ordered chunks in one LLM request.
+        </p>
+        {d.resultContextMode === "chunked" && (
+          <div className="space-y-1">
+            <Label className="text-xs">Chunk size (characters)</Label>
+            <Input type="number" min={2000} max={50000} step={1000} className="h-7 text-xs"
+              value={d.resultChunkSize ?? 12000}
+              onChange={(event) => {
+                const value = parseInt(event.target.value, 10);
+                if (Number.isFinite(value)) onChange({ ...d, resultChunkSize: Math.min(Math.max(value, 2000), 50000) });
+              }} />
+          </div>
+        )}
+      </div>
+
       <div className="space-y-1">
         <Label className="text-xs">Prompt override <span className="text-muted-foreground">(leave empty to use the chat message)</span></Label>
         <Textarea className="text-xs min-h-[52px]" rows={3} value={d.promptOverride ?? ""}
@@ -1084,6 +1111,7 @@ const RetrievalPanel = ({ node, nodes, organizationId, generationContext, onChan
         if (!line.startsWith("data:")) return;
         try {
           const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+          if (event.type === "reset") generated = "";
           if (event.type === "token" && event.content) generated += event.content;
           if (event.type === "error") throw new Error(event.message || "LLM retrieval code generation failed");
         } catch (error) {
@@ -1290,7 +1318,7 @@ Trigger data: {label,triggerType:"manual",inputSources:["result","document","use
 Document Context data: {label,source:"trigger_document|chat_upload_or_trigger",delivery:"automatic|text|native_file",reuseScope:"workflow_run",inputSchema,outputSchema}.
 Retrieval data: {label,source:"result|prev_output|node_output",sourceNodeId optional,query,maxItems,description,code,inputSchema,outputSchema}. Code is a sandbox body receiving input and tools. tools has manifest(), listNodes({start,limit}), findNodes(query,{limit}), getNode(idOrExactLabelOrIndex), exactLabel(label), sliceNodes(start,end). It must return compact context for downstream agents and cannot use network, DOM, storage, imports, eval, Function, or timers.
 User Input data: {label,question,answerKey,inputType:"text|yes_no|select",options,inputSchema,outputSchema}. This pauses the chat workflow until the user replies. options is newline-separated and only used for select inputs.
-Agent data: prefer an available saved agent with {label,mode:"existing",agentId,promptOverride,passPrevOutput:true,inputSchema,outputSchema}; otherwise use {label,mode:"inline",inlineName,inlineSystemPrompt,inlineOutputType:"text|json|html|mixed",inlineFallbackOutputType:"text|json|html|mixed",skillIds:[],promptOverride,passPrevOutput:true,inputSchema,outputSchema}. Preserve contextMode:"combined|document_only", requiresDocument, useUploadedDocument, providerIds, and agentProviders when relevant.
+Agent data: prefer an available saved agent with {label,mode:"existing",agentId,promptOverride,passPrevOutput:true,inputSchema,outputSchema}; otherwise use {label,mode:"inline",inlineName,inlineSystemPrompt,inlineOutputType:"text|json|html|mixed",inlineFallbackOutputType:"text|json|html|mixed",skillIds:[],promptOverride,passPrevOutput:true,inputSchema,outputSchema}. Preserve resultContextMode:"full|chunked" and resultChunkSize (2000–50000 characters) when relevant; omitted delivery settings inherit the saved agent, or full for inline agents. Chunked delivery sends all data with a manifest in one request. Preserve contextMode:"combined|document_only", requiresDocument, useUploadedDocument, providerIds, and agentProviders when relevant.
 API data: {label,url,method,queryParams:[],headers:[],authType:"none|bearer|basic|api_key",bodyType:"none|json|text|form_urlencoded",body,responseType:"auto|json|text",outputPath,inputSchema,outputSchema}. Never invent credential values; leave auth values empty.
 Plugin data: {label,description,code,inputSchema,outputSchema}. Code is a sandbox function body receiving input.prevOutput, input.result, input.docText and input.getNodeOutput(id); it must return a value and cannot use network, DOM, storage, imports, eval, Function, or timers.
 Condition data: {label,expression,inputSchema,loopStart optional,loopEnd optional}. Expression reads prevOutput and returns truthy/falsy.
@@ -1345,6 +1373,7 @@ const PluginPanel = ({ node, organizationId, generationContext, onChange }: {
         if (!line.startsWith("data:")) return;
         try {
           const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+          if (event.type === "reset") generated = "";
           if (event.type === "token" && event.content) generated += event.content;
           if (event.type === "error") throw new Error(event.message || "LLM code generation failed");
         } catch (error) {
@@ -4682,6 +4711,8 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
                   }
                 : (agentConfig.includeResultData ? resultData : undefined),
               inputData: prevOutput,
+              resultContextMode: agentConfig.resultContextMode,
+              resultChunkSize: agentConfig.resultChunkSize,
               workflowId: exampleWorkflowId,
               mode: "test",
               nodeId,
@@ -4710,6 +4741,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
               if (!line.startsWith("data:")) continue;
               try {
                 const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+                if (event.type === "reset") output = "";
                 if (event.type === "token" && event.content) output += event.content;
                 if (event.type === "error") throw new Error(event.message || "Agent execution failed");
               } catch (error) {
@@ -5038,6 +5070,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
           if (!line.startsWith("data:")) continue;
           try {
             const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+            if (event.type === "reset") accumulated = "";
             if (event.type === "token" && event.content) accumulated += event.content;
             if (event.type === "error") throw new Error(event.message || "LLM JSON generation failed");
           } catch (error) {
@@ -5179,6 +5212,8 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
                   }
                 : (agentConfig.includeResultData ? resultData : undefined),
               inputData: prevOutput,
+              resultContextMode: agentConfig.resultContextMode,
+              resultChunkSize: agentConfig.resultChunkSize,
               workflowId,
               mode: "test",
               nodeId,
@@ -5207,6 +5242,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
               if (!line.startsWith("data:")) continue;
               try {
                 const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+                if (event.type === "reset") output = "";
                 if (event.type === "token" && event.content) output += event.content;
                 if (event.type === "error") throw new Error(event.message || "Agent execution failed");
               } catch (error) {
@@ -5304,6 +5340,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
             if (!line.startsWith("data:")) continue;
             try {
               const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+              if (event.type === "reset") accumulated = "";
               if (event.type === "token" && event.content) accumulated += event.content;
               if (event.type === "error") throw new Error(event.message || "LLM workflow generation failed");
             } catch (error) {
@@ -5509,6 +5546,8 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           const sharedAgentData = {
             promptOverride: String(rawData.promptOverride || "").slice(0, 8000) || undefined,
             passPrevOutput: rawData.passPrevOutput !== false,
+            resultContextMode: rawData.resultContextMode === "chunked" ? "chunked" : rawData.resultContextMode === "full" ? "full" : undefined,
+            resultChunkSize: typeof rawData.resultChunkSize === "number" && Number.isFinite(rawData.resultChunkSize) ? Math.min(Math.max(Math.round(rawData.resultChunkSize), 2000), 50000) : undefined,
             requiresDocument: typeof rawData.requiresDocument === "boolean" ? rawData.requiresDocument : undefined,
             useUploadedDocument: typeof rawData.useUploadedDocument === "boolean" ? rawData.useUploadedDocument : undefined,
             contextMode: rawData.contextMode === "document_only" ? "document_only" : rawData.contextMode === "combined" ? "combined" : undefined,

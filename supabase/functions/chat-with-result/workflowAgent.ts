@@ -34,3 +34,13 @@ export function resolveSavedWorkflowAgent(node: Record<string, unknown>): AgentO
     agentProviders: Array.isArray(node.agentProviders) ? node.agentProviders : [],
   };
 }
+
+/** Saved node delivery settings override request settings in production runs. */
+export function resolveWorkflowResultContext(node: Record<string, unknown>) {
+  return {
+    resultContextMode: node.resultContextMode === "full" || node.resultContextMode === "chunked"
+      ? node.resultContextMode : undefined,
+    resultChunkSize: typeof node.resultChunkSize === "number" && Number.isFinite(node.resultChunkSize)
+      ? Math.min(Math.max(Math.round(node.resultChunkSize), 2000), 50000) : undefined,
+  };
+}

@@ -1,7 +1,9 @@
+import { buildChunkedResultPayload } from "./resultContext.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { resolveProviders, resolveAgentProviders } from "./providers.ts";
-import { resolveSavedWorkflowAgent } from "./workflowAgent.ts";
+import { resolveSavedWorkflowAgent, resolveWorkflowResultContext } from "./workflowAgent.ts";
+import { assertProviderSuccess, readProviderStream } from "./providerStream.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -155,6 +157,8 @@ interface ChatRequest {
   result?: unknown;
   /** Immediate input received from the previous workflow node. */
   inputData?: unknown;
+  resultContextMode?: "full" | "chunked";
+  resultChunkSize?: number;
   /** Workflow/node IDs let inline workflow providers be resolved server-side. */
   workflowId?: string;
   nodeId?: string;
@@ -352,6 +356,7 @@ const callLlmOnce = async (
         const raw = await resp.text();
         if (!resp.ok) { errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
         const parsed = JSON.parse(raw) as Record<string, unknown>;
+        assertProviderSuccess(parsed);
         const blocks = Array.isArray(parsed.content) ? parsed.content as Array<Record<string, unknown>> : [];
         const text = blocks.filter((block) => block.type === "text").map((block) => String(block.text || "")).join("\n");
         const toolCalls: ToolCall[] = blocks.filter((block) => block.type === "tool_use").map((block) => ({
@@ -359,6 +364,7 @@ const callLlmOnce = async (
           type: "function" as const,
           function: { name: String(block.name || ""), arguments: JSON.stringify(block.input ?? {}) },
         }));
+        if (!text && !toolCalls.length) throw new Error("Provider returned an empty response");
         return { message: { role: "assistant", content: text, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }, providerName: p.name || model };
       }
 
@@ -396,6 +402,7 @@ const callLlmOnce = async (
         const raw = await resp.text();
         if (!resp.ok) { errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
         const parsed = JSON.parse(raw) as Record<string, unknown>;
+        assertProviderSuccess(parsed);
         const candidates = parsed.candidates as Array<Record<string, unknown>> | undefined;
         const content = candidates?.[0]?.content as Record<string, unknown> | undefined;
         const parts = Array.isArray(content?.parts) ? content.parts as Array<Record<string, unknown>> : [];
@@ -404,6 +411,7 @@ const callLlmOnce = async (
           const call = part.functionCall as Record<string, unknown>;
           return { id: crypto.randomUUID(), type: "function" as const, function: { name: String(call.name || ""), arguments: JSON.stringify(call.args ?? {}) } };
         });
+        if (!text && !toolCalls.length) throw new Error("Provider returned an empty response");
         return { message: { role: "assistant", content: text, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }, providerName: p.name || model };
       }
 
@@ -423,9 +431,10 @@ const callLlmOnce = async (
         continue;
       }
       const parsed = JSON.parse(raw) as Record<string, unknown>;
+      assertProviderSuccess(parsed);
       const choice = (parsed.choices as Array<Record<string, unknown>> | undefined)?.[0];
       const msg = choice?.message as ChatMessage | undefined;
-      if (!msg) { errors.push(`${p.name || model}: empty response`); continue; }
+      if (!msg || (!msg.content && !msg.tool_calls?.length)) { errors.push(`${p.name || model}: empty response`); continue; }
       return { message: msg, providerName: p.name || model };
     } catch (e) {
       errors.push(`${p.name || model}: ${String(e)}`);
@@ -439,6 +448,7 @@ async function* streamLlm(
   providers: LlmProvider[],
   messages: ChatMessage[],
   attachments: LlmAttachment[] = [],
+  resetText: () => void = () => {},
 ): AsyncGenerator<string> {
   const errors: string[] = [];
   for (const p of providers) {
@@ -450,6 +460,13 @@ async function* streamLlm(
     const url = baseUrl.endsWith("/chat/completions")
       ? baseUrl
       : `${baseUrl}/chat/completions`;
+    let emittedText = false;
+    const emitStream = async function* (body: ReadableStream<Uint8Array>, format: Parameters<typeof readProviderStream>[1]) {
+      for await (const token of readProviderStream(body, format)) {
+        emittedText = true;
+        yield token;
+      }
+    };
     try {
       if (family === "anthropic") {
         const unsupported = attachments.find((attachment) => {
@@ -478,8 +495,7 @@ async function* streamLlm(
           signal: AbortSignal.timeout(90_000),
         });
         if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
-        const reader = resp.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
-        while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const lines = buffer.split("\n"); buffer = lines.pop() ?? ""; for (const line of lines) { if (!line.startsWith("data:")) continue; try { const event = JSON.parse(line.slice(5)) as Record<string, unknown>; const delta = event.delta as Record<string, unknown> | undefined; if (event.type === "content_block_delta" && typeof delta?.text === "string") yield delta.text; } catch { /* ignore */ } } }
+        yield* emitStream(resp.body, "anthropic");
         return;
       }
 
@@ -492,8 +508,7 @@ async function* streamLlm(
           signal: AbortSignal.timeout(90_000),
         });
         if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
-        const reader = resp.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
-        while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const lines = buffer.split("\n"); buffer = lines.pop() ?? ""; for (const line of lines) { if (!line.startsWith("data:")) continue; try { const event = JSON.parse(line.slice(5)) as Record<string, unknown>; const candidates = event.candidates as Array<Record<string, unknown>> | undefined; const content = candidates?.[0]?.content as Record<string, unknown> | undefined; const parts = content?.parts as Array<Record<string, unknown>> | undefined; for (const part of parts ?? []) if (typeof part.text === "string") yield part.text; } catch { /* ignore */ } } }
+        yield* emitStream(resp.body, "gemini");
         return;
       }
 
@@ -507,8 +522,7 @@ async function* streamLlm(
           signal: AbortSignal.timeout(90_000),
         });
         if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
-        const reader = resp.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
-        while (true) { const { done, value } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const lines = buffer.split("\n"); buffer = lines.pop() ?? ""; for (const line of lines) { if (!line.startsWith("data:")) continue; try { const event = JSON.parse(line.slice(5)) as Record<string, unknown>; if (event.type === "response.output_text.delta" && typeof event.delta === "string") yield event.delta; } catch { /* ignore */ } } }
+        yield* emitStream(resp.body, "responses");
         return;
       }
 
@@ -524,32 +538,10 @@ async function* streamLlm(
         errors.push(`${p.name || model}: ${resp.status}${detail ? ` — ${detail}` : ""}`);
         continue;
       }
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data:")) continue;
-          const json = trimmed.slice(5).trim();
-          if (json === "[DONE]") return;
-          try {
-            const chunk = JSON.parse(json) as Record<string, unknown>;
-            const delta = (
-              (chunk.choices as Array<Record<string, unknown>> | undefined)?.[0]
-                ?.delta as Record<string, unknown> | undefined
-            )?.content;
-            if (typeof delta === "string" && delta) yield delta;
-          } catch { /* skip malformed chunks */ }
-        }
-      }
+      yield* emitStream(resp.body, "chat");
       return; // success — don't try next provider
     } catch (e) {
+      if (emittedText) resetText();
       errors.push(`${p.name || model}: ${String(e)}`);
     }
   }
@@ -1082,6 +1074,7 @@ serve(async (req: Request) => {
       body = {
         ...body,
         ...resolved,
+        ...resolveWorkflowResultContext(savedWorkflowNodeData),
         agentProviders: resolved.agentProviders as LlmProvider[] | undefined,
       };
     } catch (error) {
@@ -1185,6 +1178,21 @@ serve(async (req: Request) => {
     ].join("\n");
   };
 
+  // Runs use authoritative saved settings; tests use the unsaved node request.
+  const workflowContextMode = body.workflowId && body.nodeId
+    ? body.resultContextMode ?? activeAgent?.resultContextMode ?? "full"
+    : "full";
+  const workflowChunkSize = body.resultContextMode
+    ? body.resultChunkSize
+    : activeAgent?.resultChunkSize;
+  const formatWorkflowDataContext = (label: string, value: unknown): string => {
+    if (workflowContextMode !== "chunked" || isChunkedResultPayload(value)) {
+      return isChunkedResultPayload(value) ? formatChunkedResultContext(value) : formatDataContext(label, value);
+    }
+    return formatChunkedResultContext(buildChunkedResultPayload(value, workflowChunkSize))
+      .replace("## Result data (chunked)", `## ${label} (chunked)`);
+  };
+
   let contextBlock: string | null = null;
   if (body.result !== undefined) {
     if (isDocContextPayload(body.result)) {
@@ -1193,7 +1201,7 @@ serve(async (req: Request) => {
       if (body.result.result !== undefined) {
         parts.push(`\n---${isChunkedResultPayload(body.result.result)
           ? formatChunkedResultContext(body.result.result)
-          : formatDataContext("Result data", body.result.result)}`);
+          : formatWorkflowDataContext("Result data", body.result.result)}`);
       }
 
       if (body.result.docText) {
@@ -1215,11 +1223,11 @@ serve(async (req: Request) => {
       // No document context — full result JSON only
       contextBlock = `\n---${isChunkedResultPayload(body.result)
         ? formatChunkedResultContext(body.result)
-        : formatDataContext("Result data", body.result)}`;
+        : formatWorkflowDataContext("Result data", body.result)}`;
     }
   }
   if (body.inputData !== undefined && body.inputData !== null) {
-    const inputBlock = formatDataContext("Current node input", body.inputData);
+    const inputBlock = formatWorkflowDataContext("Current node input", body.inputData);
     contextBlock = `${contextBlock ?? "\n---"}${inputBlock}`;
   }
 
@@ -1354,7 +1362,7 @@ serve(async (req: Request) => {
         // Without MCP tools, stream once. The previous implementation first made
         // a discarded non-streaming call and then repeated it as a stream.
         if (allTools.length === 0) {
-          for await (const token of streamLlm(providers, loopMessages, attachments)) {
+          for await (const token of streamLlm(providers, loopMessages, attachments, () => send({ type: "reset" }))) {
             send({ type: "token", content: token });
           }
           completed = true;
@@ -1372,7 +1380,7 @@ serve(async (req: Request) => {
           // No tool calls — final text response, stream it
           if (!message.tool_calls || message.tool_calls.length === 0) {
             if (attachments.length > 0) {
-              for await (const token of streamLlm(providers, loopMessages, attachments)) {
+              for await (const token of streamLlm(providers, loopMessages, attachments, () => send({ type: "reset" }))) {
                 send({ type: "token", content: token });
               }
             } else {

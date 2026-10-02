@@ -1,3 +1,4 @@
+import { buildChunkedResultPayload } from "../../../supabase/functions/chat-with-result/resultContext";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink, GripVertical, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,7 +37,7 @@ interface ChatMessageData {
 }
 
 interface SSEEvent {
-  type: "token" | "tool_call" | "tool_result" | "output_type" | "done" | "error";
+  type: "token" | "reset" | "tool_call" | "tool_result" | "output_type" | "done" | "error";
   content?: string;
   name?: string;
   displayName?: string;
@@ -127,7 +128,6 @@ const getChatPanelPosition = (
 
 const uid = () => Math.random().toString(36).slice(2);
 type AgentInputSource = "result" | "document" | "user_upload";
-const RESULT_CHUNK_SIZE_DEFAULT = 12000;
 
 const normalizeAgentInputSources = (agent: LlmAgentInfo | null, freeChat: boolean): AgentInputSource[] => {
   if (freeChat) return ["result", "document", "user_upload"];
@@ -143,77 +143,6 @@ const normalizeAgentInputSources = (agent: LlmAgentInfo | null, freeChat: boolea
     default:
       return ["result", "document", "user_upload"];
   }
-};
-
-const serializeResultData = (value: unknown): { text: string; format: "json" | "text" } => {
-  if (typeof value === "string") return { text: value, format: "text" };
-  const serialized = JSON.stringify(value, null, 2);
-  return { text: serialized === undefined ? String(value) : serialized, format: "json" };
-};
-
-const findResultNodes = (value: unknown): unknown[] => {
-  if (!value || typeof value !== "object") return [];
-  const root = value as Record<string, unknown>;
-  if (Array.isArray(root.nodes)) return root.nodes;
-  const data = root.data;
-  if (data && typeof data === "object" && Array.isArray((data as Record<string, unknown>).nodes)) {
-    return (data as Record<string, unknown>).nodes as unknown[];
-  }
-  const result = root.result;
-  if (result && typeof result === "object" && Array.isArray((result as Record<string, unknown>).nodes)) {
-    return (result as Record<string, unknown>).nodes as unknown[];
-  }
-  return [];
-};
-
-const buildChunkedResultPayload = (value: unknown, requestedChunkSize?: number) => {
-  const { text, format } = serializeResultData(value);
-  const chunkSize = Math.min(Math.max(Math.round(requestedChunkSize || RESULT_CHUNK_SIZE_DEFAULT), 2000), 50000);
-  const chunks: Array<{ index: number; start: number; end: number; text: string }> = [];
-  for (let start = 0; start < text.length; start += chunkSize) {
-    const end = Math.min(start + chunkSize, text.length);
-    chunks.push({ index: chunks.length + 1, start, end, text: text.slice(start, end) });
-  }
-  const nodes = findResultNodes(value);
-  const nodeIndex = nodes.map((node, index) => {
-    const record = node && typeof node === "object" ? node as Record<string, unknown> : {};
-    const label = record.label === undefined || record.label === null ? undefined : String(record.label);
-    const id = record.id === undefined || record.id === null ? undefined : String(record.id);
-    const serializedNode = JSON.stringify(node, null, 2);
-    const labelNeedle = label ? `"label": ${JSON.stringify(label)}` : "";
-    const idNeedle = id ? `"id": ${JSON.stringify(id)}` : "";
-    const position = serializedNode && text.includes(serializedNode)
-      ? text.indexOf(serializedNode)
-      : labelNeedle && text.includes(labelNeedle)
-        ? text.indexOf(labelNeedle)
-        : idNeedle && text.includes(idNeedle)
-          ? text.indexOf(idNeedle)
-          : -1;
-    const chunkIndex = position >= 0 ? Math.floor(position / chunkSize) + 1 : undefined;
-    return {
-      index,
-      oneBasedIndex: index + 1,
-      id,
-      label,
-      ...(chunkIndex ? { chunkIndex } : {}),
-    };
-  }).filter((entry) => entry.id || entry.label);
-
-  return {
-    __chunked_result_context: true,
-    manifest: {
-      format,
-      totalChars: text.length,
-      totalChunks: chunks.length,
-      chunkSize,
-      ...(nodeIndex.length > 0 ? {
-        nodeCount: nodeIndex.length,
-        nodeIndex,
-      } : {}),
-      instruction: "These chunks are ordered and together form one complete resultData payload. Use nodeIndex as the compact map of resultData nodes, labels, and chunk locations before deciding whether a node or label exists.",
-    },
-    chunks,
-  };
 };
 
 // Tags that indicate an HTML document or renderable fragment. Keep this explicit
@@ -1284,6 +1213,8 @@ const ChatDrawer = ({
               messages: [{ role: "user", content: prompt }],
               result: contextPayload,
               inputData: inlineResult,
+              resultContextMode: agentConfig.resultContextMode,
+              resultChunkSize: agentConfig.resultChunkSize,
               workflowId: workflowConfig.id,
               mode: "run",
               nodeId,
@@ -1321,6 +1252,7 @@ const ChatDrawer = ({
               let ev: SSEEvent;
               try { ev = JSON.parse(line.slice(6)) as SSEEvent; } catch { continue; }
               if (ev.type === "error") throw new Error(ev.message || "Workflow agent failed");
+              if (ev.type === "reset") text = "";
               if (ev.type === "token" && ev.content) text += ev.content;
               else if (ev.type === "tool_call" && ev.name) {
                 const toolEvent: ToolEvent = {
@@ -1763,7 +1695,10 @@ const ChatDrawer = ({
             let event: SSEEvent;
             try { event = JSON.parse(line.slice(5).trim()) as SSEEvent; } catch { continue; }
 
-            if (event.type === "token" && event.content) {
+            if (event.type === "reset") {
+              accText = "";
+              setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: "" } : m));
+            } else if (event.type === "token" && event.content) {
               accText += event.content;
               setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, content: accText } : m));
             } else if (event.type === "tool_call" && event.name) {

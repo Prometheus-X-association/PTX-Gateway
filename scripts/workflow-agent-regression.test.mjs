@@ -18,7 +18,7 @@ function loadTypescript(path) {
   return module.exports;
 }
 
-const { resolveSavedWorkflowAgent } = loadTypescript("../supabase/functions/chat-with-result/workflowAgent.ts");
+const { resolveSavedWorkflowAgent, resolveWorkflowResultContext } = loadTypescript("../supabase/functions/chat-with-result/workflowAgent.ts");
 const { executeWorkflow } = loadTypescript("../src/lib/workflowExecutor.ts");
 const { loadWorkflowForNewRun } = loadTypescript("../src/lib/workflowRun.ts");
 
@@ -134,4 +134,50 @@ test("executor stops before calling a provider when no existing agent is selecte
   const { calls, result } = await runAgent({ mode: "existing" });
   assert.equal(calls.length, 0);
   assert.match(result.results.find((step) => step.nodeId === "agent").error, /Select an existing agent/);
+});
+
+const { buildChunkedResultPayload } = loadTypescript("../supabase/functions/chat-with-result/resultContext.ts");
+
+test("workflow delivery settings reach callbacks for existing and inline agents", async () => {
+  for (const mode of ["existing", "inline"]) {
+    for (const resultContextMode of ["full", "chunked"]) {
+      const { calls } = await runAgent({ mode, agentId: "saved-agent", resultContextMode, resultChunkSize: 2000 });
+      assert.equal(calls[0][1].resultContextMode, resultContextMode);
+      assert.equal(calls[0][1].resultChunkSize, 2000);
+    }
+  }
+});
+
+test("saved workflow settings override stale requests and allow inheritance", () => {
+  const staleRequest = { resultContextMode: "chunked", resultChunkSize: 9000 };
+  assert.deepEqual({ ...staleRequest, ...resolveWorkflowResultContext({ resultContextMode: "full", resultChunkSize: 1000 }) },
+    { resultContextMode: "full", resultChunkSize: 2000 });
+  assert.deepEqual({ ...staleRequest, ...resolveWorkflowResultContext({}) },
+    { resultContextMode: undefined, resultChunkSize: undefined });
+});
+
+test("ordered chunks preserve large JSON and text completely, including the tail", () => {
+  for (const value of [{ nodes: [{ id: "a", label: "First", data: "x".repeat(45000) }, { id: "b", label: "Last" }] }, "x".repeat(45000) + "THE END"]) {
+    const payload = buildChunkedResultPayload(value, 2000);
+    const serialized = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    assert.equal(payload.chunks.map((chunk) => chunk.text).join(""), serialized);
+    assert.equal(payload.manifest.totalChars, serialized.length);
+    assert.equal(payload.manifest.totalChunks, payload.chunks.length);
+    payload.chunks.forEach((chunk, index) => {
+      assert.equal(chunk.index, index + 1);
+      assert.equal(chunk.start, index * 2000);
+      assert.equal(chunk.end, Math.min((index + 1) * 2000, serialized.length));
+    });
+    if (typeof value !== "string") {
+      const last = payload.manifest.nodeIndex.find((node) => node.id === "b");
+      assert.equal(last.label, "Last");
+      assert.ok(payload.chunks[last.chunkIndex - 1].text.includes('"Last"'));
+    }
+  }
+});
+
+test("chunk sizes are bounded and invalid values use the default", () => {
+  for (const [requested, expected] of [[1, 2000], [100000, 50000], [NaN, 12000], [Infinity, 12000], [undefined, 12000]]) {
+    assert.equal(buildChunkedResultPayload("hello", requested).manifest.chunkSize, expected);
+  }
 });

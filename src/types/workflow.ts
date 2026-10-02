@@ -97,6 +97,10 @@ export interface AgentNodeData {
   useUploadedDocument?: boolean;
   /** Controls whether this node can see the global result dataset or only the uploaded document. */
   contextMode?: "combined" | "document_only";
+  /** Result and immediate node input delivery. Undefined inherits the saved agent, or full for inline agents. */
+  resultContextMode?: "full" | "chunked";
+  /** Characters per ordered chunk (2,000–50,000). */
+  resultChunkSize?: number;
   // ── shared ──
   promptOverride?: string;
   passPrevOutput: boolean;

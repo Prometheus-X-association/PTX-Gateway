@@ -23,7 +23,7 @@ export interface ExecutorContext {
   supabaseUrl: string;
   onAgentStep: (
     nodeId: string,
-    agentConfig: { agentId?: string; inline?: InlineAgentConfig; contextMode?: "combined" | "document_only"; includeResultData: boolean; includeDocument: boolean; documentDelivery?: "automatic" | "text" | "native_file" },
+    agentConfig: { resultContextMode?: "full" | "chunked"; resultChunkSize?: number; agentId?: string; inline?: InlineAgentConfig; contextMode?: "combined" | "document_only"; includeResultData: boolean; includeDocument: boolean; documentDelivery?: "automatic" | "text" | "native_file" },
     prompt: string,
     prevOutput: unknown,
   ) => Promise<string>;
@@ -400,8 +400,8 @@ export async function executeWorkflow(
                 skillIds: d.skillIds ?? [],
                 providerIds: d.providerIds ?? [],
                 agentProviders: d.agentProviders ?? [],
-              }, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery }
-            : { agentId: d.agentId, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery };
+              }, resultContextMode: d.resultContextMode, resultChunkSize: d.resultChunkSize, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery }
+            : { agentId: d.agentId, resultContextMode: d.resultContextMode, resultChunkSize: d.resultChunkSize, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery };
         const agentOutput = await ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null);
         // Preserve structured responses as actual objects/arrays so downstream
         // nodes and edge data paths can address fields deterministically.

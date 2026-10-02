@@ -260,6 +260,7 @@ ${generationPrompt.trim()}`,
           if (!line.startsWith("data:")) continue;
           try {
             const event = JSON.parse(line.slice(5).trim()) as { type?: string; content?: string; message?: string };
+            if (event.type === "reset") accumulated = "";
             if (event.type === "token" && event.content) accumulated += event.content;
             if (event.type === "error") throw new Error(event.message || "Skill generation failed");
           } catch (error) {
