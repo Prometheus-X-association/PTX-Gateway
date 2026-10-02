@@ -4,6 +4,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { resolveProviders, resolveAgentProviders } from "./providers.ts";
 import { resolveSavedWorkflowAgent, resolveWorkflowResultContext } from "./workflowAgent.ts";
 import { assertProviderSuccess, readProviderStream } from "./providerStream.ts";
+import { runRequiredWebSearch } from "./webSearch.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -92,6 +93,7 @@ interface McpToolBinding {
 }
 
 interface LlmAgent {
+  webSearch?: { allowedDomains: string[]; resultPolicy?: "lightcast" };
   id?: string;
   name?: string;
   systemPrompt?: string;
@@ -1322,9 +1324,15 @@ serve(async (req: Request) => {
         let activeOutputType = fallbackOutputType;
         let completed = false;
 
+        if (activeAgent?.webSearch) {
+          send({ type: "status", message: "Searching public webpages…" });
+          sendText(await runRequiredWebSearch(providers, history, activeAgent.webSearch));
+          completed = true;
+        }
+
         // Without MCP tools, stream once. The previous implementation first made
         // a discarded non-streaming call and then repeated it as a stream.
-        if (allTools.length === 0) {
+        if (!completed && allTools.length === 0) {
           for await (const token of streamLlm(providers, loopMessages, attachments, () => send({ type: "reset" }))) {
             send({ type: "token", content: token });
           }

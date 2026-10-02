@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentSkill, AgentSkillInputField, AgentSkillInputType, AgentSkillOutputType, AgentSkillReference } from "@/types/agentSkill";
-import { createDocumentBasedSkillDescriptionTemplate, createSkillsFrameworkDescriptionTemplate, createSkillsFrameworkMapperTemplate, serializeAgentSkillMarkdown } from "@/types/agentSkill";
+import { createDocumentBasedSkillDescriptionTemplate, createEscoSkillDescriptionLookupTemplate, createSkillsFrameworkDescriptionTemplate, createSkillsFrameworkMapperTemplate, ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID, serializeAgentSkillMarkdown } from "@/types/agentSkill";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -154,6 +154,12 @@ const AGENT_SKILL_TEMPLATES: Array<{
   description: string;
   create: () => AgentSkill;
 }> = [
+  {
+    id: ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID,
+    name: "ESCO Skill Description Lookup",
+    description: "Match a skill name and context to ESCO and return the exact official description.",
+    create: createEscoSkillDescriptionLookupTemplate,
+  },
   {
     id: "skills-framework-mapper",
     name: "Skills Framework Mapper",

@@ -40,6 +40,7 @@ export interface LlmProviderConfig {
 }
 
 export interface LlmAgentConfig {
+  webSearch?: { allowedDomains: string[]; resultPolicy?: "lightcast" };
   id: string;
   name: string;
   description: string;

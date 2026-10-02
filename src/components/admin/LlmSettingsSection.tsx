@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import lightcastSkillDescriptionPrompt from "@/data/agentSkillTemplates/lightcast-skill-description-agent.md?raw";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -68,6 +70,7 @@ interface LlmAgent {
   name: string;
   description: string;
   systemPrompt: string;
+  webSearch?: { allowedDomains: string[]; resultPolicy?: "lightcast" };
   expectedOutput: "auto" | "text" | "json" | "html" | "mixed";
   fallbackOutput: "text" | "json" | "html" | "mixed";
   outputInstructions: string;
@@ -209,6 +212,21 @@ const createDocumentBasedSkillDescriptionAgent = (): LlmAgent => ({
   inputSources: ["document", "user_upload"],
   defaultPrompts: ["Act as HR expert, generate the document-based description for the selected skill."],
   enabled: true, ragSources: "document", ragMode: "auto", ragTopK: 20,
+  resultContextMode: "full", resultChunkSize: 12000,
+});
+
+const createLightcastSkillDescriptionAgent = (): LlmAgent => ({
+  id: "lightcast-skill-description-agent",
+  name: "Web Search — Standard Skill Description",
+  description: "Retrieve exact official descriptions from public Lightcast taxonomy pages using OpenAI web search.",
+  systemPrompt: lightcastSkillDescriptionPrompt.trim(),
+  webSearch: { allowedDomains: ["lightcast.io"], resultPolicy: "lightcast" },
+  expectedOutput: "json", fallbackOutput: "json",
+  outputInstructions: "Return only JSON with skillLabel, matchedSkill, framework, skillId, description, source, and status. Return not_found with null match fields when the official page or description cannot be reliably retrieved.",
+  mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [], skillIds: [],
+  targetResources: [], inputSources: ["result"],
+  defaultPrompts: ['Find the official Lightcast description for {"skillLabel":"project management"}.'],
+  enabled: true, ragSources: "none", ragMode: "none", ragTopK: 20,
   resultContextMode: "full", resultChunkSize: 12000,
 });
 
@@ -505,6 +523,9 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       name: String(a.name || "Agent"),
       description: String(a.description || ""),
       systemPrompt: String(a.systemPrompt || ""),
+      webSearch: a.webSearch && Array.isArray(a.webSearch.allowedDomains)
+        ? { allowedDomains: a.webSearch.allowedDomains.map(String), ...(a.webSearch.resultPolicy === "lightcast" ? { resultPolicy: "lightcast" as const } : {}) }
+        : undefined,
       expectedOutput: (() => {
         const raw = String(a.expectedOutput ?? "text");
         if (raw === "echarts") return "html";
@@ -1264,6 +1285,12 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
       </div>
 
       {/* Name + Description */}
+      {agent.webSearch && (
+        <div className="rounded-md border bg-background p-3 text-xs">
+          <p className="font-semibold">OpenAI web search required</p>
+          <p className="mt-1 text-muted-foreground">Search domains: {agent.webSearch.allowedDomains.join(", ")}. Assign an OpenAI provider with a model that supports web search and opening pages. Every run searches before answering.</p>
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="space-y-1">
           <Label className="text-xs">Agent Name</Label>
@@ -2333,10 +2360,37 @@ const LlmSettingsSection = () => {
             </div>
           )}
 
-          <Button type="button" variant="outline" size="sm" className="gap-2"
-            onClick={() => patchLlm({ agents: [...llm.agents, emptyAgent()] })}>
-            <Plus className="h-4 w-4" /> Add Agent
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="sm" className="gap-2">
+                <Plus className="h-4 w-4" /> Add Agent <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-96 w-80 overflow-y-auto">
+              <DropdownMenuItem onSelect={() => {
+                const agent = emptyAgent();
+                patchLlm({ agents: [...llm.agents, agent] });
+                setEditingAgentId(agent.id);
+              }}>
+                Blank agent
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Available templates</DropdownMenuLabel>
+              {[...DEFAULT_AGENTS, createLightcastSkillDescriptionAgent()].map((template) => (
+                <DropdownMenuItem key={template.id} className="block cursor-pointer p-3" onSelect={() => {
+                  const draft = structuredClone(template);
+                  const agent = llm.agents.some((item) => item.id === draft.id)
+                    ? { ...draft, id: uid(), name: `${draft.name} (copy)` }
+                    : draft;
+                  patchLlm({ agents: [...llm.agents, agent] });
+                  setEditingAgentId(agent.id);
+                }}>
+                  <p className="text-xs font-semibold">{template.name}</p>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">{template.description}</p>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
             </div>
 
             <Separator />

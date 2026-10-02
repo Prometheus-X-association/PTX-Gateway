@@ -1,3 +1,5 @@
+import escoSkillDescriptionLookupInstructions from "@/data/agentSkillTemplates/esco-skill-description-lookup.md?raw";
+
 export type AgentSkillInputType = "text" | "number" | "boolean" | "json" | "document";
 export type AgentSkillOutputType = "text" | "json" | "html" | "mixed";
 
@@ -134,6 +136,26 @@ export const createSkillsFrameworkMapperTemplate = (): AgentSkill => ({
     description: "Rules loaded when assigning mapping relations.",
     content: "Internal skills remain canonical. Label-only matches cannot receive high confidence. Validated mappings must not be overwritten automatically. Every mapping must retain evidence and framework version.",
   }],
+  enabled: true,
+  version: 1,
+});
+
+export const ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID = "esco-skill-description-lookup";
+
+export const createEscoSkillDescriptionLookupTemplate = (): AgentSkill => ({
+  id: ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID,
+  name: "ESCO Skill Description Lookup",
+  description: "Find the ESCO skill concept matching a skill name and optional context, then return its official description exactly as provided by the ESCO API.",
+  objective: "Use context only to select the most relevant ESCO skill concept and return the official description in the requested language without rewriting or generating text.",
+  instructions: escoSkillDescriptionLookupInstructions.trim(),
+  requiredInputs: [
+    { id: "input-skill-name", key: "skillName", label: "Skill name", type: "text", description: "Skill name to URL-encode and search for in the ESCO API.", required: true },
+    { id: "input-context", key: "context", label: "Context", type: "text", description: "Optional document, job profile, task, industry, or user context used only to disambiguate skill concepts.", required: false },
+    { id: "input-language", key: "language", label: "Language", type: "text", description: "Requested ESCO description language code. Defaults to en; fall back to English, then another available description without translating.", required: false, defaultValue: "en" },
+  ],
+  outputTemplate: "{description[language].literal}",
+  outputType: "text",
+  references: [],
   enabled: true,
   version: 1,
 });
