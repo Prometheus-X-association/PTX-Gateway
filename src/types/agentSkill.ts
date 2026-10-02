@@ -1,4 +1,5 @@
 import escoSkillDescriptionLookupInstructions from "@/data/agentSkillTemplates/esco-skill-description-lookup.md?raw";
+import sfiaSkillDescriptionAgentInstructions from "@/data/agentSkillTemplates/sfia-skill-description-agent.md?raw";
 
 export type AgentSkillInputType = "text" | "number" | "boolean" | "json" | "document";
 export type AgentSkillOutputType = "text" | "json" | "html" | "mixed";
@@ -141,6 +142,42 @@ export const createSkillsFrameworkMapperTemplate = (): AgentSkill => ({
 });
 
 export const ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID = "esco-skill-description-lookup";
+
+export const SFIA_SKILL_DESCRIPTION_AGENT_SKILL_ID = "sfia-skill-description-agent";
+
+export const createSfiaSkillDescriptionAgentTemplate = (): AgentSkill => ({
+  id: SFIA_SKILL_DESCRIPTION_AGENT_SKILL_ID,
+  name: "SFIA Skill Description Agent",
+  description: "Retrieve the official SFIA overall or responsibility-level description for a skill label from sfia-online.org. Use context only to select the matching skill; never generate a definition or substitute another framework.",
+  objective: "Return structured JSON containing the exact published SFIA description, verified skill code, available responsibility levels, and official source URL. Default to SFIA 9.",
+  instructions: sfiaSkillDescriptionAgentInstructions.trim(),
+  requiredInputs: [
+    { id: "input-skill-label", key: "skillLabel", label: "Skill label", type: "text", description: "Required skill name, for example project management. Preserve its meaning and prefer an exact SFIA title match.", required: true },
+    { id: "input-context", key: "context", label: "Context", type: "text", description: "Optional document, job profile, role, task, industry, or user text used only to resolve skill matching; never rewrite the description.", required: false },
+    { id: "input-level", key: "level", label: "Responsibility level", type: "number", description: "Optional integer from 1 to 7. Check that the matched skill defines this level; otherwise return level_not_available. Omit to retrieve the overall description.", required: false },
+    { id: "input-framework-version", key: "frameworkVersion", label: "SFIA version", type: "text", description: "Requested SFIA framework version. Use SFIA 9 unless explicitly requested otherwise.", required: false, defaultValue: "9" },
+  ],
+  outputTemplate: JSON.stringify({
+    skillLabel: "<user input>",
+    matchedSkill: "<official SFIA skill title or null>",
+    framework: "SFIA",
+    frameworkVersion: "9",
+    skillCode: "<official SFIA code or null>",
+    description: "<exact official overall or requested-level description; null when unavailable>",
+    availableLevels: [],
+    source: "<verified official SFIA skill URL or null>",
+    status: "found | not_found | level_not_available",
+  }, null, 2),
+  outputType: "json",
+  references: [{
+    id: "reference-sfia-web-retrieval",
+    name: "SFIA web retrieval and output contract",
+    description: "Required source access and rules for the JSON response.",
+    content: "Requires web search and webpage-reading capability restricted to sfia-online.org. Retrieve the official skill page for the requested framework version before answering; do not use search snippets, third-party sites, or model memory as description sources. Return JSON only. Include the numeric level field only when a level was requested. For not_found, return null for matchedSkill, skillCode, description, and source. For level_not_available, retain verified skill metadata and availableLevels but return description: null. Copy published descriptions exactly; context is for selection only. The template does not itself enable web tools; configure them on the consuming agent.",
+  }],
+  enabled: true,
+  version: 1,
+});
 
 export const createEscoSkillDescriptionLookupTemplate = (): AgentSkill => ({
   id: ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID,

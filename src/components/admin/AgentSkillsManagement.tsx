@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentSkill, AgentSkillInputField, AgentSkillInputType, AgentSkillOutputType, AgentSkillReference } from "@/types/agentSkill";
-import { createDocumentBasedSkillDescriptionTemplate, createEscoSkillDescriptionLookupTemplate, createSkillsFrameworkDescriptionTemplate, createSkillsFrameworkMapperTemplate, ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID, serializeAgentSkillMarkdown } from "@/types/agentSkill";
+import { createDocumentBasedSkillDescriptionTemplate, createEscoSkillDescriptionLookupTemplate, createSfiaSkillDescriptionAgentTemplate, createSkillsFrameworkDescriptionTemplate, createSkillsFrameworkMapperTemplate, ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID, SFIA_SKILL_DESCRIPTION_AGENT_SKILL_ID, serializeAgentSkillMarkdown } from "@/types/agentSkill";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -154,6 +154,12 @@ const AGENT_SKILL_TEMPLATES: Array<{
   description: string;
   create: () => AgentSkill;
 }> = [
+  {
+    id: SFIA_SKILL_DESCRIPTION_AGENT_SKILL_ID,
+    name: "SFIA Skill Description Agent",
+    description: "Retrieve exact official SFIA descriptions, including optional responsibility levels. Defaults to SFIA 9.",
+    create: createSfiaSkillDescriptionAgentTemplate,
+  },
   {
     id: ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID,
     name: "ESCO Skill Description Lookup",
@@ -312,7 +318,7 @@ ${generationPrompt.trim()}`,
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs">
-                <RotateCcw className="h-3.5 w-3.5" />Add example
+                <RotateCcw className="h-3.5 w-3.5" />Add template
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-80">
@@ -354,7 +360,7 @@ ${generationPrompt.trim()}`,
 
       <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="space-y-2 rounded-lg border bg-background p-2">
-          {skills.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No skills configured. Add a skill or load the example.</p>}
+          {skills.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No skills configured. Create a skill or add a template.</p>}
           {skills.map((item) => (
             <button key={item.id} type="button" onClick={() => setEditingId(item.id)}
               className={`w-full rounded-md border p-3 text-left transition-colors ${editingId === item.id ? "border-primary/50 bg-primary/5" : "border-transparent hover:bg-muted/60"}`}>
@@ -391,13 +397,13 @@ ${generationPrompt.trim()}`,
             <div className="space-y-1"><Label className="text-xs">Operational instructions</Label><Textarea className="min-h-[160px] font-mono text-xs" value={skill.instructions} placeholder="1. Validate input…\n2. Apply domain rules…\n3. Return the required output…" onChange={(e) => update({ ...skill, instructions: e.target.value })} /></div>
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between"><div><Label className="text-xs">Required information</Label><p className="text-[10px] text-muted-foreground">Extend the skill contract with typed input fields.</p></div><Button type="button" variant="outline" size="sm" className="gap-1 text-xs" onClick={() => update({ ...skill, requiredInputs: [...skill.requiredInputs, emptyInput()] })}><Plus className="h-3 w-3" />Field</Button></div>
+              <div className="flex items-center justify-between"><div><Label className="text-xs">Input fields</Label><p className="text-[10px] text-muted-foreground">Define required and optional inputs, usage guidance, and defaults. Input keys are case-sensitive.</p></div><Button type="button" variant="outline" size="sm" className="gap-1 text-xs" onClick={() => update({ ...skill, requiredInputs: [...skill.requiredInputs, emptyInput()] })}><Plus className="h-3 w-3" />Field</Button></div>
               {skill.requiredInputs.map((field, index) => {
                 const updateField = (patch: Partial<AgentSkillInputField>) => update({ ...skill, requiredInputs: skill.requiredInputs.map((item, i) => i === index ? { ...item, ...patch } : item) });
                 return <div key={field.id} className="space-y-2 rounded-lg border bg-muted/20 p-3">
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_130px_auto_auto]">
                     <Input className="h-8 text-xs" value={field.label} placeholder="Display label" onChange={(e) => updateField({ label: e.target.value })} />
-                    <Input className="h-8 font-mono text-xs" value={field.key} placeholder="field_key" onChange={(e) => updateField({ key: e.target.value.replace(/\s+/g, "_").toLowerCase() })} />
+                    <Input className="h-8 font-mono text-xs" value={field.key} placeholder="field_key" onChange={(e) => updateField({ key: e.target.value.replace(/\s+/g, "_") })} />
                     <Select value={field.type} onValueChange={(type: AgentSkillInputType) => updateField({ type })}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent>{["text", "number", "boolean", "json", "document"].map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent></Select>
                     <label className="flex items-center gap-2 text-xs"><Switch checked={field.required} onCheckedChange={(required) => updateField({ required })} />Required</label>
                     <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => update({ ...skill, requiredInputs: skill.requiredInputs.filter((_, i) => i !== index) })}><X className="h-3.5 w-3.5" /></Button>
@@ -423,6 +429,10 @@ ${generationPrompt.trim()}`,
                 </div>;
               })}
             </div>
+            <details className="rounded-lg border p-3">
+              <summary className="cursor-pointer text-xs font-medium">Preview SKILL.md</summary>
+              <pre className="mt-3 max-h-[480px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 font-mono text-xs">{serializeAgentSkillMarkdown(skill)}</pre>
+            </details>
           </div>
         ) : (
           <div className="flex min-h-64 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground"><Pencil className="mr-2 h-4 w-4" />Select or create a skill to edit it.</div>
