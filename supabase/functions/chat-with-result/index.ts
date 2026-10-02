@@ -1,4 +1,4 @@
-import { buildChunkedResultPayload } from "./resultContext.ts";
+import { buildChunkedResultPayload, formatChunkedResultContext, formatUploadedDocumentContext } from "./resultContext.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { resolveProviders, resolveAgentProviders } from "./providers.ts";
@@ -1146,38 +1146,6 @@ serve(async (req: Request) => {
       : `\n## ${label} (unstructured)\n${raw}`;
   };
 
-  const formatChunkedResultContext = (payload: ChunkedResultPayload): string => {
-    const manifest = payload.manifest && typeof payload.manifest === "object" && !Array.isArray(payload.manifest)
-      ? payload.manifest
-      : {};
-    const chunks = Array.isArray(payload.chunks) ? payload.chunks : [];
-    const manifestJson = JSON.stringify({
-      ...manifest,
-      totalChunks: typeof manifest.totalChunks === "number" ? manifest.totalChunks : chunks.length,
-    }, null, 2);
-    const chunkText = chunks
-      .map((chunk, idx) => {
-        const index = typeof chunk.index === "number" ? chunk.index : idx + 1;
-        const start = typeof chunk.start === "number" ? chunk.start : undefined;
-        const end = typeof chunk.end === "number" ? chunk.end : undefined;
-        const range = start !== undefined && end !== undefined ? ` chars ${start}-${end}` : "";
-        return `### Chunk ${index}/${chunks.length}${range}\n${String(chunk.text ?? "")}`;
-      })
-      .join("\n\n");
-
-    return [
-      "\n## Result data (chunked)",
-      "The manifest describes one complete resultData payload split into ordered chunks. Treat every chunk below as part of the same dataset.",
-      "If the manifest includes nodeIndex, use it as the compact authoritative index of resultData nodes and labels. For label or index lookup questions, check nodeIndex first, then inspect the referenced chunk if more detail is needed. Do not say a label is unavailable until both nodeIndex and the ordered chunks have been checked.",
-      "",
-      "### Manifest",
-      manifestJson,
-      "",
-      "### Ordered chunks",
-      chunkText || "(no chunks supplied)",
-    ].join("\n");
-  };
-
   // Runs use authoritative saved settings; tests use the unsaved node request.
   const workflowContextMode = body.workflowId && body.nodeId
     ? body.resultContextMode ?? activeAgent?.resultContextMode ?? "full"
@@ -1189,8 +1157,7 @@ serve(async (req: Request) => {
     if (workflowContextMode !== "chunked" || isChunkedResultPayload(value)) {
       return isChunkedResultPayload(value) ? formatChunkedResultContext(value) : formatDataContext(label, value);
     }
-    return formatChunkedResultContext(buildChunkedResultPayload(value, workflowChunkSize))
-      .replace("## Result data (chunked)", `## ${label} (chunked)`);
+    return formatChunkedResultContext(buildChunkedResultPayload(value, workflowChunkSize), label);
   };
 
   let contextBlock: string | null = null;
@@ -1205,11 +1172,7 @@ serve(async (req: Request) => {
       }
 
       if (body.result.docText) {
-        // Full document text — no chunking needed
-        const clipped = body.result.docText.length > 30000
-          ? `${body.result.docText.slice(0, 30000)}\n...<truncated>`
-          : body.result.docText;
-        parts.push(`\n---\nUploaded document:\n${clipped}`);
+        parts.push(`\n---${formatUploadedDocumentContext(body.result.docText, workflowContextMode, workflowChunkSize)}`);
       } else if (body.result.docChunks && body.result.docChunks.length > 0) {
         // RAG chunks for large documents
         const chunkStr = body.result.docChunks

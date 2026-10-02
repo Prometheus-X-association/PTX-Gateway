@@ -809,18 +809,18 @@ const AgentPanel = ({ node, agents, skills, globalProviders, defaultUseUploadedD
       )}
 
       <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
-        <Label className="text-xs">Result Data Context</Label>
+        <Label className="text-xs">Data / document context</Label>
         <Select value={d.resultContextMode ?? "inherit"}
           onValueChange={(value: "inherit" | "full" | "chunked") => onChange({ ...d, resultContextMode: value === "inherit" ? undefined : value })}>
           <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="inherit">{mode === "existing" ? "Inherit saved agent setting" : "Default (full result)"}</SelectItem>
-            <SelectItem value="full">Full result</SelectItem>
+            <SelectItem value="inherit">{mode === "existing" ? "Inherit saved agent setting" : "Default (full context)"}</SelectItem>
+            <SelectItem value="full">Full context</SelectItem>
             <SelectItem value="chunked">Chunk + manifest</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-[10px] text-muted-foreground">
-          Applies to result data and injected previous node input. Full result uses server size limits; Chunk + manifest sends all ordered chunks in one LLM request.
+          Applies to result data, uploaded document text, and injected previous node input. Full context uses server size limits; Chunk + manifest sends all ordered chunks in one LLM request. Native-file delivery sends the original file instead of text chunks.
         </p>
         {d.resultContextMode === "chunked" && (
           <div className="space-y-1">

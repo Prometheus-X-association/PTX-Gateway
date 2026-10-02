@@ -71,3 +71,58 @@ export const buildChunkedResultPayload = (value: unknown, requestedChunkSize?: n
   };
 };
 
+
+interface ChunkedContextPayload {
+  manifest?: Record<string, unknown>;
+  chunks?: Array<{ index?: number; start?: number; end?: number; text?: string }>;
+}
+
+export const formatChunkedResultContext = (payload: ChunkedContextPayload, label = "Result data"): string => {
+  const manifest = payload.manifest && typeof payload.manifest === "object" && !Array.isArray(payload.manifest)
+    ? payload.manifest
+    : {};
+  const chunks = Array.isArray(payload.chunks) ? payload.chunks : [];
+  const manifestJson = JSON.stringify({
+    ...manifest,
+    totalChunks: typeof manifest.totalChunks === "number" ? manifest.totalChunks : chunks.length,
+  }, null, 2);
+  const chunkText = chunks
+    .map((chunk, idx) => {
+      const index = typeof chunk.index === "number" ? chunk.index : idx + 1;
+      const start = typeof chunk.start === "number" ? chunk.start : undefined;
+      const end = typeof chunk.end === "number" ? chunk.end : undefined;
+      const range = start !== undefined && end !== undefined ? ` chars ${start}-${end}` : "";
+      return `### Chunk ${index}/${chunks.length}${range}\n${String(chunk.text ?? "")}`;
+    })
+    .join("\n\n");
+
+  return [
+    `\n## ${label} (chunked)`,
+    label === "Uploaded document"
+    ? "The manifest describes one complete uploaded document split into ordered chunks. Read the chunks in order as one document; chunk boundaries may fall within a sentence or word."
+    : "The manifest describes one complete resultData payload split into ordered chunks. Treat every chunk below as part of the same dataset.",
+    "If the manifest includes nodeIndex, use it as the compact authoritative index of resultData nodes and labels. For label or index lookup questions, check nodeIndex first, then inspect the referenced chunk if more detail is needed. Do not say a label is unavailable until both nodeIndex and the ordered chunks have been checked.",
+    "",
+    "### Manifest",
+    manifestJson,
+    "",
+    "### Ordered chunks",
+    chunkText || "(no chunks supplied)",
+  ].join("\n");
+};
+
+
+/** Preserve ordinary document limits unless the workflow opts into complete ordered chunks. */
+export const formatUploadedDocumentContext = (
+  docText: string,
+  mode: "full" | "chunked",
+  chunkSize?: number,
+): string => {
+  if (mode === "chunked") {
+    const payload = buildChunkedResultPayload(docText, chunkSize);
+    payload.manifest.instruction = "These chunks are ordered and together form one complete uploaded document. Use all chunks as the document source; preserve exact wording for evidence and quotations.";
+    return formatChunkedResultContext(payload, "Uploaded document");
+  }
+  const clipped = docText.length > 30000 ? `${docText.slice(0, 30000)}\n...<truncated>` : docText;
+  return `\nUploaded document:\n${clipped}`;
+};

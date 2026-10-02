@@ -136,7 +136,7 @@ test("executor stops before calling a provider when no existing agent is selecte
   assert.match(result.results.find((step) => step.nodeId === "agent").error, /Select an existing agent/);
 });
 
-const { buildChunkedResultPayload } = loadTypescript("../supabase/functions/chat-with-result/resultContext.ts");
+const { buildChunkedResultPayload, formatUploadedDocumentContext } = loadTypescript("../supabase/functions/chat-with-result/resultContext.ts");
 
 test("workflow delivery settings reach callbacks for existing and inline agents", async () => {
   for (const mode of ["existing", "inline"]) {
@@ -180,4 +180,23 @@ test("chunk sizes are bounded and invalid values use the default", () => {
   for (const [requested, expected] of [[1, 2000], [100000, 50000], [NaN, 12000], [Infinity, 12000], [undefined, 12000]]) {
     assert.equal(buildChunkedResultPayload("hello", requested).manifest.chunkSize, expected);
   }
+});
+
+test("uploaded documents in chunked mode preserve evidence beyond the full-mode cutoff", () => {
+  const evidence = "Final evidence: München — verified at the end.";
+  const docText = "Introduction\n" + "Document passage.\n".repeat(4000) + evidence;
+  const formatted = formatUploadedDocumentContext(docText, "chunked", 2000);
+  assert.ok(formatted.includes("## Uploaded document (chunked)"));
+  assert.ok(formatted.includes("### Manifest"));
+  assert.ok(formatted.includes('"format": "text"'));
+  assert.ok(formatted.includes(`"totalChars": ${docText.length}`));
+  assert.ok(formatted.includes('"chunkSize": 2000'));
+  assert.ok(formatted.includes(evidence));
+  assert.ok(!formatted.includes("<truncated>"));
+  const chunks = [...formatted.matchAll(/### Chunk \d+\/\d+ chars \d+-\d+\n([\s\S]*?)(?=\n\n### Chunk |$)/g)].map((match) => match[1]);
+  assert.equal(chunks.join(""), docText);
+  const full = formatUploadedDocumentContext(docText, "full", 2000);
+  assert.ok(full.includes("<truncated>"));
+  assert.ok(!full.includes(evidence));
+  assert.equal(formatUploadedDocumentContext("Short document.", "full"), "\nUploaded document:\nShort document.");
 });
