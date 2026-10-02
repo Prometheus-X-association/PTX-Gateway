@@ -37,6 +37,8 @@ export interface ExecutorContext {
   startFromEdge?: WorkflowEdge;
   /** Outputs from earlier debug steps, used when starting from a selected node. */
   initialNodeOutputs?: Record<string, unknown>;
+  /** Test/debug runs can provide the selected node input directly. */
+  startInput?: unknown;
   resume?: {
     waiting: WorkflowWaitingState;
     answer: string;
@@ -203,8 +205,11 @@ export async function executeWorkflow(
     // When called via a specific edge (including back-edges), use that edge's source output.
     // When called as the first node (trigger), prevOutput is null.
     const sourceOutput = fromEdge ? (outputByNodeId.get(fromEdge.source) ?? null) : null;
+    const hasDirectStartInput = !fromEdge && !ctx.resume && ctx.startNodeId === nodeId && "startInput" in ctx;
     const prevOutput = fromEdge
       ? selectDataPath(sourceOutput, fromEdge.dataPath)
+      : hasDirectStartInput
+        ? ctx.startInput
       : ctx.resume?.waiting.nodeId === nodeId
         ? ctx.resume.waiting.input
         : null;

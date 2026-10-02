@@ -31,7 +31,10 @@ import {
 import type { WorkflowConfig } from "@/types/workflow";
 import type { AgentSkill } from "@/types/agentSkill";
 import {
+  DOCUMENT_BASED_SKILL_DESCRIPTION_SKILL_ID,
   SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID,
+  createDocumentBasedSkillDescriptionTemplate,
+  createSkillsFrameworkDescriptionTemplate,
   createSkillsFrameworkMapperTemplate,
 } from "@/types/agentSkill";
 import { toast } from "sonner";
@@ -99,6 +102,10 @@ const BUILT_IN_WORKFLOW_TEMPLATE_IDS = new Set([
 ]);
 
 const SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID = "skills-framework-description-agent";
+const DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_ID = "document-based-skill-description-agent";
+
+const DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_PROMPT =
+  "Act as HR expert, generate the document-based description for the selected skill. Use the assigned Document-Based Skill Description playbook with { skill, selectedSkillInput, evidenceSource: uploaded_document_only } and the uploaded document. Use only uploaded-document evidence sentences. Return only valid JSON with skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, and evidence.";
 
 const FRAMEWORK_DESCRIPTION_AGENT_PROMPT =
   "You generate framework-aligned skill descriptions from an accepted skill refinement context. Use the assigned Skills Framework Description playbook whenever framework description generation is requested. Return only valid JSON with framework, description, available, and note.";
@@ -184,6 +191,23 @@ const createSkillsFrameworkDescriptionAgent = (): LlmAgent => ({
   defaultPrompts: [],
   enabled: true, ragSources: "none", ragMode: "none", ragTopK: 20,
   resultContextMode: "chunked", resultChunkSize: 2000,
+});
+
+const createDocumentBasedSkillDescriptionAgent = (): LlmAgent => ({
+  id: DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_ID,
+  name: "Document-Based Skill Description Agent",
+  description: "Generates selected-skill descriptions from uploaded-document evidence sentences",
+  systemPrompt: DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_PROMPT,
+  expectedOutput: "auto",
+  fallbackOutput: "json",
+  outputInstructions: OUTPUT_OPTIONS.find((o) => o.value === "json")!.defaultInstructions,
+  mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+  skillIds: [DOCUMENT_BASED_SKILL_DESCRIPTION_SKILL_ID],
+  targetResources: [],
+  inputSources: ["document", "user_upload"],
+  defaultPrompts: ["Act as HR expert, generate the document-based description for the selected skill."],
+  enabled: true, ragSources: "document", ragMode: "auto", ragTopK: 20,
+  resultContextMode: "full", resultChunkSize: 12000,
 });
 
 // ─── Output type options (must be before DEFAULT_AGENTS) ──────────────────────
@@ -332,6 +356,7 @@ const DEFAULT_AGENTS: LlmAgent[] = [
     resultContextMode: "full", resultChunkSize: 12000,
   },
   createSkillsFrameworkDescriptionAgent(),
+  createDocumentBasedSkillDescriptionAgent(),
 ];
 
 const DEFAULT_CONFIG: LlmInsightsConfig = {
@@ -339,7 +364,11 @@ const DEFAULT_CONFIG: LlmInsightsConfig = {
   providers: [],
   mcpServers: [],
   agents: DEFAULT_AGENTS,
-  skills: [createSkillsFrameworkMapperTemplate()],
+  skills: [
+    createSkillsFrameworkMapperTemplate(),
+    createDocumentBasedSkillDescriptionTemplate(),
+    createSkillsFrameworkDescriptionTemplate(),
+  ],
   predefinedPrompts: [],
   workflows: [],
 };
@@ -392,12 +421,24 @@ const ensureBuiltInSkills = (skills: AgentSkill[]): AgentSkill[] => {
   if (!next.some((skill) => skill.id === "skills-framework-mapper")) {
     next.push(createSkillsFrameworkMapperTemplate());
   }
+  if (!next.some((skill) => skill.id === "document-based-skill-description")) {
+    next.push(createDocumentBasedSkillDescriptionTemplate());
+  }
+  if (!next.some((skill) => skill.id === SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID)) {
+    next.push(createSkillsFrameworkDescriptionTemplate());
+  }
   return next;
 };
 
 const ensureBuiltInAgents = (agents: LlmAgent[]): LlmAgent[] => {
-  if (agents.some((agent) => agent.id === SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID)) return agents;
-  return [...agents, createSkillsFrameworkDescriptionAgent()];
+  const next = [...agents];
+  if (!next.some((agent) => agent.id === SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID)) {
+    next.push(createSkillsFrameworkDescriptionAgent());
+  }
+  if (!next.some((agent) => agent.id === DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_ID)) {
+    next.push(createDocumentBasedSkillDescriptionAgent());
+  }
+  return next;
 };
 
 const emptyProvider = (): LlmProvider => ({
@@ -572,7 +613,11 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         enabled: skill.enabled !== false,
         version: typeof skill.version === "number" && skill.version > 0 ? skill.version : 1,
       }))
-    : [createSkillsFrameworkMapperTemplate()];
+    : [
+        createSkillsFrameworkMapperTemplate(),
+        createDocumentBasedSkillDescriptionTemplate(),
+        createSkillsFrameworkDescriptionTemplate(),
+      ];
 
   // Workflows — migrate from old single `workflow` field if present, then use array
   let workflows: WorkflowConfig[] = [];

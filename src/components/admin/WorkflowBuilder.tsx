@@ -226,6 +226,19 @@ const compactWorkflowValue = (value: unknown): unknown => {
   return serialized.length > 6_000 ? `${serialized.slice(0, 6_000)}\n...<truncated>` : value;
 };
 
+const parseTestValue = (
+  value: string,
+  mode: "json" | "text",
+  label: string,
+): { ok: true; value: unknown } | { ok: false; error: string } => {
+  if (mode === "text") return { ok: true, value };
+  try {
+    return { ok: true, value: JSON.parse(value) as unknown };
+  } catch (error) {
+    return { ok: false, error: `Invalid ${label} JSON: ${error instanceof Error ? error.message : String(error)}` };
+  }
+};
+
 const pickDataPath = (value: unknown, path: string): unknown => {
   const normalized = path.trim().replace(/^\$\.?/, "");
   if (!normalized) return value;
@@ -2397,7 +2410,7 @@ return {
             inlineFallbackOutputType: "json",
             useUploadedDocument: true,
             contextMode: "document_only",
-            inlineSystemPrompt: `You write concise skill descriptions using only the provided source file evidence.
+            inlineSystemPrompt: `Act as an HR expert. Generate the document-based description for the selected skill using only the provided source file evidence.
 Return ONLY valid JSON with:
 {
   "skillLabel": string,
@@ -2418,7 +2431,7 @@ Rules:
 - If evidence is weak, put that caution in evidence, not in documentBasedDescription.
 - Do not invent document evidence.`,
             passPrevOutput: true,
-            promptOverride: `Generate the document-based description for the selected skill.
+            promptOverride: `Act as HR expert, generate the document-based description for the selected skill.
 
 Selected skill only:
 {{prevOutput}}`,
@@ -4004,6 +4017,9 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const popupDragRef = useRef<WorkflowPopupDragState | null>(null);
   const [testInputMode, setTestInputMode] = useState<"json" | "text">("json");
   const [testInput, setTestInput] = useState('{\n  "example": "value"\n}');
+  const [useNodeTestInput, setUseNodeTestInput] = useState(false);
+  const [nodeTestInputMode, setNodeTestInputMode] = useState<"json" | "text">("json");
+  const [nodeTestInput, setNodeTestInput] = useState('{\n  "previous": "value"\n}');
   const [testExampleId, setTestExampleId] = useState("custom");
   const [isLoadingTestExample, setIsLoadingTestExample] = useState(false);
   const [testInputGenerationPrompt, setTestInputGenerationPrompt] = useState("");
@@ -5042,17 +5058,22 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
 
   const runWorkflowTest = async ({ mode = "workflow", nodeId, resumeWaiting, resumeAnswer = "" }: { mode?: WorkflowTestRunMode; nodeId?: string; resumeWaiting?: WorkflowWaitingState; resumeAnswer?: string } = {}) => {
     if (isTesting) return;
-    let resultData: unknown = testInput;
-    if (testInputMode === "json") {
-      try {
-        resultData = JSON.parse(testInput);
-      } catch (error) {
-        setTestError(`Invalid test JSON: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
+    const parsedResultData = parseTestValue(testInput, testInputMode, "test");
+    if (!parsedResultData.ok) {
+      setTestError(parsedResultData.error);
+      return;
     }
+    const resultData = parsedResultData.value;
     const documentText = testDocumentText.trim() || (testInputMode === "text" ? testInput : null);
     const selectedTestNode = mode === "node" && nodeId ? nodes.find((node) => node.id === nodeId) : null;
+    const shouldUseManualNodeInput = !resumeWaiting && mode === "node" && selectedTestNode?.type !== "trigger" && useNodeTestInput;
+    const parsedNodeInput = shouldUseManualNodeInput
+      ? parseTestValue(nodeTestInput, nodeTestInputMode, "node input")
+      : null;
+    if (parsedNodeInput && !parsedNodeInput.ok) {
+      setTestError(parsedNodeInput.error);
+      return;
+    }
     const priorNodeOutputs = Object.fromEntries(Object.entries(testRuns)
       .filter(([, run]) => run.status === "success" && run.output !== undefined)
       .map(([id, run]) => [id, run.output]));
@@ -5065,7 +5086,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
       setTestError("Select a node before running a single-node test.");
       return;
     }
-    if (mode === "node" && selectedTestNode?.type !== "trigger" && !incomingEdge) {
+    if (mode === "node" && selectedTestNode?.type !== "trigger" && !incomingEdge && !shouldUseManualNodeInput) {
       setTestError(`No previous-node output is available for "${String(selectedTestNode?.data.label || selectedTestNode?.id)}". Run the connected previous node first.`);
       setTestStopReason("Single-node test was not started.");
       return;
@@ -5100,7 +5121,8 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
         signal: controller.signal,
         stopOnError: true,
         startNodeId: !resumeWaiting && mode === "node" ? selectedTestNode?.id : undefined,
-        startFromEdge: !resumeWaiting && mode === "node" ? incomingEdge as WorkflowEdge | undefined : undefined,
+        startFromEdge: !resumeWaiting && mode === "node" && !shouldUseManualNodeInput ? incomingEdge as WorkflowEdge | undefined : undefined,
+        startInput: shouldUseManualNodeInput && parsedNodeInput?.ok ? parsedNodeInput.value : undefined,
         initialNodeOutputs: mode === "node" ? priorNodeOutputs : undefined,
         stopAfterNodeId: mode === "node" ? (resumeWaiting?.nodeId ?? selectedTestNode?.id) : undefined,
         resume: resumeWaiting ? { waiting: resumeWaiting, answer: resumeAnswer } : undefined,
@@ -6575,26 +6597,57 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 <button type="button" onClick={() => setSelectedNodeId(null)}><X className="h-4 w-4 text-muted-foreground hover:text-foreground" /></button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
-                <div className="mb-3 flex items-center gap-2 rounded-lg border bg-muted/20 p-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 gap-1.5 text-xs"
-                    disabled={isTesting}
-                    onClick={() => {
-                      setShowTestPanel(true);
-                      setShowWorkflowGenerator(false);
-                      setShowExamples(false);
-                      void runWorkflowTest({ mode: "node", nodeId: selectedNode.id });
-                    }}
-                  >
-                    {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
-                    Run this node
-                  </Button>
-                  <span className="text-[10px] leading-relaxed text-muted-foreground">
-                    Runs only this node using available previous-node output, then stops. Use the top Test workflow button for a full run.
-                  </span>
+                <div className="mb-3 space-y-2 rounded-lg border bg-muted/20 p-2">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 text-xs"
+                      disabled={isTesting}
+                      onClick={() => {
+                        setShowTestPanel(true);
+                        setShowWorkflowGenerator(false);
+                        setShowExamples(false);
+                        void runWorkflowTest({ mode: "node", nodeId: selectedNode.id });
+                      }}
+                    >
+                      {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                      Run this node
+                    </Button>
+                    <span className="text-[10px] leading-relaxed text-muted-foreground">
+                      Runs only this node, then stops. Use prior output or provide input below.
+                    </span>
+                  </div>
+                  {selectedNode.type !== "trigger" && (
+                    <div className="space-y-2 rounded-md border bg-background/70 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <Label className="text-[10px]">Manual node input</Label>
+                          <p className="text-[9px] leading-relaxed text-muted-foreground">Use this instead of running a connected previous node.</p>
+                        </div>
+                        <Switch checked={useNodeTestInput} onCheckedChange={setUseNodeTestInput} disabled={isTesting} />
+                      </div>
+                      {useNodeTestInput && (
+                        <div className="space-y-2">
+                          <Select value={nodeTestInputMode} onValueChange={(value: "json" | "text") => setNodeTestInputMode(value)} disabled={isTesting}>
+                            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="json">JSON</SelectItem>
+                              <SelectItem value="text">Text</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Textarea
+                            className="min-h-[110px] font-mono text-[10px]"
+                            disabled={isTesting}
+                            value={nodeTestInput}
+                            onChange={(event) => setNodeTestInput(event.target.value)}
+                            placeholder={nodeTestInputMode === "json" ? '{ "previous": "value" }' : "Paste the input this node should receive"}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 {selectedNode.type === "trigger" && <TriggerPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "document_context" && <DocumentContextPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}

@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentSkill, AgentSkillInputField, AgentSkillInputType, AgentSkillOutputType, AgentSkillReference } from "@/types/agentSkill";
-import { createSkillsFrameworkDescriptionTemplate, createSkillsFrameworkMapperTemplate, serializeAgentSkillMarkdown } from "@/types/agentSkill";
+import { createDocumentBasedSkillDescriptionTemplate, createSkillsFrameworkDescriptionTemplate, createSkillsFrameworkMapperTemplate, serializeAgentSkillMarkdown } from "@/types/agentSkill";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -165,6 +165,12 @@ const AGENT_SKILL_TEMPLATES: Array<{
     name: "Skills Framework Description",
     description: "Retrieve verified public framework descriptions for selected skill concepts.",
     create: createSkillsFrameworkDescriptionTemplate,
+  },
+  {
+    id: "document-based-skill-description",
+    name: "Document-Based Skill Description",
+    description: "Generate selected-skill descriptions from uploaded-document evidence only.",
+    create: createDocumentBasedSkillDescriptionTemplate,
   },
 ];
 

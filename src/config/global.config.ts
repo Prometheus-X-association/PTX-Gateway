@@ -2,7 +2,10 @@
 // Controls admin/debug mode and application-wide settings
 import type { AgentSkill } from "@/types/agentSkill";
 import {
+  DOCUMENT_BASED_SKILL_DESCRIPTION_SKILL_ID,
   SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID,
+  createDocumentBasedSkillDescriptionTemplate,
+  createSkillsFrameworkDescriptionTemplate,
   createSkillsFrameworkMapperTemplate,
 } from "@/types/agentSkill";
 
@@ -19,6 +22,10 @@ const SWITCHABLE_CHART_SYSTEM_PROMPT =
   "Analyze the JSON data and return JSON only. Required keys: summary (string), insights (string[]), visualization (object). Choose the best visualization type from: 'bar'|'line'|'area'|'scatter'|'pie'|'radial'|'treemap'|'network'|'map'. Provide the matching data structure: data[] for cartesian/pie/radial types, nodes[]+links[] for network, hierarchy object for treemap, data[] with lat/lng fields for map. Keep labels concise and aggregate long-tail items as 'Other'. The user can switch to another compatible chart type in the UI after generation.";
 
 const SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID = "skills-framework-description-agent";
+const DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_ID = "document-based-skill-description-agent";
+
+const DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_SYSTEM_PROMPT =
+  "Act as HR expert, generate the document-based description for the selected skill. Use the assigned Document-Based Skill Description playbook with { skill, selectedSkillInput, evidenceSource: uploaded_document_only } and the uploaded document. Use only uploaded-document evidence sentences. Return only valid JSON with skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, and evidence.";
 
 const FRAMEWORK_DESCRIPTION_AGENT_SYSTEM_PROMPT =
   "You generate framework-aligned skill descriptions from an accepted skill refinement context. Use the assigned Skills Framework Description playbook whenever framework description generation is requested. Return only valid JSON with framework, description, available, and note.";
@@ -197,6 +204,23 @@ export const globalConfig: GlobalConfig = {
           enabled: true,
         },
         {
+          id: DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_ID,
+          name: "Document-Based Skill Description Agent",
+          description: "Generates selected-skill descriptions from uploaded-document evidence sentences",
+          systemPrompt: DOCUMENT_BASED_SKILL_DESCRIPTION_AGENT_SYSTEM_PROMPT,
+          expectedOutput: "auto",
+          fallbackOutput: "json",
+          outputInstructions:
+            "Return ONLY valid JSON. No markdown, no code fences, no text before or after the JSON object.",
+          mcpServerIds: [], mcpToolFilter: {}, providerIds: [], agentProviders: [],
+          skillIds: [DOCUMENT_BASED_SKILL_DESCRIPTION_SKILL_ID],
+          inputSources: ["document", "user_upload"],
+          resultContextMode: "full",
+          resultChunkSize: 12000,
+          defaultPrompts: ["Act as HR expert, generate the document-based description for the selected skill."],
+          enabled: true,
+        },
+        {
           id: SKILLS_FRAMEWORK_DESCRIPTION_AGENT_ID,
           name: "Skills Framework Description Agent",
           description: "Generates JSON framework descriptions for the interactive skill refinement workflow",
@@ -213,7 +237,11 @@ export const globalConfig: GlobalConfig = {
           enabled: true,
         },
       ],
-      skills: [createSkillsFrameworkMapperTemplate()],
+      skills: [
+        createSkillsFrameworkMapperTemplate(),
+        createDocumentBasedSkillDescriptionTemplate(),
+        createSkillsFrameworkDescriptionTemplate(),
+      ],
     },
     maxFileSizeMB: 50,
     maxFilesCount: 10,

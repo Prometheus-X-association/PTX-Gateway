@@ -140,6 +140,63 @@ export const createSkillsFrameworkMapperTemplate = (): AgentSkill => ({
 
 export const SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID = "skills-framework-description";
 
+export const DOCUMENT_BASED_SKILL_DESCRIPTION_SKILL_ID = "document-based-skill-description";
+
+export const createDocumentBasedSkillDescriptionTemplate = (): AgentSkill => ({
+  id: DOCUMENT_BASED_SKILL_DESCRIPTION_SKILL_ID,
+  name: "Document-Based Skill Description",
+  description: "Generate an HR-ready description for one selected skill using only evidence sentences from the uploaded document.",
+  objective: "Produce a concise, traceable skill description for the selected skill, grounded only in uploaded-document evidence and returned as structured JSON.",
+  instructions: [
+    "Act as an HR expert.",
+    "Use only the selected skill passed in prevOutput and the uploaded document. Treat evidenceSource as uploaded_document_only.",
+    "Identify the selected skill label from skill.label, skill.display, skill.name, selectedSkillInput, or the closest equivalent field in the provided skill object.",
+    "Read the uploaded document for sentences or self-contained bullets that clearly support the selected skill.",
+    "Do not use ResultData, existing skill descriptions, graph node descriptions, previous table values, generated descriptions, or general model knowledge as evidence.",
+    "Generate documentBasedDescription as a direct capability or activity description, no longer than 4000 characters.",
+    "Keep documentBasedDescription importable: do not include rationale, confidence wording, source-quality comments, citations, or phrases such as \"based on the document\", \"the document indicates\", \"it suggests\", or \"the evidence shows\".",
+    "Extract domain, toolsOrMachines, and tasksOrActivities only when supported by uploaded-document evidence; otherwise return an empty string or empty array.",
+    "Copy evidence as exact source-document sentences or self-contained bullets. Do not invent or paraphrase evidence.",
+    "If evidence is weak or limited, keep documentBasedDescription direct and place any caution in evidence as a short note after the exact supporting sentence.",
+    "Return only valid JSON matching the output template. Do not include markdown, code fences, or text before or after the JSON object.",
+  ].map((step, index) => `${index + 1}. ${step}`).join("\n"),
+  requiredInputs: [
+    { id: "input-skill", key: "skill", label: "Selected skill", type: "json", description: "Selected skill object from the previous workflow step.", required: true },
+    { id: "input-selected-skill-input", key: "selectedSkillInput", label: "Selected skill input", type: "text", description: "Original user-selected skill text or fallback label.", required: true },
+    { id: "input-evidence-source", key: "evidenceSource", label: "Evidence source", type: "text", description: "Must be uploaded_document_only; reject or return empty evidence for any other source.", required: true, defaultValue: "uploaded_document_only" },
+    { id: "input-uploaded-document", key: "uploadedDocument", label: "Uploaded document", type: "document", description: "Uploaded source document used as the only evidence source.", required: true },
+  ],
+  outputTemplate: JSON.stringify({
+    skillLabel: "",
+    documentBasedDescription: "",
+    domain: "",
+    toolsOrMachines: [],
+    tasksOrActivities: [],
+    evidence: [],
+  }, null, 2),
+  outputType: "json",
+  references: [{
+    id: "reference-document-evidence-policy",
+    name: "Uploaded document evidence policy",
+    description: "Rules for generating skill descriptions from uploaded-document evidence only.",
+    content: `System prompt:
+Act as HR expert, generate the document-based description for the selected skill.
+
+Selected skill only:
+{{prevOutput}}
+
+Input contract:
+{ skill, selectedSkillInput, evidenceSource: uploaded_document_only } + uploaded document
+
+Output contract:
+{ skillLabel, documentBasedDescription, domain, toolsOrMachines, tasksOrActivities, evidence }
+
+Evidence must come only from the uploaded document. The selected skill input controls which skill is described, but it is not evidence by itself. If the uploaded document does not contain supporting sentences or self-contained bullets for the selected skill, return an empty documentBasedDescription and explain the absence in evidence.`,
+  }],
+  enabled: true,
+  version: 1,
+});
+
 export const createSkillsFrameworkDescriptionTemplate = (): AgentSkill => ({
   id: SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID,
   name: "Skills Framework Description",
