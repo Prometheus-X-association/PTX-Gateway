@@ -21,6 +21,7 @@ import {
   Pencil, X, ChevronsUpDown, Info, Link2, FlaskConical,
   CheckCircle2, XCircle, ChevronRight, Wrench, Workflow, BookOpen,
 } from "lucide-react";
+import { GlobalProviderPriority } from "@/components/admin/GlobalProviderPriority";
 import { WorkflowsManagement } from "@/components/admin/WorkflowsManagement";
 import { EXAMPLE_WORKFLOWS } from "@/components/admin/WorkflowBuilder";
 import { AgentSkillsManagement } from "@/components/admin/AgentSkillsManagement";
@@ -1665,6 +1666,7 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
             <>
               <span className="font-medium text-foreground">Using global provider list</span>
               <span className="ml-1">— select providers above to restrict, or add an agent-specific one.</span>
+              <GlobalProviderPriority providers={globalProviders} />
             </>
           ) : (
             <>
@@ -1672,7 +1674,7 @@ const AgentEditPanel = ({ agent, availabilityTargets, skills, mcpServers, global
               {agent.agentProviders.length > 0 && <span>agent-specific first</span>}
               {agent.agentProviders.length > 0 && agent.providerIds.length > 0 && <span>, then </span>}
               {agent.providerIds.length > 0 && <span>{agent.providerIds.length} selected global provider(s)</span>}
-              {agent.providerIds.length === 0 && agent.agentProviders.length > 0 && <span>, no global fallback</span>}
+              {agent.providerIds.length === 0 && agent.agentProviders.length > 0 && <span>, then global providers in their current priority order</span>}
             </>
           )}
         </div>
@@ -2000,8 +2002,9 @@ const LlmSettingsSection = () => {
 
   const removeProvider = (i: number) =>
     patchLlm({ providers: llm.providers.filter((_, j) => j !== i) });
-  const moveProvider = (from: number, to: number) =>
-    patchLlm({ providers: moveItem(llm.providers, from, to) });
+  const moveProvider = async (from: number, to: number) => {
+    await persistLlmConfig({ ...llm, providers: moveItem(llm.providers, from, to) }, "Provider priority updated and saved");
+  };
 
   const removeMcp = (i: number) =>
     patchLlm({ mcpServers: llm.mcpServers.filter((_, j) => j !== i) });
@@ -2188,7 +2191,7 @@ const LlmSettingsSection = () => {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Providers are tried in priority order. Open a row to edit its connection, model, credentials, and availability.
+                Providers are tried in priority order. Edits and priority changes save immediately and apply to agents and workflow nodes using global defaults on their next request.
               </p>
               <div className="overflow-x-auto rounded-md border bg-background">
                 <div className="min-w-[820px]">
@@ -2205,15 +2208,15 @@ const LlmSettingsSection = () => {
                     <div className="px-4 py-8 text-center text-sm text-muted-foreground">No providers configured.</div>
                   ) : llm.providers.map((provider, index) => (
                     <div key={provider.id} className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_132px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
-                      <Badge variant={index === 0 ? "default" : "secondary"} className="w-fit text-[10px]">{index === 0 ? "Primary" : `#${index + 1}`}</Badge>
+                      <Badge variant={provider.enabled && llm.providers.find((item) => item.enabled)?.id === provider.id ? "default" : "secondary"} className="w-fit text-[10px]">{provider.enabled && llm.providers.find((item) => item.enabled)?.id === provider.id ? "Primary" : `#${index + 1}`}</Badge>
                       <span className="truncate text-sm font-medium" title={provider.name}>{provider.name || "Unnamed provider"}</span>
                       <span className="truncate text-xs text-muted-foreground">{provider.providerType === "openai_compatible" ? "OpenAI compatible" : provider.providerType}</span>
                       <span className="truncate font-mono text-xs text-muted-foreground" title={provider.model}>{provider.model || "Not set"}</span>
                       <span className="truncate font-mono text-xs text-muted-foreground" title={provider.apiBaseUrl}>{provider.apiBaseUrl || "Not set"}</span>
                       <Badge variant={provider.enabled ? "outline" : "secondary"} className="w-fit text-[10px]">{provider.enabled ? "Enabled" : "Off"}</Badge>
                       <div className="flex justify-end gap-1">
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider up" disabled={index === 0} onClick={() => moveProvider(index, index - 1)}><ChevronUp className="h-3.5 w-3.5" /></Button>
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider down" disabled={index === llm.providers.length - 1} onClick={() => moveProvider(index, index + 1)}><ChevronDown className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider up" disabled={isSaving || index === 0} onClick={() => moveProvider(index, index - 1)}><ChevronUp className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider down" disabled={isSaving || index === llm.providers.length - 1} onClick={() => moveProvider(index, index + 1)}><ChevronDown className="h-3.5 w-3.5" /></Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Edit provider" onClick={() => setProviderEditor({ mode: "edit", draft: { ...provider } })}><Pencil className="h-3.5 w-3.5" /></Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Delete provider" onClick={() => removeProvider(index)}><Trash2 className="h-3.5 w-3.5" /></Button>
                       </div>

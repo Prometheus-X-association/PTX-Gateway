@@ -14,6 +14,7 @@ import {
   Globe2, Send, KeyRound, FileText,
   Sparkles, Search, Download, Upload,
 } from "lucide-react";
+import { GlobalProviderPriority } from "@/components/admin/GlobalProviderPriority";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -627,6 +628,7 @@ const InlineProviderPanel = ({ data, globalProviders, onChange }: { data: AgentN
           {agentProviders.length + providerIds.length === 0 ? "Uses global default" : `${agentProviders.length + providerIds.length} selected`}
         </span>
       </div>
+      {providerIds.length === 0 && <GlobalProviderPriority providers={globalProviders} />}
       {agentProviders.map((provider, i) => (
         <div key={provider.id} className="space-y-2 rounded-md border bg-background p-2">
           <div className="flex items-center gap-1.5">
@@ -722,6 +724,7 @@ const AgentPanel = ({ node, agents, skills, globalProviders, defaultUseUploadedD
         <>
           <div className="space-y-1">
             <Label className="text-xs">Agent</Label>
+            <p className="text-[11px] text-muted-foreground">Uses this agent’s latest saved provider settings. Agents using global defaults inherit provider edits and priority changes on the next request.</p>
             {agents.length === 0 ? (
               <p className="text-[11px] text-amber-600 dark:text-amber-400 border border-amber-400/30 bg-amber-500/10 rounded-lg p-2">
                 No enabled agents found. Create one in the Agents section above, or switch to "Create inline agent".
