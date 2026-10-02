@@ -1,3 +1,4 @@
+import { executionAccessAllowed } from "../_shared/browser-access.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -102,13 +103,14 @@ const sign = async (data: string, secret: string): Promise<string> => {
   return btoa(String.fromCharCode(...signature)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 };
 
-const publicOrgId = async (token: string | undefined, secret: string): Promise<string | null> => {
+const publicOrgId = async (token: string | undefined, secret: string, admin: ReturnType<typeof createClient>): Promise<string | null> => {
   if (!token) return null;
   const parts = token.split(".");
   if (parts.length !== 3 || await sign(`${parts[0]}.${parts[1]}`, secret) !== parts[2]) return null;
   try {
-    const payload = JSON.parse(fromBase64Url(parts[1])) as { typ?: string; org_id?: string; exp?: number };
+    const payload = JSON.parse(fromBase64Url(parts[1])) as { typ?: string; org_id?: string; exp?: number; access_kind?: string; browser_session_id?: string };
     if (payload.typ !== "pdc_exec" || !payload.org_id || !payload.exp || payload.exp <= Math.floor(Date.now() / 1000)) return null;
+    if (!await executionAccessAllowed(admin, { ...payload, org_id: payload.org_id })) return null;
     return payload.org_id;
   } catch { return null; }
 };
@@ -187,6 +189,7 @@ serve(async (request) => {
     const tokenSecret = Deno.env.get("PDC_EXECUTE_TOKEN_SECRET") || Deno.env.get("SUPABASE_INTERNAL_JWT_SECRET") || "super-secret-jwt-token-with-at-least-32-characters-long";
     if (!supabaseUrl || !anonKey || !serviceKey || !tokenSecret) return json({ ok: false, error: "Server is not configured." }, 500);
 
+    const admin = createClient(supabaseUrl, serviceKey);
     const requestedOrgId = request.headers.get("x-organization-id");
     const signedIn = await authenticatedUser(supabaseUrl, anonKey, request.headers.get("Authorization"));
     let orgId: string | null = null;
@@ -194,7 +197,7 @@ serve(async (request) => {
       const { data } = await signedIn.client.from("organization_members").select("organization_id").eq("organization_id", requestedOrgId).eq("user_id", signedIn.user.id).eq("status", "active").maybeSingle();
       if (data) orgId = requestedOrgId;
     }
-    if (!orgId) orgId = await publicOrgId(body.org_execution_token, tokenSecret);
+    if (!orgId) orgId = await publicOrgId(body.org_execution_token, tokenSecret, admin);
     if (!orgId) return json({ ok: false, error: "Unauthorized workflow API request." }, 401);
 
     let config: ApiConfig | undefined;
@@ -204,7 +207,6 @@ serve(async (request) => {
       if (!role) return json({ ok: false, error: "Admin role required." }, 403);
       config = body.config;
     } else {
-      const admin = createClient(supabaseUrl, serviceKey);
       const { data: row, error } = await admin.from("global_configs").select("features").eq("organization_id", orgId).maybeSingle();
       if (error || !row) return json({ ok: false, error: "Organization workflow configuration was not found." }, 404);
       const llm = object(object(row.features).llmInsights);

@@ -1,3 +1,5 @@
+import BrowserAccessGate from "@/components/auth/BrowserAccessGate";
+import { getBrowserAccessToken } from "@/lib/browserAccess";
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useRagWorker } from "@/lib/useRagWorker";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
@@ -1059,7 +1061,7 @@ const OrgGatewayContent = ({
   );
 };
 
-const OrgGateway = () => {
+const AuthorizedOrgGateway = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
@@ -1152,6 +1154,7 @@ const OrgGateway = () => {
           body: {
             action: "issue_public",
             org_slug: orgData.slug,
+            browser_access_token: getBrowserAccessToken(orgData.slug),
             ttl_seconds: 3600,
           },
         });
@@ -1386,4 +1389,9 @@ const OrgGateway = () => {
   );
 };
 
+const OrgGateway = () => {
+  const { slug } = useParams<{ slug: string }>();
+  if (!slug || isEmbeddedFrame()) return <AuthorizedOrgGateway />;
+  return <BrowserAccessGate key={slug} slug={slug}><AuthorizedOrgGateway /></BrowserAccessGate>;
+};
 export default OrgGateway;

@@ -1,3 +1,4 @@
+import { executionAccessAllowed } from "../_shared/browser-access.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -32,6 +33,8 @@ interface PdcExecuteRequest {
 }
 
 interface ExecutionTokenPayload {
+  access_kind?: string;
+  browser_session_id?: string;
   typ: string;
   org_id: string;
   org_slug?: string;
@@ -144,7 +147,8 @@ const resolveAuthenticatedOrgContext = async (
 
 const resolvePublicOrgContext = async (
   token: string | undefined,
-  executeTokenSecret: string
+  executeTokenSecret: string,
+  adminClient: ReturnType<typeof createClient>
 ): Promise<{ orgId: string; configId?: string } | null> => {
   if (!token) return null;
   const parts = token.split(".");
@@ -171,6 +175,7 @@ const resolvePublicOrgContext = async (
     return null;
   }
 
+  if (!await executionAccessAllowed(adminClient, payload)) return null;
   return { orgId: payload.org_id, configId: payload.cfg_id };
 };
 
@@ -214,6 +219,8 @@ serve(async (req) => {
     const authHeader = req.headers.get("Authorization");
     const requestedOrgId = req.headers.get("x-organization-id");
 
+    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey);
+
     let orgContext: { orgId: string; configId?: string } | null = null;
 
     if (authHeader?.startsWith("Bearer ")) {
@@ -226,7 +233,7 @@ serve(async (req) => {
     }
 
     if (!orgContext) {
-      orgContext = await resolvePublicOrgContext(org_execution_token, executeTokenSecret);
+      orgContext = await resolvePublicOrgContext(org_execution_token, executeTokenSecret, adminClient);
     }
 
     if (!orgContext) {
@@ -235,8 +242,6 @@ serve(async (req) => {
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    const adminClient = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     const [{ data: activeConfig, error: configError }, { data: secretRow }] = await Promise.all([
       adminClient

@@ -149,6 +149,8 @@ const EmbedGatewayContent = () => {
       body: {
         action: "issue_public",
         org_slug: orgSlug,
+        embed_token: embedToken,
+        parent_origin: (() => { try { return document.referrer ? new URL(document.referrer).origin : undefined; } catch { return undefined; } })(),
         ttl_seconds: 3600,
       },
     });
@@ -160,7 +162,7 @@ const EmbedGatewayContent = () => {
     setOrgExecutionToken(tokenData.token as string);
     const expiresAt = typeof tokenData.expires_at === "string" ? Date.parse(tokenData.expires_at) : NaN;
     setOrgExecutionTokenExpiresAt(Number.isFinite(expiresAt) ? expiresAt : Date.now() + 3600 * 1000);
-  }, [orgSlug]);
+  }, [orgSlug, embedToken]);
 
   useEffect(() => {
     return () => {

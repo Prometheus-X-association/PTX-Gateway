@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.workflow-api-request]
 verify_jwt = false
+
+[functions.browser-access]
+verify_jwt = false

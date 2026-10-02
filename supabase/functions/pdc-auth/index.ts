@@ -1,3 +1,4 @@
+import { validBrowserSession } from "../_shared/browser-access.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -17,6 +18,9 @@ type IssuePublicBody = {
   action: "issue_public";
   org_slug: string;
   ttl_seconds?: number;
+  browser_access_token?: string;
+  embed_token?: string;
+  parent_origin?: string;
 };
 
 type Body = IssuePublicBody;
@@ -151,7 +155,7 @@ serve(async (req) => {
 
     const { data: org, error: orgError } = await client
       .from("organizations")
-      .select("id, slug, is_active")
+      .select("id, slug, is_active, settings")
       .eq("slug", orgSlug)
       .eq("is_active", true)
       .maybeSingle();
@@ -161,6 +165,25 @@ serve(async (req) => {
         JSON.stringify({ error: "Organization not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    let browserSessionId: string | undefined;
+    let accessKind = "public";
+    let accessExpiresAt: number | undefined;
+    if (body.embed_token) {
+      const { data: embed, error: embedError } = await serviceClient.functions.invoke("embed-auth", {
+        body: { action: "validate", org_slug: orgSlug, token: body.embed_token, parent_origin: body.parent_origin },
+      });
+      if (embedError || !embed?.ok || embed.organization_id !== org.id) {
+        return new Response(JSON.stringify({ error: "Invalid embed access" }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      accessKind = "embed";
+    } else if (asRecord(org.settings).private_browser_access_enabled === true) {
+      const session = await validBrowserSession(serviceClient, org.id, body.browser_access_token);
+      if (!session) return new Response(JSON.stringify({ error: "Browser credentials required" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      browserSessionId = session.id;
+      accessExpiresAt = Math.floor(Date.parse(session.expires_at) / 1000);
+      accessKind = "browser";
     }
 
     const { data: activeConfig } = await client
@@ -178,11 +201,13 @@ serve(async (req) => {
     const gatewayFeatures = buildPublicGatewayFeatures(globalConfig?.features);
 
     const nowSeconds = Math.floor(Date.now() / 1000);
-    const expSeconds = nowSeconds + ttlSeconds;
+    const expSeconds = Math.min(nowSeconds + ttlSeconds, accessExpiresAt ?? Infinity);
 
     const token = await issueSignedToken(
       {
         typ: "pdc_exec",
+        access_kind: accessKind,
+        browser_session_id: browserSessionId,
         org_id: org.id,
         org_slug: org.slug,
         cfg_id: activeConfig?.id,

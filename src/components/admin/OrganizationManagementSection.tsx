@@ -1,3 +1,4 @@
+import BrowserAccessManagement from "./BrowserAccessManagement";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
@@ -35,6 +36,7 @@ const OrganizationManagementSection = () => {
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [isCheckingSlug, setIsCheckingSlug] = useState(false);
   const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null);
+  const [isPrivateBrowserAccessEnabled, setIsPrivateBrowserAccessEnabled] = useState(false);
   const [isPublicDiscoveryEnabled, setIsPublicDiscoveryEnabled] = useState(false);
 
   const org = user?.organization;
@@ -44,6 +46,7 @@ const OrganizationManagementSection = () => {
       setName(org.name);
       setSlug(org.slug);
       setDescription((org as any).description || "");
+      setIsPrivateBrowserAccessEnabled(org.settings?.private_browser_access_enabled === true);
       setIsPublicDiscoveryEnabled((org.settings?.public_discovery_enabled as boolean) === true);
     }
   }, [org]);
@@ -99,6 +102,7 @@ const OrganizationManagementSection = () => {
     const updatedSettings = {
       ...currentSettings,
       public_discovery_enabled: isPublicDiscoveryEnabled,
+      private_browser_access_enabled: isPrivateBrowserAccessEnabled,
     };
 
     const { error: settingsError } = await supabase
@@ -107,7 +111,7 @@ const OrganizationManagementSection = () => {
       .eq("id", org.id);
 
     if (settingsError) {
-      toast.error(settingsError.message || "Organization saved, but failed to update discovery visibility");
+      toast.error(settingsError.message || "Organization saved, but failed to update access settings");
     } else {
       await refreshAuth();
       toast.success("Organization updated successfully");
@@ -140,7 +144,8 @@ const OrganizationManagementSection = () => {
     name !== org.name ||
     slug !== org.slug ||
     description !== ((org as any).description || "") ||
-    isPublicDiscoveryEnabled !== ((org.settings?.public_discovery_enabled as boolean) === true);
+    isPublicDiscoveryEnabled !== ((org.settings?.public_discovery_enabled as boolean) === true) ||
+    isPrivateBrowserAccessEnabled !== (org.settings?.private_browser_access_enabled === true);
 
   return (
     <div className="space-y-6">
@@ -236,12 +241,24 @@ const OrganizationManagementSection = () => {
             </div>
           </div>
 
+          <div className="rounded-lg border border-border p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="private-browser-access">Private browser access only</Label>
+                <p className="text-xs text-muted-foreground mt-1">Require a managed username and password when visitors open the gateway URL directly. Embedded gateways continue to require embed tokens. Add credentials below before enabling this setting.</p>
+              </div>
+              <Switch id="private-browser-access" checked={isPrivateBrowserAccessEnabled} onCheckedChange={setIsPrivateBrowserAccessEnabled} />
+            </div>
+          </div>
+
           <Button onClick={handleSave} disabled={isSaving || !hasChanges || slugAvailable === false}>
             {isSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
             Save Changes
           </Button>
         </CardContent>
       </Card>
+
+      <BrowserAccessManagement slug={org.slug} />
 
       {/* Danger Zone */}
       <Card className="border-destructive/50">

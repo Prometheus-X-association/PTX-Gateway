@@ -1,3 +1,4 @@
+import { executionAccessAllowed } from "../_shared/browser-access.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { resolveSavedWorkflowAgent } from "./workflowAgent.ts";
@@ -180,6 +181,8 @@ interface ChatRequest {
 }
 
 interface ExecutionTokenPayload {
+  access_kind?: string;
+  browser_session_id?: string;
   typ: string;
   org_id: string;
   exp: number;
@@ -252,7 +255,8 @@ const resolveAuthenticatedOrgContext = async (
 
 const resolvePublicOrgContext = async (
   token: string | undefined,
-  secret: string
+  secret: string,
+  admin: ReturnType<typeof createClient>
 ): Promise<{ orgId: string } | null> => {
   if (!token) return null;
   try {
@@ -262,7 +266,8 @@ const resolvePublicOrgContext = async (
     if (!valid) return null;
     const decoded = JSON.parse(fromBase64Url(payload)) as ExecutionTokenPayload;
     if (decoded.typ !== "pdc_exec" || !decoded.org_id) return null;
-    if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) return null;
+    if (!decoded.exp || decoded.exp <= Math.floor(Date.now() / 1000)) return null;
+    if (!await executionAccessAllowed(admin, decoded)) return null;
     return { orgId: decoded.org_id };
   } catch {
     return null;
@@ -1063,6 +1068,7 @@ serve(async (req: Request) => {
   // Auth
   const authHeader = req.headers.get("Authorization");
   const requestedOrgId = req.headers.get("x-organization-id");
+  const admin = createClient(supabaseUrl, supabaseServiceKey);
   let orgContext: { orgId: string } | null = null;
 
   if (authHeader?.startsWith("Bearer ")) {
@@ -1071,12 +1077,11 @@ serve(async (req: Request) => {
     );
   }
   if (!orgContext) {
-    orgContext = await resolvePublicOrgContext(body.org_execution_token, executeSecret);
+    orgContext = await resolvePublicOrgContext(body.org_execution_token, executeSecret, admin);
   }
   if (!orgContext) return sendError("Unauthorized", 401);
 
   // Load config
-  const admin = createClient(supabaseUrl, supabaseServiceKey);
   const { data: gc } = await admin
     .from("global_configs")
     .select("features")
