@@ -300,11 +300,13 @@ export const useDataspaceConfig = (
         throw new Error(`Failed to fetch service chains: ${chainsError.message}`);
       }
 
-      const legacyExportApiConfigs = (allPdcData || []).flatMap((d: any) =>
-        Array.isArray(d.export_api_configs) ? d.export_api_configs : []
+      const legacyExportApiConfigs = (allPdcData || []).flatMap((d) =>
+        Array.isArray(d.export_api_configs) ? d.export_api_configs as unknown as ExportApiConfig[] : []
       );
       const resultPageExportApiConfigs = getResultPageExportApiConfigs(effectiveGlobalFeatures);
-      const exportApiConfigs = resultPageExportApiConfigs.length > 0
+      const resultPageFeatures = isRecord(effectiveGlobalFeatures) && isRecord(effectiveGlobalFeatures.resultPage)
+        ? effectiveGlobalFeatures.resultPage : {};
+      const exportApiConfigs = Array.isArray(resultPageFeatures.exportApiConfigs)
         ? resultPageExportApiConfigs
         : legacyExportApiConfigs;
       const oidcClients = getResultPageOidcClients(effectiveGlobalFeatures);

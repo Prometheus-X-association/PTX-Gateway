@@ -1189,7 +1189,8 @@ const OrgGateway = () => {
           const legacyExportConfigs = Array.isArray(pdcData.export_api_configs)
             ? (pdcData.export_api_configs as unknown as ExportApiConfig[])
             : [];
-          const exportConfigs = resultPageExportConfigs.length > 0 ? resultPageExportConfigs : legacyExportConfigs;
+          const hasResultPageExportConfigs = Array.isArray((isRecord(gatewayFeatures.resultPage) ? gatewayFeatures.resultPage : {}).exportApiConfigs);
+          const exportConfigs = hasResultPageExportConfigs ? resultPageExportConfigs : legacyExportConfigs;
           setPdcConfig({
             id: pdcData.id,
             name: pdcData.name,

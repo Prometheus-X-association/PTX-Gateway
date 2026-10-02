@@ -31,6 +31,8 @@ export interface OidcClientConfig {
 
 // Export API configuration for admin-managed endpoints
 export interface ExportApiConfig {
+  // Public gateway endpoints use server-side saved credentials.
+  server_managed?: boolean;
   id?: string;
   name: string;
   import_button_text?: string;

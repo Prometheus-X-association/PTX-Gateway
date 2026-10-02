@@ -1,8 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { resolveSavedExportApi } from "../_shared/savedExportApi.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-result-url, x-result-authorization, x-result-method',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-result-url, x-result-authorization, x-result-method, x-export-api-id, x-export-target, x-org-execution-token',
 };
 
 /**
@@ -40,9 +41,24 @@ serve(async (req) => {
 
   try {
     // Get target URL and authorization from headers
-    const resultUrl = req.headers.get('x-result-url');
-    const resultAuth = normalizeAuthorizationHeader(req.headers.get('x-result-authorization'));
-    const resultMethod = req.headers.get('x-result-method') || 'GET';
+    let resultUrl = req.headers.get('x-result-url');
+    let resultAuth = normalizeAuthorizationHeader(req.headers.get('x-result-authorization'));
+    let resultMethod = req.headers.get('x-result-method') || 'GET';
+    if (req.headers.has('x-export-api-id')) {
+      if (req.method !== 'POST') {
+        return new Response(JSON.stringify({ error: 'Export requires POST' }), { status: 405, headers: corsHeaders });
+      }
+      try {
+        const saved = await resolveSavedExportApi(req);
+        resultUrl = saved.url;
+        resultAuth = normalizeAuthorizationHeader(saved.authorization);
+        resultMethod = 'POST';
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Export unavailable' }), {
+          status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
 
     console.log('Result proxy request received:', {
       method: req.method,
@@ -94,6 +110,7 @@ serve(async (req) => {
         method: resultMethod,
         headers: proxyHeaders,
         signal: controller.signal,
+        ...(req.headers.has('x-export-api-id') ? { redirect: 'error' as const } : {}),
       };
 
       // Add body for POST requests

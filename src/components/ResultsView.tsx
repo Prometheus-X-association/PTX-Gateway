@@ -3484,6 +3484,17 @@ const ResultsView = ({
     }
   }, [buildApiRequestPreview]);
 
+  const savedExportHeaders = useCallback((config: ExportApiConfig): Record<string, string> => {
+    if (!config.id || !orgExecutionToken) throw new Error("Export session expired. Reload the gateway to continue.");
+    const target = config.target_resources?.find((value) => selectedTargetCandidates.has(value));
+    if (!target) throw new Error("Export endpoint is not connected to the selected service.");
+    return {
+      "x-export-api-id": config.id,
+      "x-export-target": target,
+      "x-org-execution-token": orgExecutionToken,
+    };
+  }, [orgExecutionToken, selectedTargetCandidates]);
+
   const handleApiExport = useCallback(async () => {
     try {
       setIsSendingToApi(true);
@@ -3501,7 +3512,9 @@ const ResultsView = ({
         : compatibleExportApiConfigs.find((config) => config.url === apiUrl);
 
       const matchedOidc = matchedConfig ? resolveOidcForConfig(matchedConfig, oidcClients) : null;
-      if (matchedOidc) {
+      if (matchedConfig?.server_managed) {
+        Object.assign(proxyHeaders, savedExportHeaders(matchedConfig));
+      } else if (matchedOidc) {
         const accessToken = await resolveExportApiAccessToken(matchedOidc);
         proxyHeaders["x-result-authorization"] = accessToken;
       } else if (apiAuthorization.trim()) {
@@ -3551,7 +3564,7 @@ const ResultsView = ({
     } finally {
       setIsSendingToApi(false);
     }
-  }, [apiAuthorization, apiUrl, buildApiRequestPreview, compatibleExportApiConfigs, selectedExportApi, oidcClients]);
+  }, [apiAuthorization, apiUrl, buildApiRequestPreview, compatibleExportApiConfigs, selectedExportApi, oidcClients, savedExportHeaders]);
 
   const handleConfirmApiExport = useCallback(async () => {
     setIsPreviewOpen(false);
@@ -3578,7 +3591,9 @@ const ResultsView = ({
         };
 
         const configOidc = resolveOidcForConfig(config, oidcClients);
-        if (configOidc) {
+        if (config.server_managed) {
+          Object.assign(proxyHeaders, savedExportHeaders(config));
+        } else if (configOidc) {
           const accessToken = await resolveExportApiAccessToken(configOidc);
           proxyHeaders["x-result-authorization"] = accessToken;
         } else if (config.authorization?.trim()) {
@@ -3629,7 +3644,7 @@ const ResultsView = ({
     } finally {
       setIsSendingToApi(false);
     }
-  }, [buildApiRequestPreviewForConfig, compatibleExportApiConfigs, oidcClients]);
+  }, [buildApiRequestPreviewForConfig, compatibleExportApiConfigs, oidcClients, savedExportHeaders]);
 
   const handleSelectExportApi = (configName: string) => {
     setSelectedExportApi(configName);

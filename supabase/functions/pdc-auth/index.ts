@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { publicExportApis } from "../_shared/publicExportApis.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -85,6 +86,9 @@ const buildPublicGatewayFeatures = (features: unknown): Record<string, unknown> 
 
   const resultPage = asRecord(source.resultPage);
   const publicResultPage: Record<string, unknown> = {};
+  if (Array.isArray(resultPage.exportApiConfigs)) {
+    publicResultPage.exportApiConfigs = publicExportApis(resultPage.exportApiConfigs);
+  }
   if (Array.isArray(resultPage.customVisualizations)) {
     publicResultPage.customVisualizations = resultPage.customVisualizations;
   }
