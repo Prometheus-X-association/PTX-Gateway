@@ -1,3 +1,5 @@
+import { authenticatedWorkerRun } from "../_shared/workflowAccess.ts";
+import { decrypt } from "../_shared/workflowSecurity.ts";
 import { buildChunkedResultPayload, formatChunkedResultContext, formatUploadedDocumentContext } from "./resultContext.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -315,7 +317,7 @@ const callLlmOnce = async (
 ): Promise<{ message: ChatMessage; providerName: string }> => {
   const errors: string[] = [];
   for (const p of providers) {
-    const apiKey = p.apiKey?.trim();
+    const apiKey = p.apiKey?.trim() ?? "";
     const model = p.model?.trim();
     const family = providerFamily(p);
     const baseUrl = (p.apiBaseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
@@ -454,7 +456,7 @@ async function* streamLlm(
 ): AsyncGenerator<string> {
   const errors: string[] = [];
   for (const p of providers) {
-    const apiKey = p.apiKey?.trim();
+    const apiKey = p.apiKey?.trim() ?? "";
     const model = p.model?.trim();
     const family = providerFamily(p);
     const baseUrl = (p.apiBaseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
@@ -1025,23 +1027,36 @@ serve(async (req: Request) => {
     }
   }
 
+  // Internal worker calls are bound to a live run lease and encrypted config snapshot.
+  const admin = createClient(supabaseUrl, supabaseServiceKey);
+  let workerSnapshot: { llm: LlmInsightsConfig } | null = null;
+  let workerOrgId: string | null = null;
+  if (req.headers.has("x-workflow-run-id")) {
+    try {
+      const run = await authenticatedWorkerRun(req, admin);
+      if (!run || body.workflowId !== run.workflow_id) return sendError("Workflow mismatch", 403);
+      workerOrgId = run.organization_id;
+      workerSnapshot = await decrypt(run.snapshot.ciphertext);
+    } catch (error) { return sendError(error instanceof Error ? error.message : "Worker authentication failed", 401); }
+  }
+
   // Auth
   const authHeader = req.headers.get("Authorization");
   const requestedOrgId = req.headers.get("x-organization-id");
   let orgContext: { orgId: string } | null = null;
 
-  if (authHeader?.startsWith("Bearer ")) {
+  if (!workerOrgId && authHeader?.startsWith("Bearer ")) {
     orgContext = await resolveAuthenticatedOrgContext(
       supabaseUrl, supabaseAnonKey, authHeader, requestedOrgId
     );
   }
+  if (workerOrgId) orgContext = { orgId: workerOrgId };
   if (!orgContext) {
     orgContext = await resolvePublicOrgContext(body.org_execution_token, executeSecret);
   }
   if (!orgContext) return sendError("Unauthorized", 401);
 
   // Load config
-  const admin = createClient(supabaseUrl, supabaseServiceKey);
   const { data: gc } = await admin
     .from("global_configs")
     .select("features")
@@ -1051,7 +1066,7 @@ serve(async (req: Request) => {
   if (!gc) return sendError("Global config not found", 400);
 
   const features = toObject(gc.features);
-  const llmConfig = toObject(features.llmInsights) as LlmInsightsConfig;
+  const llmConfig = workerSnapshot?.llm ?? toObject(features.llmInsights) as LlmInsightsConfig;
 
   if (!llmConfig.enabled) return sendError("LLM insights are disabled", 400);
 

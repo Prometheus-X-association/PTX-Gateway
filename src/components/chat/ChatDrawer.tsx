@@ -1,3 +1,4 @@
+import { executeBackendWorkflow, backendRunStorageKey, storedBackendRun } from "@/lib/workflowBackend";
 import { buildChunkedResultPayload } from "../../../supabase/functions/chat-with-result/resultContext";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink, GripVertical, BookOpen } from "lucide-react";
@@ -89,6 +90,7 @@ interface ChatDrawerProps {
   onDocUploaded?: (text: string) => void;
   /** Named workflow configs — active ones can be selected and run from the chat */
   workflows?: WorkflowConfig[];
+  targetResourceId?: string | null;
   loadLatestWorkflow: (workflowId: string) => Promise<WorkflowConfig>;
 }
 
@@ -843,6 +845,7 @@ const ChatDrawer = ({
   onDocUploaded,
   workflows = [],
   loadLatestWorkflow,
+  targetResourceId,
 }: ChatDrawerProps) => {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [input, setInput] = useState("");
@@ -1125,7 +1128,10 @@ const ChatDrawer = ({
         .slice(-10)
         .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
         .join("\n\n");
-      const { results, aborted, error: workflowError, waiting } = await executeWorkflow(workflow, {
+      const executor = workflowConfig.execution?.backendEnabled
+        ? (_graph: AgentWorkflow, context: Parameters<typeof executeWorkflow>[1]) => executeBackendWorkflow(workflowConfig, context, localAttachments, targetResourceId, processSessionId)
+        : executeWorkflow;
+      const { results, aborted, error: workflowError, waiting } = await executor(workflow, {
         workflowId: workflowConfig.id,
         resultData,
         docText,
@@ -1432,7 +1438,7 @@ const ChatDrawer = ({
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange]);
+  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange, targetResourceId, processSessionId]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -1526,6 +1532,13 @@ const ChatDrawer = ({
       }, 80);
     }
   }, [isOpen]);
+
+  // Reconnect to a backend run after a refresh, including paused runs.
+  useEffect(() => {
+    if (!isOpen || workflowRunningRef.current || pausedWorkflow) return;
+    const pending = workflows.find((workflow) => workflow.execution?.backendEnabled && storedBackendRun(backendRunStorageKey(organizationId, workflow.id, processSessionId)));
+    if (pending) void runWorkflow(undefined, pending);
+  }, [isOpen, workflows, organizationId, processSessionId, runWorkflow, pausedWorkflow]);
 
   // Auto-run on_load workflows when chat first opens (only once per session)
   const autoFiredRef = useRef<Set<string>>(new Set());

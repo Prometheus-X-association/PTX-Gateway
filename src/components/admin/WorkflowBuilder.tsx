@@ -3966,6 +3966,7 @@ return '<div style="font-family:system-ui;padding:12px;border:1px solid #bbf7d0;
 // ─── Main component ───────────────────────────────────────────────────────────
 
 interface WorkflowBuilderProps {
+  traceNodeId?: string | null;
   workflowId: string;
   workflow: AgentWorkflow;
   agents: AgentStub[];
@@ -4002,7 +4003,7 @@ const WORKFLOW_TEST_EXAMPLES = [
   },
 ] as const;
 
-export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalProviders, organizationId, onChange }: WorkflowBuilderProps) => {
+export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, skills, globalProviders, organizationId, onChange }: WorkflowBuilderProps) => {
   const wf = workflow.nodes.length === 0 ? defaultWorkflow() : workflow;
 
   const [nodes, setNodes] = useState<Node[]>(wf.nodes as Node[]);
@@ -4070,6 +4071,12 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
   const [testReply, setTestReply] = useState("");
   const [workflowActionsScrollable, setWorkflowActionsScrollable] = useState(false);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
+  useEffect(() => {
+    if (!traceNodeId) return;
+    setSelectedNodeId(traceNodeId);
+    const node = nodes.find((item) => item.id === traceNodeId);
+    if (node) void reactFlowInstance?.fitView({ nodes: [{ id: node.id }], padding: 0.6, duration: 300 });
+  }, [traceNodeId, reactFlowInstance]);
   const propertiesResizeOrigin = useRef({ pointerX: 0, width: 320 });
   const testAbortRef = useRef<AbortController | null>(null);
   const exampleAbortRef = useRef<AbortController | null>(null);
@@ -4262,6 +4269,7 @@ export const WorkflowBuilder = ({ workflowId, workflow, agents, skills, globalPr
     ...(node.type === "output" ? {
       style: { ...node.style, background: "transparent", border: "none", padding: 0, width: "auto" },
     } : {}),
+    ...(traceNodeId === node.id ? { style: { ...node.style, ...(node.type === "output" ? { background: "transparent", border: "none", padding: 0, width: "auto" } : {}), boxShadow: "0 0 0 4px #f59e0b", borderRadius: 12 } } : {}),
     data: { ...node.data, __testStatus: testRuns[node.id]?.status, __waitingForInput: testWaiting?.nodeId === node.id },
   }));
   const canvasEdges = edges.map((edge) => {

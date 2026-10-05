@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.aws
+.codex
+.agents
+.claude
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+supabase/.temp
+supabase/.branches

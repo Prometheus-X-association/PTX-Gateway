@@ -36,7 +36,7 @@ export function resolveSavedWorkflowAgent(node: Record<string, unknown>): AgentO
 }
 
 /** Saved node delivery settings override request settings in production runs. */
-export function resolveWorkflowResultContext(node: Record<string, unknown>) {
+export function resolveWorkflowResultContext(node: Record<string, unknown>): { resultContextMode: "full" | "chunked" | undefined; resultChunkSize: number | undefined } {
   return {
     resultContextMode: node.resultContextMode === "full" || node.resultContextMode === "chunked"
       ? node.resultContextMode : undefined,

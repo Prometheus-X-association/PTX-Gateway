@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { WorkflowOperationsPanel } from "@/components/admin/WorkflowOperationsPanel";
 import { WorkflowBuilder } from "@/components/admin/WorkflowBuilder";
 import {
   ChatAvailabilitySelector,
@@ -79,7 +80,9 @@ interface EditPanelProps {
   onClose: () => void;
 }
 
-const EditPanel = ({ config, availabilityTargets, agents, skills, globalProviders, organizationId, onChange, onClose }: EditPanelProps) => (
+const EditPanel = ({ config, availabilityTargets, agents, skills, globalProviders, organizationId, onChange, onClose }: EditPanelProps) => {
+  const [traceNodeId, setTraceNodeId] = useState<string | null>(null);
+  return (
   <div className="border-t bg-muted/20 p-4 space-y-4">
     <div className="flex items-center justify-between">
       <h4 className="text-sm font-semibold">Edit: {config.name}</h4>
@@ -114,8 +117,11 @@ const EditPanel = ({ config, availabilityTargets, agents, skills, globalProvider
       onChange={(targetResources) => onChange({ ...config, targetResources })}
     />
 
+    <WorkflowOperationsPanel config={config} organizationId={organizationId} onChange={onChange} onFocusNode={setTraceNodeId} />
+
     <WorkflowBuilder
       workflowId={config.id}
+      traceNodeId={traceNodeId}
       workflow={config.graph}
       agents={agents}
       skills={skills}
@@ -125,6 +131,7 @@ const EditPanel = ({ config, availabilityTargets, agents, skills, globalProvider
     />
   </div>
 );
+};
 
 // ─── Table row ────────────────────────────────────────────────────────────────
 
@@ -296,6 +303,7 @@ export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, sk
       id: uid(),
       name: `${src.name} (copy)`,
       enabled: false,
+      execution: { ...src.execution, apiEnabled: false, webhookEnabled: false },
       createdAt: new Date().toISOString(),
     };
     const next = [...workflows];

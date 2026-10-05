@@ -9,7 +9,8 @@ function loadTypescript(path) {
   });
   const module = { exports: {} };
   const require = (name) => {
-    if (name === "@/lib/workflowSandbox") return {
+    if (name === "../../supabase/functions/_shared/workflowExecutor.ts") return loadTypescript("../supabase/functions/_shared/workflowExecutor.ts");
+    if (name === "./workflowSandbox" || name === "@/lib/workflowSandbox") return {
       executeSandboxedJavascript: () => { throw new Error("Agent-only tests must not invoke the browser sandbox"); },
     };
     throw new Error(`Unexpected runtime dependency: ${name}`);

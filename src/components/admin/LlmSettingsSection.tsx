@@ -650,6 +650,7 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       name: String(w.name || "Workflow"),
       description: String(w.description || ""),
       enabled: w.enabled !== false,
+      execution: w.execution && typeof w.execution === "object" ? w.execution : undefined,
       targetResources: Array.isArray(w.targetResources) ? w.targetResources.map(String) : [],
       graph: (w.graph && typeof w.graph === "object") ? w.graph : { nodes: [], edges: [] },
       createdAt: String(w.createdAt || new Date().toISOString()),
