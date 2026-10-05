@@ -16,6 +16,20 @@ Deno.test("same workflow runs concurrently with independent node outputs", async
   const results = await Promise.all(Array.from({ length: 8 }, (_, id) => executeWorkflow(graph, context({ id, value: id }))));
   results.forEach((result, id) => { assert(!result.error); same(result.results.at(-1)?.output, { id, doubled: id * 2 }); });
 });
+Deno.test("request inputs reach trigger, plugins and agents without a result page or document", async () => {
+  const graph: AgentWorkflow = { nodes: [node("start", "trigger", { inputSources: ["input"] }), node("plugin", "plugin", { code: "return { current: input.input, legacy: input.result };" }),
+    node("agent", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true }), node("end", "output", { renderAs: "json" })], edges: [edge("start", "plugin"), edge("plugin", "agent"), edge("agent", "end")] };
+  for (const value of [{ event: "created" }, [1, 2], "text", 0, false, null]) {
+    let agentSawInput = false;
+    const result = await executeWorkflow(graph, { ...context(value), triggerSource: "webhook", onAgentStep: async (_id, config, _prompt, previous) => {
+      same(previous, { current: value, legacy: value }); assert(config.includeResultData); assert(!config.includeDocument); agentSawInput = true; return JSON.stringify(value);
+    } });
+    assert(!result.error && agentSawInput);
+    const trigger = result.results[0].output as Record<string, unknown>;
+    same(trigger.input, value); same(trigger.data, value); same(trigger.triggerSource, "webhook");
+    same(result.results[1].output, { current: value, legacy: value });
+  }
+});
 Deno.test("sandbox denies credentials, filesystem, network and subprocess access", async () => {
   for (const code of ['return Deno.env.get("WORKFLOW_SECRETS_KEY");', 'return Deno.readTextFile("/etc/passwd");', 'return fetch("https://example.com");', 'return new Deno.Command("sh").output();']) {
     await rejects(() => executeJavascript({ operation: "plugin", code, input: {} }), /permission|NotCapable|Requires/i);
@@ -79,4 +93,48 @@ Deno.test("graph validation rejects dangling edges and unsupported nodes", () =>
   const valid = { graph: { nodes: [node("start", "trigger"), node("end", "output")], edges: [edge("start", "end")] } };
   validateGraph(valid);
   let failed = false; try { validateGraph({ graph: { ...valid.graph, edges: [edge("start", "missing")] } }); } catch { failed = true; } assert(failed);
+});
+
+Deno.test("notification deliveries are signed, retry bounded, and stale questions are skipped", async () => {
+  const { deliverNotification } = await import("./interactions.ts");
+  Deno.env.set("WORKFLOW_SECRETS_KEY", btoa("a".repeat(32)));
+  Deno.env.set("WORKFLOW_INTERNAL_SECRET", "test-internal-secret");
+  Deno.env.set("WORKFLOW_INTERACTION_BASE_URL", "https://gateway.example");
+  const secret = "s".repeat(32);
+  const run = { id: crypto.randomUUID(), organization_id: "org-a", workflow_id: "approval", workflow_name: "Approval", status: "waiting_for_input", waiting_version: "version-a",
+    waiting_expires_at: new Date(Date.now()+3600000).toISOString(), interaction_expires_at: new Date(Date.now()+86400000).toISOString(),
+    snapshot: { ciphertext: await encrypt({ workflow: { execution: { notifications: { url: "https://receiver.example/events", secret, maxAttempts: 2 } } } }) } };
+  const job = { id: crypto.randomUUID(), organization_id: "org-a", run_id: run.id, event_type: "question", payload: { waitingVersion: "version-a", question: "Approve?" }, lease_token: "lease", attempts: 1 };
+  const patches: any[] = [];
+  const admin = { from: (table: string) => {
+    const query: any = { select: () => query, eq: () => query, maybeSingle: async () => ({ data: run }), update: (value: unknown) => { patches.push(value); return query; }, then: (resolve: any) => resolve({ error: null }) };
+    assert(["workflow_runs", "workflow_notifications"].includes(table)); return query;
+  } };
+  let delivered: any;
+  const success: typeof fetch = async (_url, options) => {
+    delivered = options;
+    const headers = new Headers(options?.headers);
+    same(headers.get("x-workflow-delivery-id"),job.id);
+    same(headers.get("x-workflow-signature"), await hmac(secret, `${headers.get("x-workflow-timestamp")}.${job.id}.${options?.body}`));
+    assert(JSON.parse(String(options?.body)).interactionUrl.startsWith("https://gateway.example/workflow/respond#token="));
+    same(options?.redirect,"manual"); return new Response(null,{status:204});
+  };
+  await deliverNotification(admin,job,success,async () => {});
+  assert(delivered); same(patches.at(-1).status,"delivered");
+  await deliverNotification(admin,job,async () => new Response(null,{status:503}),async () => {});
+  same(patches.at(-1).status,"pending"); assert(Date.parse(patches.at(-1).available_at)>Date.now());
+  await deliverNotification(admin,{...job,attempts:2},async () => new Response(null,{status:503}),async () => {});
+  same(patches.at(-1).status,"failed");
+  run.status="queued";
+  await deliverNotification(admin,job,async () => { throw new Error("Must not send a stale question"); },async () => {});
+  same(patches.at(-1).status,"skipped");
+  await deliverNotification(admin,{...job,event_type:"completed",payload:{status:"succeeded"}},async () => new Response(null,{status:204}),async () => {});
+  same(patches.at(-1).status,"delivered");
+});
+
+Deno.test("callback destinations reject local and private addresses before network access", async () => {
+  const { assertPublicUrl } = await import("../../supabase/functions/_shared/workflowHttp.ts");
+  for (const address of ["https://localhost", "https://127.0.0.1", "https://10.0.0.1", "https://169.254.169.254", "https://100.64.0.1", "https://[::1]", "https://[::ffff:127.0.0.1]", "https://[fd00::1]"]) {
+    await rejects(() => assertPublicUrl(new URL(address)), /public HTTP/);
+  }
 });

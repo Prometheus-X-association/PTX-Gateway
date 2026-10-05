@@ -12,6 +12,7 @@ import NotFound from "./pages/NotFound";
 
 // Heavy pages are lazy-loaded so the embed and other lightweight routes
 // do not pay the cost of loading the admin/dashboard/results bundles.
+const WorkflowInteractionPage = lazy(() => import("./pages/WorkflowInteractionPage"));
 const OrgGateway = lazy(() => import("./pages/OrgGateway"));
 const AdminDashboard = lazy(() => import("./components/admin/AdminDashboard"));
 const EmbedGateway = lazy(() => import("./components/embed/EmbedGateway"));
@@ -39,6 +40,7 @@ const App = () => (
               />
               <Route path="/" element={<LandingPage />} />
               <Route path="/embed" element={<EmbedGateway />} />
+              <Route path="/workflow/respond" element={<WorkflowInteractionPage />} />
               <Route
                 path="/admin"
                 element={

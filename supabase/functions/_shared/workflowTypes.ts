@@ -8,11 +8,11 @@ export interface TriggerNodeData {
   label: string;
   triggerType: "manual" | "on_load";
   /**
-   * Data made available to this workflow. `document` is the document selected
-   * during the gateway process; `user_upload` lets the result-page chat ask for
-   * a document when no gateway document is available.
+   * `input` is arbitrary request data from an API/webhook. `result` is the
+   * result-page dataset (also a legacy alias for external request data).
+   * Documents can be supplied by a request or selected/uploaded in the gateway.
    */
-  inputSources?: Array<"result" | "document" | "user_upload">;
+  inputSources?: Array<"input" | "result" | "document" | "user_upload">;
   /** Pre-written prompt shown in the chat input when this workflow is selected */
   defaultPrompt?: string;
   /** What this node produces — shown in the canvas as documentation */
@@ -51,6 +51,9 @@ export interface RetrievalNodeData {
 }
 
 export interface UserInputNodeData {
+  responseTimeoutHours?: number;
+  reminderIntervalHours?: number;
+  maxReminders?: number;
   label: string;
   question: string;
   answerKey: string;
@@ -253,7 +256,7 @@ export interface WorkflowConfig {
   targetResources?: string[];
   graph: AgentWorkflow;
   createdAt?: string;
-  execution?: { apiEnabled?: boolean; webhookEnabled?: boolean; backendEnabled?: boolean; maxConcurrentRuns?: number; timeoutSeconds?: number };
+  execution?: { apiEnabled?: boolean; webhookEnabled?: boolean; backendEnabled?: boolean; notifications?: { url?: string; secret?: string; returnUrl?: string; interactionTtlHours?: number; maxAttempts?: number } };
 }
 
 // ─── Runtime types ────────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ const encryptionKey = Buffer.alloc(32, 97);
 function snapshot(workflow) {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey, iv);
-  const body = Buffer.concat([cipher.update(JSON.stringify({ workflow, llm: { enabled: true, workflows: [workflow] } })), cipher.final(), cipher.getAuthTag()]);
+  const body = Buffer.concat([cipher.update(JSON.stringify({ workflow, llm: { enabled: false, workflows: [workflow] } })), cipher.final(), cipher.getAuthTag()]);
   return { ciphertext: `${iv.toString("base64")}.${body.toString("base64")}` };
 }
 const node = (id, type, data = {}) => ({ id, type, data: { label: id, ...data } });
@@ -17,12 +17,12 @@ const edges = (...ids) => ids.slice(1).map((target, index) => ({ id: `${ids[inde
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("worker persists concurrent runs, agent results, failures and paused continuations", { timeout: 40_000 }, async () => {
-  const runs = []; const steps = []; let claimed = 0; let maximumActive = 0;
+  const runs = []; const steps = []; let claimed = 0; let maximumActive = 0; let maintenanceCalls = 0;
   const org = randomUUID();
-  const graph = { nodes: [node("start", "trigger", { inputSources: ["result"] }), node("plugin", "plugin", { code: "return { id: input.result.id };" }), node("agent", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true }), node("end", "output", { renderAs: "json" })], edges: edges("start", "plugin", "agent", "end") };
+  const graph = { nodes: [node("start", "trigger", { inputSources: ["input"] }), node("plugin", "plugin", { code: "return { id: input.input.id };" }), node("agent", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true }), node("end", "output", { renderAs: "json" })], edges: edges("start", "plugin", "agent", "end") };
   function addRun(graph, id) {
     const workflow = { id: "shared", name: "Shared", graph };
-    const run = { id: randomUUID(), organization_id: org, workflow_id: workflow.id, snapshot: snapshot(workflow), status: "queued", timeout_seconds: 900, execution_ms: 0,
+    const run = { id: randomUUID(), organization_id: org, workflow_id: workflow.id, snapshot: snapshot(workflow), status: "queued", timeout_seconds: null, execution_ms: 0,
       input: { resultData: { id }, userMessage: "Run", docText: null, attachments: [] }, trigger_source: "api" };
     runs.push(run); return run;
   }
@@ -35,7 +35,10 @@ test("worker persists concurrent runs, agent results, failures and paused contin
       let raw = ""; for await (const chunk of request) raw += chunk;
       const body = raw ? JSON.parse(raw) : {};
       response.setHeader("Content-Type", "application/json");
+      if (url.pathname === "/rest/v1/rpc/maintain_workflow_interactions") { maintenanceCalls++; response.end("null"); return; }
+      if (url.pathname === "/rest/v1/rpc/claim_workflow_notification") { response.end("[]"); return; }
       if (url.pathname === "/rest/v1/rpc/claim_workflow_run") {
+        assert.deepEqual(body, {}, "Claims must not impose an organization or workflow cap");
         const run = runs.find((run) => run.status === "queued");
         if (run) { Object.assign(run, { status: "running", lease_token: randomUUID(), lease_expires_at: new Date(Date.now() + 60_000).toISOString(), started_at: run.started_at || new Date().toISOString() }); claimed++; }
         maximumActive = Math.max(maximumActive, runs.filter((run) => run.status === "running").length);
@@ -92,6 +95,8 @@ test("worker persists concurrent runs, agent results, failures and paused contin
     assert.ok(maximumActive > 1); assert.equal(failed.failed_node_id, "fail"); assert.match(failed.stop_reason, /Expected node failure/);
     assert.equal(steps.filter((step) => step.run_id === failed.id).at(-1).status, "failed");
     assert.equal(waiting.checkpoint.pending[0].nodeId, "ask");
+    assert.deepEqual(waiting.waiting.policy, { responseTimeoutSeconds: 172800, reminderIntervalSeconds: 43200, maxReminders: 3 });
+    assert.ok(maintenanceCalls > 0, "Background waiting maintenance must execute independently");
     Object.assign(waiting, { status: "queued", resume_answer: "yes" });
     await until(() => waiting.status === "succeeded");
     assert.equal(waiting.output.approved, true); assert.equal(claimed, 7);

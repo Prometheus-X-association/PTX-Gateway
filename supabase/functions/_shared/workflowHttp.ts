@@ -45,14 +45,15 @@ const interpolate = (template: string, context: { input: unknown; result: unknow
 const blockedHostname = (hostname: string): boolean => {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost") || host === "metadata.google.internal") return true;
-  if (host === "::1" || host === "0.0.0.0" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) return true;
+  if (host.startsWith("::ffff:") || host === "::" || (host.includes(":") && host.startsWith("ff"))) return true;
+  if (host === "::1" || host === "0.0.0.0" || host.startsWith("fe80:") || (host.includes(":") && (host.startsWith("fc") || host.startsWith("fd")))) return true;
   const match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!match) return false;
   const [a, b] = match.slice(1).map(Number);
-  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 168 || b === 0)) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
 };
 
-const assertPublicUrl = async (url: URL): Promise<void> => {
+export const assertPublicUrl = async (url: URL): Promise<void> => {
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || blockedHostname(url.hostname)) {
     throw new Error("Only public HTTP(S) API URLs without embedded credentials are allowed.");
   }

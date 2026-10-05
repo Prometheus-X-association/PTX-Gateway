@@ -69,7 +69,7 @@ export interface ExecutorContext {
 async function runPlugin(
   executeSandboxedJavascript: Sandbox,
   code: string,
-  input: { result: unknown; docText: string | null; prevOutput: unknown },
+  input: { result: unknown; input?: unknown; docText: string | null; prevOutput: unknown },
   nodeOutputs: Record<string, unknown>,
 ): Promise<unknown> {
   try {
@@ -184,7 +184,8 @@ export async function executeWorkflow(
   const triggerData = trigger.data as TriggerNodeData;
   const inputSources = triggerData.inputSources ?? ["result", "document"];
   if (inputSources.length === 0) throw new Error("Workflow trigger has no input source selected");
-  const includeResultData = inputSources.includes("result");
+  const includeRequestData = inputSources.includes("input");
+  const includeResultData = includeRequestData || inputSources.includes("result");
   const includeDocument = inputSources.includes("document") || inputSources.includes("user_upload");
 
   const results: WorkflowStepResult[] = [];
@@ -254,6 +255,7 @@ export async function executeWorkflow(
           userMessage: ctx.userMessage,
           ...(ctx.conversationHistory ? { conversationHistory: ctx.conversationHistory } : {}),
           ...(includeResultData ? { data: ctx.resultData } : {}),
+          ...(includeRequestData ? { input: ctx.resultData } : {}),
           ...(includeDocument ? { document: { available: ctx.hasDocument ?? Boolean(ctx.docText), text: ctx.docText ?? undefined } } : {}),
         };
 
@@ -439,6 +441,7 @@ export async function executeWorkflow(
         const d = node.data as PluginNodeData;
         output = await runPlugin(ctx.executeJavascript, d.code, {
           result: includeResultData ? ctx.resultData : undefined,
+          ...(includeRequestData ? { input: ctx.resultData } : {}),
           docText: includeDocument ? ctx.docText : null,
           prevOutput,
         }, Object.fromEntries(outputByNodeId));

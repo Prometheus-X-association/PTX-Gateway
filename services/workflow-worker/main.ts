@@ -2,6 +2,8 @@ import { adminClient } from "../../supabase/functions/_shared/workflowAccess.ts"
 import { collectSecrets, decrypt, hmac, redact, sanitizeOutput } from "../../supabase/functions/_shared/workflowSecurity.ts";
 import { executeWorkflow } from "../../supabase/functions/_shared/workflowExecutor.ts";
 import { runRequest } from "../../supabase/functions/_shared/workflowHttp.ts";
+import { waitPolicy } from "../../supabase/functions/_shared/workflowInteraction.ts";
+import { maintainInteractions } from "./interactions.ts";
 import { executeJavascript } from "./sandbox.ts";
 
 const admin = adminClient();
@@ -10,7 +12,6 @@ const functionsUrl = Deno.env.get("WORKFLOW_FUNCTIONS_URL") || `${Deno.env.get("
 const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
 if (!internalSecret || !anonKey || !Deno.env.get("WORKFLOW_SECRETS_KEY")) throw new Error("Configure WORKFLOW_INTERNAL_SECRET, WORKFLOW_SECRETS_KEY and SUPABASE_ANON_KEY.");
 const slots = Math.max(1, Math.min(32, Math.floor(Number(Deno.env.get("WORKFLOW_WORKER_CONCURRENCY")) || 4)));
-const orgLimit = Math.max(1, Math.min(64, Math.floor(Number(Deno.env.get("WORKFLOW_ORGANIZATION_CONCURRENCY")) || 8)));
 const active = new Set<Promise<void>>();
 let stopping = false;
 Deno.addSignalListener("SIGTERM", () => { stopping = true; });
@@ -47,8 +48,9 @@ async function executeRun(run: any) {
     } catch { leaseLost = true; abort.abort(); }
     finally { heartbeatBusy = false; }
   }, 5000);
-  const remaining = Math.max(1, run.timeout_seconds * 1000 - Number(run.execution_ms ?? 0));
-  const deadline = setTimeout(() => { timedOut = true; abort.abort(); }, remaining);
+  // Null means no whole-run deadline. Honor deadlines on already accepted legacy runs.
+  const deadline = run.timeout_seconds == null ? undefined : setTimeout(() => { timedOut = true; abort.abort(); },
+    Math.max(1, run.timeout_seconds * 1000 - Number(run.execution_ms ?? 0)));
   try {
     const { workflow, llm } = await decrypt(run.snapshot.ciphertext);
     secrets = collectSecrets(llm);
@@ -132,7 +134,7 @@ async function executeRun(run: any) {
     if (result.aborted || abort.signal.aborted) throw new DOMException("Execution interrupted", "AbortError");
     if (result.error) throw new Error(result.error);
     if (result.waiting) {
-      await patch({ status: "waiting_for_input", execution_ms: elapsed(), waiting: { ...result.waiting, question: sanitizeOutput(result.waiting.question, secrets), options: sanitizeOutput(result.waiting.options, secrets) }, resume_answer: null, stop_reason: redact(result.stopReason, secrets), lease_token: null, lease_expires_at: null });
+      await patch({ status: "waiting_for_input", execution_ms: elapsed(), waiting: { ...result.waiting, policy: waitPolicy(workflow.graph.nodes.find((node: any) => node.id === result.waiting!.nodeId).data), question: sanitizeOutput(result.waiting.question, secrets), options: sanitizeOutput(result.waiting.options, secrets) }, resume_answer: null, stop_reason: redact(result.stopReason, secrets), lease_token: null, lease_expires_at: null });
       return;
     }
     const output = [...result.results].reverse().find((step) => step.nodeType === "output");
@@ -152,14 +154,27 @@ async function executeRun(run: any) {
   } finally { clearInterval(heartbeat); clearTimeout(deadline); }
 }
 
+// This scheduler continues even when all graph execution slots are occupied.
+let maintenanceBusy = false;
+async function maintenance() {
+  if (maintenanceBusy || stopping) return;
+  maintenanceBusy = true;
+  try { await maintainInteractions(admin); }
+  catch (error) { console.error("Workflow interaction maintenance failed", String(error)); }
+  finally { maintenanceBusy = false; }
+}
+const maintenanceTimer = setInterval(() => { void maintenance(); }, 1000);
+void maintenance();
 console.info(`Workflow worker ready (${slots} concurrent runs).`);
 while (!stopping) {
   if (active.size >= slots) { await Promise.race(active); continue; }
-  const { data, error } = await admin.rpc("claim_workflow_run", { p_organization_limit: orgLimit });
+  const { data, error } = await admin.rpc("claim_workflow_run", {});
   if (error) { console.error("Workflow claim failed", error.message); await sleep(2000); continue; }
   const run = data?.[0];
   if (!run) { await sleep(1000); continue; }
   const task = executeRun(run).catch((error) => console.error("Workflow worker error", run.id, String(error))).finally(() => active.delete(task));
   active.add(task);
 }
+clearInterval(maintenanceTimer);
 await Promise.allSettled(active);
+while (maintenanceBusy) await sleep(100);

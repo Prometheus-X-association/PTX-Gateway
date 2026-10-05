@@ -2164,10 +2164,10 @@ const LlmSettingsSection = () => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Brain className="h-5 w-5" />
-          Result Page Agent Operations
+          Agent Operations
         </CardTitle>
         <CardDescription>
-          Configure the LLM providers, MCP servers, agents, skills, and workflows that power the agentic experience on the result page.
+          Configure LLM providers, MCP servers, agents, skills, and workflows for result-page chat and standalone API or webhook execution.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -2175,8 +2175,8 @@ const LlmSettingsSection = () => {
         {/* Enable toggle */}
         <div className="flex items-center justify-between p-4 border rounded-lg">
           <div>
-            <p className="font-medium">Enable Agent Operations</p>
-            <p className="text-sm text-muted-foreground">Activate the result-page agent chat, including configured agents, skills, MCP tools, and workflows.</p>
+            <p className="font-medium">Enable result-page agent chat</p>
+            <p className="text-sm text-muted-foreground">Activate result-page agent chat. Standalone workflows remain available through their enabled API and webhook integrations.</p>
           </div>
           <Switch checked={llm.enabled} onCheckedChange={(v) => patchLlm({ enabled: v })} />
         </div>

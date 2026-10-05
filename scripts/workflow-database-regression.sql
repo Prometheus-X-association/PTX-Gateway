@@ -14,8 +14,12 @@ BEGIN
   SELECT * INTO second_run FROM public.claim_workflow_run(2);
   SELECT * INTO third_run FROM public.claim_workflow_run(2);
   IF first_run.id = second_run.id THEN RAISE EXCEPTION 'Workers claimed the same run'; END IF;
-  IF third_run.organization_id <> '00000000-0000-4000-8000-000000000002' THEN RAISE EXCEPTION 'Organization/workflow concurrency cap was not enforced'; END IF;
-  IF EXISTS (SELECT 1 FROM public.claim_workflow_run(2)) THEN RAISE EXCEPTION 'Claim exceeded concurrency limit'; END IF;
+  IF third_run.id IS NULL THEN RAISE EXCEPTION 'Legacy concurrency cap blocked an independent run'; END IF;
+  PERFORM public.claim_workflow_run(1);
+  PERFORM public.claim_workflow_run(1);
+  IF (SELECT count(*) FROM public.workflow_runs WHERE status = 'running') <> 5 THEN RAISE EXCEPTION 'Workflow or organization cap still applies'; END IF;
+  IF EXISTS (SELECT 1 FROM public.claim_workflow_run(1)) THEN RAISE EXCEPTION 'Claimed a run twice'; END IF;
+  IF EXISTS (SELECT 1 FROM public.workflow_runs WHERE timeout_seconds IS NOT NULL) THEN RAISE EXCEPTION 'New run inherited a deadline'; END IF;
   IF has_table_privilege('authenticated','public.workflow_runs','SELECT') OR has_table_privilege('anon','public.workflow_webhooks','SELECT') THEN RAISE EXCEPTION 'Private execution data is publicly accessible'; END IF;
   IF has_function_privilege('authenticated','public.claim_workflow_run(integer)','EXECUTE') THEN RAISE EXCEPTION 'User can claim worker jobs'; END IF;
   BEGIN

@@ -448,7 +448,7 @@ const SchemaRow = ({
 const TriggerPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: TriggerNodeData) => void }) => {
   const d = node.data as TriggerNodeData;
   const inputSources = d.inputSources ?? ["result", "document"];
-  const toggleSource = (source: "result" | "document" | "user_upload", enabled: boolean) => {
+  const toggleSource = (source: "input" | "result" | "document" | "user_upload", enabled: boolean) => {
     const next = enabled
       ? [...new Set([...inputSources, source])]
       : inputSources.filter((item) => item !== source);
@@ -461,7 +461,7 @@ const TriggerPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: Tr
         <Input className="h-7 text-xs" value={d.label} onChange={(e) => onChange({ ...d, label: e.target.value })} />
       </div>
       <div className="space-y-1">
-        <Label className="text-xs">Trigger type</Label>
+        <Label className="text-xs">Result-page trigger</Label>
         <Select value={d.triggerType} onValueChange={(v) => onChange({ ...d, triggerType: v as TriggerNodeData["triggerType"] })}>
           <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -471,7 +471,7 @@ const TriggerPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: Tr
         </Select>
       </div>
       <div className="space-y-1">
-        <Label className="text-xs">Default prompt <span className="text-muted-foreground">(pre-fills chat input)</span></Label>
+        <Label className="text-xs">Default run prompt <span className="text-muted-foreground">(used when a request omits userMessage)</span></Label>
         <Textarea className="text-xs min-h-[56px]" rows={3} value={d.defaultPrompt ?? ""}
           placeholder="e.g. Analyse the skill levels based on the uploaded document"
           onChange={(e) => onChange({ ...d, defaultPrompt: e.target.value || undefined })} />
@@ -481,14 +481,21 @@ const TriggerPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: Tr
           <Label className="text-xs">Workflow input sources</Label>
           <p className="text-[10px] text-muted-foreground">Select any combination of the data inputs available throughout this workflow.</p>
         </div>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label className="text-[11px]">Request data (API / webhook)</Label>
+            <p className="text-[10px] text-muted-foreground">Accept any JSON payload without a gateway session or result page.</p>
+          </div>
+          <Switch disabled={inputSources.length === 1 && inputSources.includes("input")} checked={inputSources.includes("input")} onCheckedChange={(enabled) => toggleSource("input", enabled)} />
+        </div>
         <div className="flex items-center justify-between">
-          <Label className="text-[11px]">Result data</Label>
+          <Label className="text-[11px]">Result-page data</Label>
           <Switch disabled={inputSources.length === 1 && inputSources.includes("result")} checked={inputSources.includes("result")} onCheckedChange={(enabled) => toggleSource("result", enabled)} />
         </div>
         <div className="flex items-center justify-between">
           <div>
             <Label className="text-[11px]">Gateway-process document</Label>
-            <p className="text-[10px] text-muted-foreground">Document uploaded earlier during data selection.</p>
+            <p className="text-[10px] text-muted-foreground">Document supplied in the request or uploaded during gateway data selection.</p>
           </div>
           <Switch disabled={inputSources.length === 1 && inputSources.includes("document")} checked={inputSources.includes("document")} onCheckedChange={(enabled) => toggleSource("document", enabled)} />
         </div>
@@ -502,7 +509,7 @@ const TriggerPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: Tr
       </div>
       <div className="rounded-lg border bg-muted/30 p-2.5 space-y-1">
         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Output contract</p>
-        <p className="text-[10px] text-muted-foreground">Trigger inputs are defined by the selected sources above. Provide test JSON or a document only when running the workflow in Test mode.</p>
+        <p className="text-[10px] text-muted-foreground">API and webhook requests supply live inputs. Request data is available as input in the trigger output and input.input in plugins; data and input.result remain compatible aliases. The Test panel supplies sample inputs.</p>
         <Textarea className="min-h-[52px] resize-y text-[10px] font-mono" value={d.outputSchema ?? ""} placeholder="e.g. { triggerType, userMessage, data }"
           onChange={(event) => onChange({ ...d, outputSchema: event.target.value || undefined })} />
       </div>
@@ -559,7 +566,7 @@ const UserInputPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: 
         <Input className="h-7 text-xs" value={d.label} onChange={(event) => onChange({ ...d, label: event.target.value })} />
       </div>
       <div className="space-y-1">
-        <Label className="text-xs">Question shown in chat</Label>
+        <Label className="text-xs">Question shown to the user</Label>
         <Textarea className="min-h-[72px] text-xs" value={d.question} onChange={(event) => onChange({ ...d, question: event.target.value })} />
       </div>
       <div className="grid gap-2 md:grid-cols-2">
@@ -583,12 +590,18 @@ const UserInputPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: 
         <div className="space-y-1">
           <Label className="text-xs">Options</Label>
           <Textarea className="min-h-[72px] text-xs font-mono" value={d.options ?? ""} placeholder={"Option A\nOption B\nOption C"} onChange={(event) => onChange({ ...d, options: event.target.value || undefined })} />
-          <p className="text-[10px] text-muted-foreground">One allowed option per line. The chat reply must match one option ignoring case.</p>
+          <p className="text-[10px] text-muted-foreground">One allowed option per line. The answer must match one option ignoring case.</p>
         </div>
       )}
       <div className="space-y-1">
         <Label className="text-xs">Description</Label>
         <Input className="h-7 text-xs" value={d.description ?? ""} placeholder="Why this decision is needed" onChange={(event) => onChange({ ...d, description: event.target.value || undefined })} />
+      </div>
+      <div className="rounded-md border p-2 space-y-2">
+        <Label className="text-xs">Backend response policy</Label>
+        <p className="text-[10px] text-muted-foreground">Unanswered questions stop the run at the response deadline. Reminders use the workflow notification endpoint. Builder preview tests do not schedule reminders.</p>
+        {([['responseTimeoutHours', 'Response timeout (hours)', 48], ['reminderIntervalHours', 'Reminder interval (hours)', 12], ['maxReminders', 'Maximum reminders', 3]] as const).map(([key, label, fallback]) => <label key={key} className="block space-y-1 text-xs">{label}<Input type="number" min={key === 'maxReminders' ? 0 : 1 / 60} max={key === 'maxReminders' ? 20 : 720} step={key === 'maxReminders' ? 1 : 'any'} value={d[key] ?? fallback} className="h-7 text-xs" onChange={(event) => onChange({ ...d, [key]: Math.max(key === 'maxReminders' ? 0 : 1 / 60, Math.min(key === 'maxReminders' ? 20 : 720, Number(event.target.value))) })} /></label>)}
+        <p className="text-[10px] text-muted-foreground">When the deadline expires, stop this run and record the unanswered node. Exhausting reminders does not change the deadline.</p>
       </div>
       <SchemaRow
         inputSchema={d.inputSchema}
@@ -1314,10 +1327,10 @@ Allowed node types: trigger, document_context, retrieval, user_input, agent, api
 Prefer deterministic plugin nodes for parsing, validation, looping, accumulation, formatting, evidence verification, and resultData updates. Use LLM agents only for semantic interpretation or generation.
 Each node: {"id":"short-unique-id","type":"allowed type","data":{...}}. Do not include positions.
 All inputSchema and outputSchema values must be concise human-readable strings. Do not return schema objects in these fields.
-Trigger data: {label,triggerType:"manual",inputSources:["result","document","user_upload"],defaultPrompt,outputSchema}. inputSources may include any non-empty combination: result is result data, document is the earlier gateway-process upload, and user_upload asks the end user to attach a document in chat when necessary.
+Trigger data: {label,triggerType:"manual",inputSources:["input","result","document","user_upload"],defaultPrompt,outputSchema}. inputSources may include any non-empty combination: input is arbitrary API/webhook request data independent of a result page, result is result-page data or legacy request data, document is the earlier gateway-process upload, and user_upload asks the end user to attach a document in chat when necessary.
 Document Context data: {label,source:"trigger_document|chat_upload_or_trigger",delivery:"automatic|text|native_file",reuseScope:"workflow_run",inputSchema,outputSchema}.
 Retrieval data: {label,source:"result|prev_output|node_output",sourceNodeId optional,query,maxItems,description,code,inputSchema,outputSchema}. Code is a sandbox body receiving input and tools. tools has manifest(), listNodes({start,limit}), findNodes(query,{limit}), getNode(idOrExactLabelOrIndex), exactLabel(label), sliceNodes(start,end). It must return compact context for downstream agents and cannot use network, DOM, storage, imports, eval, Function, or timers.
-User Input data: {label,question,answerKey,inputType:"text|yes_no|select",options,inputSchema,outputSchema}. This pauses the chat workflow until the user replies. options is newline-separated and only used for select inputs.
+User Input data: {label,question,answerKey,inputType:"text|yes_no|select",options,responseTimeoutHours:48,reminderIntervalHours:12,maxReminders:3,inputSchema,outputSchema}. This pauses the workflow until an answer is submitted through chat, API, or the standalone response page. Backend deadlines stop unanswered runs; reminder limits only control notifications. options is newline-separated and only used for select inputs.
 Agent data: prefer an available saved agent with {label,mode:"existing",agentId,promptOverride,passPrevOutput:true,inputSchema,outputSchema}; otherwise use {label,mode:"inline",inlineName,inlineSystemPrompt,inlineOutputType:"text|json|html|mixed",inlineFallbackOutputType:"text|json|html|mixed",skillIds:[],promptOverride,passPrevOutput:true,inputSchema,outputSchema}. Preserve resultContextMode:"full|chunked" and resultChunkSize (2000–50000 characters) when relevant; omitted delivery settings inherit the saved agent, or full for inline agents. Chunked delivery sends all data with a manifest in one request. Preserve contextMode:"combined|document_only", requiresDocument, useUploadedDocument, providerIds, and agentProviders when relevant.
 API data: {label,url,method,queryParams:[],headers:[],authType:"none|bearer|basic|api_key",bodyType:"none|json|text|form_urlencoded",body,responseType:"auto|json|text",outputPath,inputSchema,outputSchema}. Never invent credential values; leave auth values empty.
 Plugin data: {label,description,code,inputSchema,outputSchema}. Code is a sandbox function body receiving input.prevOutput, input.result, input.docText and input.getNodeOutput(id); it must return a value and cannot use network, DOM, storage, imports, eval, Function, or timers.
@@ -1812,6 +1825,23 @@ function parseAgentJSON(val) {
 }`.trim();
 
 export const EXAMPLE_WORKFLOWS: ExampleWorkflow[] = [
+  {
+    id: "standalone-request",
+    name: "Standalone API / Webhook Input",
+    description: "Accepts arbitrary request data and returns JSON without a result page. Enable API or webhook execution in the workflow settings.",
+    testFixture: { inputMode: "json", input: '{"orderId":"ORDER-123","amount":250}', prompt: "Process the supplied request data." },
+    workflow: {
+      nodes: [
+        { id: "request-start", type: "trigger", position: { x: 60, y: 120 }, data: { label: "Incoming request", triggerType: "manual", inputSources: ["input"], defaultPrompt: "Process the supplied request data.", outputSchema: "{ input, data, userMessage, triggerSource, runId }" } satisfies TriggerNodeData },
+        { id: "request-process", type: "plugin", position: { x: 330, y: 120 }, data: { label: "Process request", code: "return input.input;", inputSchema: "Any JSON payload", outputSchema: "Any JSON payload" } satisfies PluginNodeData },
+        { id: "request-output", type: "output", position: { x: 600, y: 120 }, data: { label: "Return JSON", renderAs: "json" } satisfies OutputNodeData },
+      ],
+      edges: [
+        { id: "request-e1", source: "request-start", target: "request-process" },
+        { id: "request-e2", source: "request-process", target: "request-output" },
+      ],
+    },
+  },
   {
     id: "skill-expertise-analysis",
     name: "Skill Expertise Analysis",
@@ -4184,7 +4214,7 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
     const trigger = nodes.find((node) => node.type === "trigger");
     return (trigger?.data as TriggerNodeData | undefined)?.inputSources ?? ["result", "document"];
   }, [nodes]);
-  const testNeedsResultData = triggerTestSources.includes("result");
+  const testNeedsResultData = triggerTestSources.includes("result") || triggerTestSources.includes("input");
   const testNeedsDocument = triggerTestSources.includes("document") || triggerTestSources.includes("user_upload");
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
   const exampleNodes = useMemo(() => nodeExample ? (nodeExample.workflow.nodes as Node[]) : [], [nodeExample]);
@@ -4193,7 +4223,7 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
     const trigger = exampleNodes.find((node) => node.type === "trigger");
     return (trigger?.data as TriggerNodeData | undefined)?.inputSources ?? ["result"];
   }, [exampleNodes]);
-  const exampleNeedsResultData = exampleTriggerSources.includes("result");
+  const exampleNeedsResultData = exampleTriggerSources.includes("result") || exampleTriggerSources.includes("input");
   const exampleNeedsDocument = exampleTriggerSources.includes("document") || exampleTriggerSources.includes("user_upload");
   const exampleSelectedNode = exampleNodes.find((node) => node.id === exampleSelectedNodeId) as WorkflowNode | undefined;
   const exampleCanvasNodes = exampleNodes.map((node) => ({
@@ -5505,7 +5535,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         let data: Record<string, unknown>;
         if (type === "trigger") {
           const requestedSources = Array.isArray(rawData.inputSources)
-            ? rawData.inputSources.map(String).filter((source): source is "result" | "document" | "user_upload" => source === "result" || source === "document" || source === "user_upload")
+            ? rawData.inputSources.map(String).filter((source): source is "input" | "result" | "document" | "user_upload" => source === "input" || source === "result" || source === "document" || source === "user_upload")
             : [];
           data = { label, triggerType: rawData.triggerType === "on_load" ? "on_load" : "manual", inputSources: requestedSources.length > 0 ? [...new Set(requestedSources)] : ["result", "document"], defaultPrompt: String(rawData.defaultPrompt || workflowGoal).slice(0, 1000), outputSchema: normalizeGeneratedSchema(rawData.outputSchema) };
         }
@@ -5538,6 +5568,9 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           data = {
             label,
             question: String(rawData.question || "Please provide the next input.").slice(0, 2000),
+            responseTimeoutHours: typeof rawData.responseTimeoutHours === "number" && Number.isFinite(rawData.responseTimeoutHours) ? Math.max(1 / 60, Math.min(720, rawData.responseTimeoutHours)) : undefined,
+            reminderIntervalHours: typeof rawData.reminderIntervalHours === "number" && Number.isFinite(rawData.reminderIntervalHours) ? Math.max(1 / 60, Math.min(720, rawData.reminderIntervalHours)) : undefined,
+            maxReminders: typeof rawData.maxReminders === "number" && Number.isFinite(rawData.maxReminders) ? Math.max(0, Math.min(20, Math.floor(rawData.maxReminders))) : undefined,
             answerKey: String(rawData.answerKey || "answer").replace(/[^a-zA-Z0-9_$]/g, "").slice(0, 80) || "answer",
             inputType: ["text", "yes_no", "select"].includes(String(rawData.inputType)) ? rawData.inputType : "text",
             options: typeof rawData.options === "string"

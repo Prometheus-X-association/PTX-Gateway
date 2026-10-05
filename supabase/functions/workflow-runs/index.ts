@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { adminClient, authorize, checkRunAccess, loadWorkflow } from "../_shared/workflowAccess.ts";
 import { createRun, cors, json, publicRun, readBody } from "../_shared/workflowRuns.ts";
+import { interactionUrl, resumeRun } from "../_shared/workflowInteraction.ts";
 import { encrypt, hash, HttpError, object, randomSecret, validateWebhookMapping } from "../_shared/workflowSecurity.ts";
 
 export const handleWorkflowRequest = async (request: Request) => {
@@ -14,7 +15,7 @@ export const handleWorkflowRequest = async (request: Request) => {
     const admin = adminClient();
     const principal = await authorize(request, body, admin);
     const action = body.action || "start";
-    if (request.method === "GET" && !["get", "steps", "list", "webhooks", "keys"].includes(action)) throw new HttpError(405, "Use POST for this action.");
+    if (request.method === "GET" && !["get", "steps", "notifications", "list", "webhooks", "keys"].includes(action)) throw new HttpError(405, "Use POST for this action.");
     if (action === "start") {
       const source = principal.keyId ? "api" : body.source === "dashboard" ? "dashboard" : "api";
       return json({ ok: true, ...await createRun(admin, principal, body, source, request.headers.get("idempotency-key") || undefined) }, 202);
@@ -28,16 +29,21 @@ export const handleWorkflowRequest = async (request: Request) => {
       if (error) throw error;
       return json({ ok: true, runs: (data ?? []).map(publicRun) });
     }
-    if (["get", "steps", "cancel", "resume"].includes(action)) {
+    if (["get", "steps", "notifications", "cancel", "resume"].includes(action)) {
       const { data: run, error } = await admin.from("workflow_runs").select("*").eq("organization_id", principal.orgId).eq("id", body.runId).maybeSingle();
       if (error) throw error;
       if (!run) throw new HttpError(404, "Run was not found.");
       checkRunAccess(principal, run);
-      if (action === "get") return json({ ok: true, run: publicRun(run) });
+      if (action === "get") return json({ ok: true, run: { ...publicRun(run), interactionUrl: await interactionUrl(run) } });
       if (action === "steps") {
         const { data, error } = await admin.from("workflow_run_steps").select("*").eq("organization_id", principal.orgId).eq("run_id", run.id).gt("sequence", Math.max(0, Number(body.after) || 0)).order("sequence").limit(200);
         if (error) throw error;
         return json({ ok: true, steps: data });
+      }
+      if (action === "notifications") {
+        const { data, error } = await admin.from("workflow_notifications").select("id,event_type,status,attempts,last_error,created_at,delivered_at,available_at").eq("organization_id", principal.orgId).eq("run_id", run.id).order("created_at").limit(200);
+        if (error) throw error;
+        return json({ ok: true, notifications: data });
       }
       if (action === "cancel") {
         if (!["queued", "running", "waiting_for_input"].includes(run.status)) throw new HttpError(409, "Run has already finished.");
@@ -47,12 +53,7 @@ export const handleWorkflowRequest = async (request: Request) => {
         if (!data) throw new HttpError(409, "Run status changed; refresh and retry.");
         return json({ ok: true });
       }
-      if (run.status !== "waiting_for_input" || body.nodeId !== run.waiting?.nodeId) throw new HttpError(409, "This question is no longer waiting for an answer.");
-      if (typeof body.answer !== "string" || !body.answer.trim() || body.answer.length > 100_000) throw new HttpError(400, "A valid answer is required.");
-      const { data, error: updateError } = await admin.from("workflow_runs").update({ status: "queued", resume_answer: body.answer, updated_at: new Date().toISOString() }).eq("organization_id", principal.orgId).eq("id", run.id).eq("status", "waiting_for_input").eq("updated_at", run.updated_at).select("id").maybeSingle();
-      if (updateError) throw updateError;
-      if (!data) throw new HttpError(409, "Another request already answered this question.");
-      return json({ ok: true, runId: run.id, status: "queued" }, 202);
+      return json(await resumeRun(admin, run, body), 202);
     }
     if (!principal.isAdmin) throw new HttpError(403, "Organization admin permission is required.");
     if (["webhooks", "create_webhook", "update_webhook", "rotate_webhook", "delete_webhook"].includes(action)) {

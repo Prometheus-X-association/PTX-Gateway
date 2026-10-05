@@ -6,6 +6,7 @@ import type { WorkflowResult } from "../../supabase/functions/_shared/workflowEx
 export interface BackendWorkflowRun {
   id: string; workflowId: string; workflowName: string; status: string; triggerSource: string;
   currentNodeId?: string; lastNodeId?: string; failedNodeId?: string; stopReason?: string;
+  interactionUrl?: string; waitingVersion?: string; waitingExpiresAt?: string; reminderCount?: number; reminderLimit?: number;
   output?: unknown; renderAs?: string; createdAt: string; startedAt?: string; finishedAt?: string;
   webhookId?: string; deliveryId?: string;
   waiting?: { nodeId: string; question: string; inputType: string; options?: string[] };

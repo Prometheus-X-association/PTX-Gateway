@@ -55,7 +55,7 @@ export async function loadWorkflow(admin: ReturnType<typeof adminClient>, orgId:
   if (error) throw error;
   const llm = object(object(data?.features).llmInsights);
   const workflow = (Array.isArray(llm.workflows) ? llm.workflows : []).find((item: any) => item.id === workflowId && item.enabled !== false);
-  if (!llm.enabled || !workflow) throw new HttpError(404, "Enabled workflow was not found in this organization.");
+  if (!workflow) throw new HttpError(404, "Enabled workflow was not found in this organization.");
   return { workflow, llm };
 }
 export function checkWorkflowAccess(principal: Principal, workflowId: string) {

@@ -5,7 +5,7 @@ import { webcrypto, randomUUID } from "node:crypto";
 import { test } from "node:test";
 import ts from "typescript";
 
-const env = new Map([["SUPABASE_URL", "http://test.invalid"], ["SUPABASE_SERVICE_ROLE_KEY", "test-service-key"], ["WORKFLOW_SECRETS_KEY", btoa("a".repeat(32))], ["PDC_EXECUTE_TOKEN_SECRET", "test-execution-secret"]]);
+const env = new Map([["SUPABASE_URL", "http://test.invalid"], ["SUPABASE_SERVICE_ROLE_KEY", "test-service-key"], ["WORKFLOW_SECRETS_KEY", btoa("a".repeat(32))], ["PDC_EXECUTE_TOKEN_SECRET", "test-execution-secret"], ["WORKFLOW_INTERNAL_SECRET", "test-interaction-secret"], ["WORKFLOW_INTERACTION_BASE_URL", "https://workflow.example"]]);
 let database;
 const modules = new Map();
 function load(path) {
@@ -24,6 +24,8 @@ function load(path) {
 }
 const { handleWorkflowRequest } = load("supabase/functions/workflow-runs/index.ts");
 const { handleWorkflowWebhook } = load("supabase/functions/workflow-webhook/index.ts");
+const { interactionToken } = load("supabase/functions/_shared/workflowInteraction.ts");
+const { handleWorkflowInteraction } = load("supabase/functions/workflow-interaction/index.ts");
 const { hash, hmac, encrypt, decrypt } = load("supabase/functions/_shared/workflowSecurity.ts");
 
 // A PostgREST contract double; database locking and RLS are tested separately in SQL.
@@ -64,7 +66,13 @@ function setup() {
     global_configs: ["org-a", "org-b"].map((organization_id) => ({ organization_id, features: { llmInsights: { enabled: true, workflows: [structuredClone(workflow)], providers: [{ apiKey: "provider-private-key" }] } } })),
     organization_members: [{ organization_id: "org-a", user_id: "admin-a", status: "active" }, { organization_id: "org-a", user_id: "user-a", status: "active" }, { organization_id: "org-a", user_id: "user-b", status: "active" }, { organization_id: "org-b", user_id: "admin-b", status: "active" }],
     user_roles: [{ organization_id: "org-a", user_id: "admin-a", role: "admin" }, { organization_id: "org-b", user_id: "admin-b", role: "admin" }],
-  }, from(table) { return new Query(this, table); }, auth: { getUser: async (token) => ({ data: { user: token === "anon" ? null : { id: token } }, error: token === "anon" ? new Error("Anonymous") : null }) } };
+  }, from(table) { return new Query(this, table); }, async rpc(name, args) {
+    assert.equal(name, "resume_workflow_run");
+    const run = this.tables.workflow_runs.find((run) => run.id === args.p_run_id && run.organization_id === args.p_organization_id);
+    if (!run || run.status !== 'waiting_for_input' || run.waiting.nodeId !== args.p_node_id || run.waiting_version !== args.p_waiting_version) return { data: false };
+    if (run.waiting_expires_at && Date.parse(run.waiting_expires_at) <= Date.now()) { run.status = 'timed_out'; return { data: false }; }
+    Object.assign(run, { status: 'queued', resume_answer: args.p_answer }); return { data: true };
+  }, auth: { getUser: async (token) => ({ data: { user: token === "anon" ? null : { id: token } }, error: token === "anon" ? new Error("Anonymous") : null }) } };
   return database;
 }
 async function api(body, token = "admin-a", org = "org-a", idempotencyKey) {
@@ -79,13 +87,49 @@ async function hook(id, secret, payload, delivery = "event-1", timestamp = Strin
 
 test("concurrent users start isolated runs of the same organization workflow", async () => {
   setup();
+  // Ignore obsolete saved admin limits when starting independent runs.
+  Object.assign(database.tables.global_configs[0].features.llmInsights.workflows[0].execution, { maxConcurrentRuns: 1, timeoutSeconds: 10 });
   const requests = await Promise.all([api({ action: "start", workflowId: "shared", input: { id: 1 } }, "user-a"), api({ action: "start", workflowId: "shared", input: { id: 2 } }, "user-b")]);
   requests.forEach((response) => assert.equal(response.status, 202));
   assert.notEqual(requests[0].body.runId, requests[1].body.runId);
   assert.deepEqual(database.tables.workflow_runs.map((run) => run.input.resultData), [{ id: 1 }, { id: 2 }]);
   const run = database.tables.workflow_runs[0];
+  assert.equal(run.timeout_seconds, null);
+  assert.equal(Object.hasOwn(run, "max_concurrent_runs"), false);
   assert.equal(run.organization_id, "org-a"); assert.ok(!JSON.stringify(run.snapshot).includes("provider-private-key"));
   assert.equal((await decrypt(run.snapshot.ciphertext)).llm.providers[0].apiKey, "provider-private-key");
+});
+test("standalone API and webhook accept arbitrary JSON while result-page chat is disabled", async () => {
+  setup();
+  const llm = database.tables.global_configs[0].features.llmInsights;
+  llm.enabled = false;
+  const workflow = llm.workflows[0];
+  workflow.targetResources = [];
+  workflow.execution.backendEnabled = false;
+  workflow.graph.nodes[0].data.inputSources = ["input"];
+  const key = await api({ action: "create_key", workflowIds: ["shared"] });
+  assert.equal(key.status, 201);
+  const endpoint = await api({ action: "create_webhook", workflowId: "shared", name: "Standalone" });
+  assert.equal(endpoint.status, 201);
+  const values = [{ orderId: "A" }, [1, 2, 3], "plain text", 0, false, null];
+  for (const [index, input] of values.entries()) {
+    const started = await api({ action: "start", workflowId: "shared", input }, key.body.key);
+    assert.equal(started.status, 202);
+    const run = database.tables.workflow_runs.find((run) => run.id === started.body.runId);
+    assert.deepEqual(run.input.resultData, input);
+    assert.equal(run.trigger_source, "api");
+    const saved = await decrypt(run.snapshot.ciphertext);
+    assert.equal(saved.llm.enabled, false);
+    assert.deepEqual(saved.workflow.targetResources, []);
+    const delivery = await hook(endpoint.body.id, endpoint.body.secret, input, `standalone-${index}`);
+    assert.equal(delivery.status, 202);
+    const webhookRun = database.tables.workflow_runs.find((run) => run.id === delivery.body.runId);
+    assert.deepEqual(webhookRun.input.resultData, input);
+    assert.equal(webhookRun.trigger_source, "webhook");
+  }
+  assert.equal((await api({ action: "start", workflowId: "shared", source: "dashboard" })).status, 403);
+  workflow.enabled = false;
+  assert.equal((await api({ action: "start", workflowId: "shared", input: {} }, key.body.key)).status, 404);
 });
 test("organization membership and caller ownership protect execution traces", async () => {
   setup();
@@ -132,7 +176,7 @@ test("API keys are workflow-scoped, revocable and never returned in listings", a
 test("one waiting question accepts only one concurrent answer", async () => {
   setup();
   const started = await api({ action: "start", workflowId: "shared" }, "user-a");
-  const run = database.tables.workflow_runs[0]; Object.assign(run, { status: "waiting_for_input", waiting: { nodeId: "ask", question: "Continue?" } });
+  const run = database.tables.workflow_runs[0]; Object.assign(run, { status: "waiting_for_input", waiting_version: randomUUID(), waiting_expires_at: new Date(Date.now()+60000).toISOString(), waiting: { nodeId: "ask", question: "Continue?" } });
   const responses = await Promise.all([api({ action: "resume", runId: started.body.runId, nodeId: "ask", answer: "yes" }, "user-a"), api({ action: "resume", runId: started.body.runId, nodeId: "ask", answer: "no" }, "user-a")]);
   assert.deepEqual(responses.map((result) => result.status).sort(), [202, 409]);
   assert.equal(run.status, "queued");
@@ -154,4 +198,48 @@ test("public result-page sessions do not share run history", async () => {
   const started = await api({ ...body, action: "start" }, "anon"); assert.equal(started.status, 202);
   assert.equal((await api({ ...body, action: "get", runId: started.body.runId, workflow_session_id: "b".repeat(72) }, "anon")).status, 404);
   assert.equal((await api({ ...body, action: "start", targetResourceId: "resource-b" }, "anon")).status, 403);
+});
+
+async function interaction(body) {
+  const response = await handleWorkflowInteraction(new Request("https://test.invalid/workflow-interaction", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+  return { status: response.status, body: await response.json() };
+}
+test("hosted interaction tokens isolate runs, expire and expose only the current question", async () => {
+  setup();
+  const started = await api({ action: 'start', workflowId: 'shared', input: { private: 'not-for-participants' } });
+  assert.equal(started.status, 202);
+  const token = new URLSearchParams(new URL(started.body.interactionUrl).hash.slice(1)).get('token');
+  const run = database.tables.workflow_runs[0];
+  Object.assign(run, { status: 'waiting_for_input', waiting_version: randomUUID(), waiting_expires_at: new Date(Date.now()+60000).toISOString(), waiting: { nodeId: 'ask', question: 'Approve?', inputType: 'yes_no', nodeOutputs: { secret: 'never-share' } } });
+  const view = await interaction({ action: 'get', token });
+  assert.equal(view.status, 200); assert.equal(view.body.run.waiting.question, 'Approve?');
+  assert.ok(!JSON.stringify(view.body).includes('never-share')); assert.ok(!JSON.stringify(view.body).includes('not-for-participants'));
+  assert.equal((await interaction({ action: 'get', token: token.slice(0,-1)+(token.endsWith('a')?'b':'a') })).status, 401);
+  assert.equal((await interaction({ action: 'resume', token, nodeId: 'ask', waitingVersion: randomUUID(), answer: 'yes' })).status, 409);
+  assert.equal((await interaction({ action: 'resume', token, nodeId: 'ask', waitingVersion: run.waiting_version, answer: 'maybe' })).status, 400);
+  const responses = await Promise.all(['yes','no'].map(answer=>interaction({action:'resume',token,nodeId:'ask',waitingVersion:run.waiting_version,answer})));
+  assert.deepEqual(responses.map(response=>response.status).sort(),[202,409]);
+  run.interaction_expires_at = new Date(Date.now()-1000).toISOString();
+  assert.equal((await interaction({action:'get',token})).status,401);
+  const expiredToken=await interactionToken(run);
+  assert.equal((await interaction({action:'get',token:expiredToken})).status,410);
+});
+test("expired questions reject answers even before the background scheduler runs", async () => {
+  setup();
+  const started = await api({action:'start',workflowId:'shared'});
+  const token = new URLSearchParams(new URL(started.body.interactionUrl).hash.slice(1)).get('token');
+  const run = database.tables.workflow_runs[0];
+  Object.assign(run,{status:'waiting_for_input',waiting_version:randomUUID(),waiting_expires_at:new Date(Date.now()-1000).toISOString(),waiting:{nodeId:'ask',inputType:'text'}});
+  assert.equal((await interaction({action:'resume',token,nodeId:'ask',waitingVersion:run.waiting_version,answer:'late'})).status,409);
+  assert.equal(run.status,'timed_out');
+});
+test("response policies and notification configuration are validated before accepting a run", async () => {
+  setup(); const workflow=database.tables.global_configs[0].features.llmInsights.workflows[0];
+  workflow.graph.nodes.splice(1,0,{id:'ask',type:'user_input',data:{inputType:'text',responseTimeoutHours:0}});
+  assert.equal((await api({action:'start',workflowId:'shared'})).status,400);
+  workflow.graph.nodes[1].data.responseTimeoutHours=48;
+  workflow.execution.notifications={url:'https://receiver.example',secret:'short'};
+  assert.equal((await api({action:'start',workflowId:'shared'})).status,400);
+  workflow.execution.notifications.secret='x'.repeat(32);
+  assert.equal((await api({action:'start',workflowId:'shared'})).status,202);
 });

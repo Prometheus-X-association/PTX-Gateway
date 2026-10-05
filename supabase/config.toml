@@ -53,3 +53,6 @@ verify_jwt = false
 
 [functions.workflow-webhook]
 verify_jwt = false
+
+[functions.workflow-interaction]
+verify_jwt = false

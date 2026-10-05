@@ -100,6 +100,6 @@ export function validateGraph(workflow: any) {
   if (ids.size !== nodes.length || nodes.filter((node: any) => node.type === "trigger").length !== 1 || !nodes.some((node: any) => node.type === "output")) throw new HttpError(400, "Workflow needs unique node IDs, one trigger, and an output node.");
   for (const node of nodes) if (typeof node.id !== "string" || !allowed.has(node.type) || !node.data) throw new HttpError(400, "Invalid workflow node.");
   const sources = nodes.find((node: any) => node.type === "trigger").data.inputSources;
-  if (sources !== undefined && (!Array.isArray(sources) || !sources.length || sources.some((source: unknown) => !["result", "document", "user_upload"].includes(String(source))))) throw new HttpError(400, "Invalid workflow input sources.");
+  if (sources !== undefined && (!Array.isArray(sources) || !sources.length || sources.some((source: unknown) => !["input", "result", "document", "user_upload"].includes(String(source))))) throw new HttpError(400, "Invalid workflow input sources.");
   for (const edge of edges) if (!ids.has(edge.source) || !ids.has(edge.target)) throw new HttpError(400, "Workflow connection references an unknown node.");
 }

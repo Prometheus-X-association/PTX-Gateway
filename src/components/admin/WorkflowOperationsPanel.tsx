@@ -17,6 +17,7 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [keys, setKeys] = useState<Key[]>([]);
   const [selected, setSelected] = useState<BackendWorkflowRun | null>(null);
+  const [notifications, setNotifications] = useState<Array<{ id: string; event_type: string; status: string; attempts: number; last_error?: string }>>([]);
   const [steps, setSteps] = useState<BackendWorkflowStep[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,6 +28,8 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
   const [answer, setAnswer] = useState("");
   const base = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
   const execution = config.execution ?? {};
+  const notificationSettings = execution.notifications ?? {};
+  const setNotificationsConfig = (patch: NonNullable<NonNullable<WorkflowConfig["execution"]>["notifications"]>) => setExecution({ notifications: { ...notificationSettings, ...patch } });
   const setExecution = (patch: NonNullable<WorkflowConfig["execution"]>) => onChange({ ...config, execution: { ...execution, ...patch } });
   const api = useCallback((action: string, body: Record<string, unknown> = {}) => workflowBackend(action, organizationId, { workflowId: config.id, ...body }), [organizationId, config.id]);
   const refresh = useCallback(async () => {
@@ -43,6 +46,8 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
       if (trace.steps.length < 200) break;
       after = trace.steps.at(-1).sequence;
     } while (collected.length < 10_000);
+    const deliveries = await api("notifications", { runId: id });
+    setNotifications(deliveries.notifications);
     setSelected(detail.run); setSteps(collected);
   }, [api]);
   const perform = async (operation: () => Promise<void>) => {
@@ -73,11 +78,19 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
     <div className="flex flex-wrap gap-5 text-xs">
       {([['backendEnabled', 'Run chat workflows on backend'], ['apiEnabled', 'Allow API execution'], ['webhookEnabled', 'Allow webhook execution']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2"><Switch checked={Boolean(execution[key])} onCheckedChange={(checked) => setExecution({ [key]: checked })} />{label}</label>)}
     </div>
-    <div className="flex flex-wrap gap-4">
-      <label className="text-xs space-y-1">Concurrent runs for this workflow<Input type="number" min={1} max={32} value={execution.maxConcurrentRuns ?? 4} className="w-32 h-8" onChange={(event) => setExecution({ maxConcurrentRuns: Math.max(1, Math.min(32, Number(event.target.value) || 1)) })} /></label>
-      <label className="text-xs space-y-1">Run deadline (seconds)<Input type="number" min={10} max={3600} value={execution.timeoutSeconds ?? 900} className="w-32 h-8" onChange={(event) => setExecution({ timeoutSeconds: Math.max(10, Math.min(3600, Number(event.target.value) || 10)) })} /></label>
-    </div>
+    <p className="text-xs text-muted-foreground">API and webhook execution work independently of the result page and its chat switch. A workflow can have no result-page assignments. Choose Request data in its trigger to process the payload supplied by the caller.</p>
+    <p className="text-xs text-muted-foreground">Every request has separate inputs, state, and execution logs. Runs start automatically as backend capacity becomes available; no parallel-run count or whole-run deadline needs to be configured.</p>
     <p className="text-xs text-muted-foreground">Save the organization settings before using changed execution options or graphs. Each request runs independently.</p>
+    <details className="rounded border p-3 space-y-2 text-xs">
+      <summary className="cursor-pointer font-medium">Question notifications and completion callbacks</summary>
+      <p className="text-muted-foreground">Send signed question, reminder, and completion events to your platform. It can deliver the supplied response link through email or messaging. Leave the endpoint empty to disable notifications.</p>
+      <label className="block space-y-1">Notification endpoint (HTTPS)<Input value={notificationSettings.url ?? ""} placeholder="https://your-platform.example/workflow-events" onChange={(event) => setNotificationsConfig({ url: event.target.value })} /></label>
+      <label className="block space-y-1">Signing secret<Input type="password" autoComplete="new-password" value={notificationSettings.secret ?? ""} placeholder="At least 32 characters" onChange={(event) => setNotificationsConfig({ secret: event.target.value })} /></label>
+      <Button type="button" size="sm" variant="outline" onClick={() => setNotificationsConfig({ secret: `${crypto.randomUUID()}${crypto.randomUUID()}` })}>Generate signing secret</Button>
+      <label className="block space-y-1">Return URL (optional HTTPS)<Input value={notificationSettings.returnUrl ?? ""} placeholder="https://your-platform.example/requests" onChange={(event) => setNotificationsConfig({ returnUrl: event.target.value })} /></label>
+      <label className="block space-y-1">Response link lifetime (hours)<Input type="number" min={1} max={720} value={notificationSettings.interactionTtlHours ?? 168} onChange={(event) => setNotificationsConfig({ interactionTtlHours: Math.max(1, Math.min(720, Math.floor(Number(event.target.value) || 1))) })} /></label>
+      <label className="block space-y-1">Maximum delivery attempts per event<Input type="number" min={1} max={10} value={notificationSettings.maxAttempts ?? 6} onChange={(event) => setNotificationsConfig({ maxAttempts: Math.max(1, Math.min(10, Math.floor(Number(event.target.value) || 1))) })} /></label>
+    </details>
     {open && <div className="space-y-4">
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {revealed && <div className="rounded border p-2 space-y-2"><p className="text-xs">Copy this credential now. It is displayed only after creation or rotation.</p><Textarea readOnly value={revealed} /><Button type="button" size="sm" variant="outline" onClick={() => setRevealed("")}>Dismiss credential</Button></div>}
@@ -124,8 +137,11 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
           <p className="text-xs text-muted-foreground">Trigger: {selected.triggerSource}{selected.webhookId ? ` · Webhook: ${selected.webhookId}` : ''}{selected.deliveryId ? ` · Delivery: ${selected.deliveryId}` : ''}</p>
           {(selected.failedNodeId || selected.currentNodeId || selected.lastNodeId) && <Button type="button" size="sm" variant="outline" onClick={() => onFocusNode?.(selected.failedNodeId || selected.currentNodeId || selected.lastNodeId)}>Show stop node on canvas</Button>}
           {['queued', 'running', 'waiting_for_input'].includes(selected.status) && <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void perform(async () => { await api("cancel", { runId: selected.id }); await loadRun(selected.id); })}>Cancel run</Button>}
-          {selected.waiting && <div className="space-y-2"><p className="text-sm whitespace-pre-wrap">{selected.waiting.question}</p>{selected.waiting.options?.length > 0 && <p className="text-xs">Options: {selected.waiting.options.join(", ")}</p>}<Input value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer" /><Button type="button" size="sm" disabled={busy || !answer.trim()} onClick={() => void perform(async () => { await api("resume", { runId: selected.id, nodeId: selected.waiting.nodeId, answer }); setAnswer(""); await loadRun(selected.id); })}>Resume</Button></div>}
+          {selected.interactionUrl && <Button asChild type="button" size="sm" variant="outline"><a href={selected.interactionUrl} target="_blank" rel="noreferrer">Open response page</a></Button>}
+          {selected.waitingExpiresAt && selected.status === 'waiting_for_input' && <p className="text-xs">Response deadline: {new Date(selected.waitingExpiresAt).toLocaleString()} · Reminders scheduled: {selected.reminderCount ?? 0} / {selected.reminderLimit ?? 0}</p>}
+          {selected.status === "waiting_for_input" && selected.waiting && <div className="space-y-2"><p className="text-sm whitespace-pre-wrap">{selected.waiting.question}</p>{selected.waiting.options?.length > 0 && <p className="text-xs">Options: {selected.waiting.options.join(", ")}</p>}<Input value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer" /><Button type="button" size="sm" disabled={busy || !answer.trim()} onClick={() => void perform(async () => { await api("resume", { runId: selected.id, nodeId: selected.waiting.nodeId, waitingVersion: selected.waitingVersion, answer }); setAnswer(""); await loadRun(selected.id); })}>Resume</Button></div>}
           {steps.map((step) => <details key={step.id} className="rounded border p-2 text-xs"><summary>{step.sequence}. {step.node_name} · {step.status} {step.duration_ms != null ? `· ${step.duration_ms} ms` : ""}</summary><Button type="button" size="sm" variant="outline" onClick={() => onFocusNode?.(step.node_id)}>Show node on canvas</Button>{step.error && <p className="text-destructive whitespace-pre-wrap">{step.error}</p>}<pre className="max-h-60 overflow-auto whitespace-pre-wrap">{JSON.stringify({ input: step.input_summary, output: step.output_summary, next: step.selected_routes }, null, 2)}</pre></details>)}
+          {notifications.length > 0 && <details className="text-xs"><summary>Notification delivery log</summary><div className="space-y-2 pt-2">{notifications.map((notification) => <div key={notification.id} className="rounded border p-2">{notification.event_type} · {notification.status} · {notification.attempts} attempts{notification.last_error && <p className="text-muted-foreground">{notification.last_error}</p>}</div>)}</div></details>}
           {selected.status === "succeeded" && <details className="text-xs"><summary>Final output</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap">{JSON.stringify(selected.output, null, 2)}</pre></details>}
         </div>}
       </div>

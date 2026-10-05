@@ -1068,7 +1068,8 @@ serve(async (req: Request) => {
   const features = toObject(gc.features);
   const llmConfig = workerSnapshot?.llm ?? toObject(features.llmInsights) as LlmInsightsConfig;
 
-  if (!llmConfig.enabled) return sendError("LLM insights are disabled", 400);
+  // A verified worker lease authorizes the saved workflow independently of chat.
+  if (!workerSnapshot && !llmConfig.enabled) return sendError("LLM insights are disabled", 400);
 
   const savedWorkflowNodeData = (() => {
     if (!body.workflowId || !body.nodeId || !Array.isArray((llmConfig as { workflows?: unknown[] }).workflows)) return null;
@@ -1177,6 +1178,7 @@ serve(async (req: Request) => {
     return formatChunkedResultContext(buildChunkedResultPayload(value, workflowChunkSize), label);
   };
 
+  const workflowDataLabel = workerSnapshot ? "Workflow input" : "Result data";
   let contextBlock: string | null = null;
   if (body.result !== undefined) {
     if (isDocContextPayload(body.result)) {
@@ -1185,7 +1187,7 @@ serve(async (req: Request) => {
       if (body.result.result !== undefined) {
         parts.push(`\n---${isChunkedResultPayload(body.result.result)
           ? formatChunkedResultContext(body.result.result)
-          : formatWorkflowDataContext("Result data", body.result.result)}`);
+          : formatWorkflowDataContext(workflowDataLabel, body.result.result)}`);
       }
 
       if (body.result.docText) {
@@ -1203,7 +1205,7 @@ serve(async (req: Request) => {
       // No document context — full result JSON only
       contextBlock = `\n---${isChunkedResultPayload(body.result)
         ? formatChunkedResultContext(body.result)
-        : formatWorkflowDataContext("Result data", body.result)}`;
+        : formatWorkflowDataContext(workflowDataLabel, body.result)}`;
     }
   }
   if (body.inputData !== undefined && body.inputData !== null) {
