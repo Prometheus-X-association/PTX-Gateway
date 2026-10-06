@@ -109,6 +109,11 @@ const getCredentialPlugins = (features: Record<string, unknown> | null): Credent
     : [];
 };
 
+const EXECUTION_TOKEN_TTL_SECONDS = 3600;
+const EXECUTION_TOKEN_REFRESH_LEAD_MS = 5 * 60 * 1000;
+const EXECUTION_TOKEN_RETRY_BASE_MS = 5 * 1000;
+const EXECUTION_TOKEN_RETRY_MAX_MS = 60 * 1000;
+
 const EmbedGatewayContent = () => {
   const [searchParams] = useSearchParams();
   const theme = searchParams.get('theme');
@@ -120,7 +125,9 @@ const EmbedGatewayContent = () => {
   const [gatewayFeatures, setGatewayFeatures] = useState<Record<string, unknown> | null>(null);
   const [orgExecutionToken, setOrgExecutionToken] = useState<string | null>(null);
   const [orgExecutionTokenExpiresAt, setOrgExecutionTokenExpiresAt] = useState<number | null>(null);
+  const [isExecutionTokenRefreshing, setIsExecutionTokenRefreshing] = useState(false);
   const themeCleanupRef = useRef<(() => void) | null>(null);
+  const executionTokenRefreshRef = useRef<Promise<void> | null>(null);
   
   const { sessionId, resetSession } = useProcessSession();
 
@@ -142,24 +149,46 @@ const EmbedGatewayContent = () => {
     document.documentElement.removeAttribute("data-ptx-embed-pending");
   };
 
-  const issuePublicExecutionToken = useCallback(async () => {
-    if (!orgSlug) throw new Error("Missing org parameter");
+  const issuePublicExecutionToken = useCallback((): Promise<void> => {
+    if (!orgSlug) return Promise.reject(new Error("Missing org parameter"));
 
-    const { data: tokenData, error: tokenError } = await supabase.functions.invoke("pdc-auth", {
-      body: {
-        action: "issue_public",
-        org_slug: orgSlug,
-        ttl_seconds: 3600,
-      },
-    });
-
-    if (tokenError || !tokenData?.ok || !tokenData?.token) {
-      throw new Error(tokenData?.error || tokenError?.message || "Failed to initialize processing token");
+    if (executionTokenRefreshRef.current) {
+      return executionTokenRefreshRef.current;
     }
 
-    setOrgExecutionToken(tokenData.token as string);
-    const expiresAt = typeof tokenData.expires_at === "string" ? Date.parse(tokenData.expires_at) : NaN;
-    setOrgExecutionTokenExpiresAt(Number.isFinite(expiresAt) ? expiresAt : Date.now() + 3600 * 1000);
+    setIsExecutionTokenRefreshing(true);
+    const refreshPromise = (async () => {
+      const { data: tokenData, error: tokenError } = await supabase.functions.invoke("pdc-auth", {
+        body: {
+          action: "issue_public",
+          org_slug: orgSlug,
+          ttl_seconds: EXECUTION_TOKEN_TTL_SECONDS,
+        },
+      });
+
+      if (tokenError || !tokenData?.ok || !tokenData?.token) {
+        throw new Error(tokenData?.error || tokenError?.message || "Failed to initialize processing token");
+      }
+
+      setOrgExecutionToken(tokenData.token as string);
+      const expiresAt = typeof tokenData.expires_at === "string" ? Date.parse(tokenData.expires_at) : NaN;
+      setOrgExecutionTokenExpiresAt(
+        Number.isFinite(expiresAt) ? expiresAt : Date.now() + EXECUTION_TOKEN_TTL_SECONDS * 1000
+      );
+      setEmbedError(null);
+    })();
+
+    executionTokenRefreshRef.current = refreshPromise;
+    void refreshPromise.finally(() => {
+      if (executionTokenRefreshRef.current === refreshPromise) {
+        executionTokenRefreshRef.current = null;
+      }
+      setIsExecutionTokenRefreshing(false);
+    }).catch(() => {
+      // The caller handles and schedules retries for refresh failures.
+    });
+
+    return refreshPromise;
   }, [orgSlug]);
 
   useEffect(() => {
@@ -262,21 +291,73 @@ const EmbedGatewayContent = () => {
   useEffect(() => {
     if (!embedAllowed || !orgExecutionTokenExpiresAt) return;
 
-    const refreshLeadTimeMs = 5 * 60 * 1000;
-    const refreshDelay = Math.max(30 * 1000, orgExecutionTokenExpiresAt - Date.now() - refreshLeadTimeMs);
-    const timer = window.setTimeout(() => {
-      issuePublicExecutionToken().catch((err) => {
-        console.error("Failed to refresh embed execution token:", err);
-        setOrgExecutionToken(null);
-        setOrgExecutionTokenExpiresAt(null);
-        setEmbedAllowed(false);
-        setGatewayFeatures(null);
-        setEmbedError("This gateway access could not refresh its processing token. Reload the embedded gateway or contact your administrator.");
-        revealEmbedDocument();
-      });
-    }, refreshDelay);
+    let cancelled = false;
+    let timer: number | null = null;
+    let retryAttempt = 0;
+    let refreshRequestInFlight = false;
 
-    return () => window.clearTimeout(timer);
+    const clearTimer = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const scheduleRefresh = (delayMs: number) => {
+      clearTimer();
+      timer = window.setTimeout(refreshExecutionToken, Math.max(0, delayMs));
+    };
+
+    const refreshExecutionToken = () => {
+      if (cancelled || refreshRequestInFlight) return;
+
+      if (Date.now() >= orgExecutionTokenExpiresAt) {
+        // Prevent protected actions from using a token that is known to be expired.
+        setOrgExecutionToken(null);
+      }
+
+      refreshRequestInFlight = true;
+      void issuePublicExecutionToken()
+        .then(() => {
+          retryAttempt = 0;
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          retryAttempt += 1;
+          const retryDelay = Math.min(
+            EXECUTION_TOKEN_RETRY_BASE_MS * 2 ** (retryAttempt - 1),
+            EXECUTION_TOKEN_RETRY_MAX_MS,
+          );
+          console.warn(`Failed to refresh embed execution token; retrying in ${retryDelay}ms`, err);
+          scheduleRefresh(retryDelay);
+        })
+        .finally(() => {
+          refreshRequestInFlight = false;
+        });
+    };
+
+    const refreshIfNeeded = () => {
+      if (document.visibilityState === "hidden") return;
+      const remainingMs = orgExecutionTokenExpiresAt - Date.now();
+      if (remainingMs <= EXECUTION_TOKEN_REFRESH_LEAD_MS) {
+        refreshExecutionToken();
+      }
+    };
+
+    scheduleRefresh(orgExecutionTokenExpiresAt - Date.now() - EXECUTION_TOKEN_REFRESH_LEAD_MS);
+    document.addEventListener("visibilitychange", refreshIfNeeded);
+    window.addEventListener("pageshow", refreshIfNeeded);
+    window.addEventListener("focus", refreshIfNeeded);
+    window.addEventListener("online", refreshIfNeeded);
+
+    return () => {
+      cancelled = true;
+      clearTimer();
+      document.removeEventListener("visibilitychange", refreshIfNeeded);
+      window.removeEventListener("pageshow", refreshIfNeeded);
+      window.removeEventListener("focus", refreshIfNeeded);
+      window.removeEventListener("online", refreshIfNeeded);
+    };
   }, [embedAllowed, issuePublicExecutionToken, orgExecutionTokenExpiresAt]);
 
   // Optional legacy light/dark override for hand-written embeds.
@@ -552,7 +633,20 @@ const EmbedGatewayContent = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="relative min-h-screen bg-background">
+      {!orgExecutionToken && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-6 backdrop-blur-sm">
+          <div className="max-w-md text-center" role="status" aria-live="polite">
+            <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin text-primary" />
+            <p className="text-sm font-medium text-foreground">
+              {isExecutionTokenRefreshing ? "Restoring secure gateway access…" : "Waiting to reconnect…"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Your gateway session is preserved. Access will resume automatically when the connection is available.
+            </p>
+          </div>
+        </div>
+      )}
       <div className="container mx-auto px-4 py-5 max-w-[90vw]">
         <GatewayHeader />
 
