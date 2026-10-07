@@ -1,4 +1,4 @@
-import { decrypt, hmac, object } from "../../supabase/functions/_shared/workflowSecurity.ts";
+import { decryptForOrganization, hmac, object } from "../../supabase/functions/_shared/workflowSecurity.ts";
 import { interactionUrl } from "../../supabase/functions/_shared/workflowInteraction.ts";
 import { assertAllowedOutboundUrl } from "../../supabase/functions/_shared/workflowHttp.ts";
 
@@ -11,7 +11,7 @@ export async function deliverNotification(admin: any, job: any, send: typeof fet
   };
   if (!run) { await patch({ status: "skipped", last_error: "Run no longer exists." }); return; }
   let workflow: any;
-  try { ({ workflow } = await decrypt(run.snapshot.ciphertext)); }
+  try { ({ workflow } = await decryptForOrganization(admin, run.organization_id, run.snapshot.ciphertext)); }
   catch {
     await patch({ status: job.attempts >= 6 ? "failed" : "pending", last_error: "Run notification configuration could not be decrypted.",
       available_at: new Date(Date.now() + Math.min(3600, 5 * 2 ** Math.min(job.attempts - 1, 10)) * 1000).toISOString() });

@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { adminClient } from "../_shared/workflowAccess.ts";
 import { cors, json, publicRun, readBody } from "../_shared/workflowRuns.ts";
-import { decrypt, HttpError, object } from "../_shared/workflowSecurity.ts";
+import { decryptForOrganization, HttpError, object } from "../_shared/workflowSecurity.ts";
 import { resumeRun, verifyInteractionToken } from "../_shared/workflowInteraction.ts";
 
 export const handleWorkflowInteraction = async (request: Request) => {
@@ -17,7 +17,7 @@ export const handleWorkflowInteraction = async (request: Request) => {
       return json(await resumeRun(admin, run, body), 202);
     }
     if (body.action !== "get") throw new HttpError(400, "Unknown interaction action.");
-    const { workflow } = await decrypt(run.snapshot.ciphertext);
+    const { workflow } = await decryptForOrganization(admin, run.organization_id, run.snapshot.ciphertext);
     const view = publicRun(run);
     // A participant may see only this run's question/result, never inputs, history, or credentials.
     return new Response(JSON.stringify({ ok: true, run: { id: view.id, workflowName: view.workflowName, status: view.status,

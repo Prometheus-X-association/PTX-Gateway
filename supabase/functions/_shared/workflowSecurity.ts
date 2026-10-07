@@ -24,6 +24,45 @@ async function encryptionKey() {
   if (bytes.length !== 32) throw new HttpError(503, "WORKFLOW_SECRETS_KEY must contain 32 base64-encoded bytes.");
   return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
+type WorkflowKeyClient = { from: (table: string) => any; rpc: (name: string, args: Record<string, unknown>) => PromiseLike<{ data: any; error: any }> };
+interface OrganizationKeyRecord { id: string; organization_id: string; key_version: number; wrapped_key_ciphertext?: string | null; key_material?: string | null; status: string; activated_at?: string }
+const organizationKeyCache = new Map<string, Promise<CryptoKey>>();
+const keyAad = (organizationId: string, keyId: string, version: number) => encoder.encode(`ptx-workflow-org-key:${organizationId}:${keyId}:${version}`);
+const dataAad = (organizationId: string, keyId: string) => encoder.encode(`ptx-workflow-data:${organizationId}:${keyId}`);
+async function importAesKey(bytes: Uint8Array) { return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]); }
+async function unwrapOrganizationKey(record: OrganizationKeyRecord) {
+  const cacheKey = `${record.organization_id}:${record.id}`;
+  let cached = organizationKeyCache.get(cacheKey);
+  if (!cached) {
+    if (organizationKeyCache.size >= 512) organizationKeyCache.delete(organizationKeyCache.keys().next().value!);
+    cached = (async () => {
+      if (record.key_material) {
+        const bytes = unbase64(record.key_material);
+        if (bytes.length !== 32) throw new HttpError(503, "Organization encryption key is invalid.");
+        return importAesKey(bytes);
+      }
+      const [iv, ciphertext] = String(record.wrapped_key_ciphertext || "").split(".");
+      if (!iv || !ciphertext) throw new HttpError(503, "Organization encryption key is invalid.");
+      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unbase64(iv), additionalData: keyAad(record.organization_id, record.id, record.key_version) }, await encryptionKey(), unbase64(ciphertext));
+      return importAesKey(new Uint8Array(bytes));
+    })();
+    organizationKeyCache.set(cacheKey, cached);
+    cached.catch(() => organizationKeyCache.delete(cacheKey));
+  }
+  return cached;
+}
+async function organizationKeyRecord(client: WorkflowKeyClient, organizationId: string, keyId?: string): Promise<OrganizationKeyRecord> {
+  const { data, error } = await client.rpc("workflow_organization_key_material", { p_organization_id: organizationId, p_key_id: keyId ?? null });
+  if (error) throw error;
+  if (data) return data as OrganizationKeyRecord;
+  if (keyId) throw new HttpError(503, "The organization encryption key required by this workflow is unavailable.");
+  return createOrganizationKey(client, organizationId, null, "initialized");
+}
+export async function createOrganizationKey(client: WorkflowKeyClient, organizationId: string, actorUserId: string | null, reason = "rotated"): Promise<OrganizationKeyRecord> {
+  const { data, error } = await client.rpc("activate_workflow_organization_vault_key", { p_organization_id: organizationId, p_actor_user_id: actorUserId, p_reason: reason });
+  if (error) throw error;
+  return data as OrganizationKeyRecord;
+}
 export async function encrypt(value: unknown) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await encryptionKey(), encoder.encode(JSON.stringify(value)));
@@ -32,6 +71,21 @@ export async function encrypt(value: unknown) {
 export async function decrypt(value: string) {
   const [iv, ciphertext] = value.split(".");
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unbase64(iv) }, await encryptionKey(), unbase64(ciphertext));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+export async function encryptForOrganization(client: WorkflowKeyClient, organizationId: string, value: unknown) {
+  const record = await organizationKeyRecord(client, organizationId);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: dataAad(organizationId, record.id) }, await unwrapOrganizationKey(record), encoder.encode(JSON.stringify(value)));
+  return `wok1.${record.id}.${base64(iv)}.${base64(new Uint8Array(encrypted))}`;
+}
+export async function decryptForOrganization(client: WorkflowKeyClient, organizationId: string, value: string) {
+  if (!value.startsWith("wok1.")) return decrypt(value);
+  const parts = value.split(".");
+  if (parts.length !== 4) throw new HttpError(400, "Invalid organization-encrypted workflow data.");
+  const [, keyId, iv, ciphertext] = parts;
+  const record = await organizationKeyRecord(client, organizationId, keyId);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unbase64(iv), additionalData: dataAad(organizationId, keyId) }, await unwrapOrganizationKey(record), unbase64(ciphertext));
   return JSON.parse(new TextDecoder().decode(plain));
 }
 export function redact(value: unknown, secrets: string[] = [], depth = 0): unknown {

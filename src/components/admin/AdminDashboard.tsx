@@ -40,11 +40,14 @@ import {
   SettingsBackupData,
 } from "@/services/configApi";
 import { toast } from "sonner";
+import { workflowBackend } from "@/lib/workflowBackend";
+import { WorkflowEncryptionManagementPanel } from "./WorkflowEncryptionManagementPanel";
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const { user, isAdmin, isSuperAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState("pdc");
+  const [hasEncryptionDelegation, setHasEncryptionDelegation] = useState<boolean | null>(null);
   const [activeGeneralSubTab, setActiveGeneralSubTab] = useState("global");
   const topTabsScrollRef = useRef<HTMLDivElement | null>(null);
   const [topTabsScrollState, setTopTabsScrollState] = useState({
@@ -70,6 +73,15 @@ const AdminDashboard = () => {
     organizationSettings: false,
     embedSettings: false,
   });
+
+  useEffect(() => {
+    if (isAdmin) { setHasEncryptionDelegation(false); return; }
+    const organizationId = user?.organization?.id;
+    if (!organizationId) { setHasEncryptionDelegation(false); return; }
+    let disposed = false;
+    void workflowBackend("encryption_status", organizationId).then(() => { if (!disposed) setHasEncryptionDelegation(true); }).catch(() => { if (!disposed) setHasEncryptionDelegation(false); });
+    return () => { disposed = true; };
+  }, [isAdmin, user?.organization?.id]);
 
   useEffect(() => {
     const scrollEl = topTabsScrollRef.current;
@@ -247,6 +259,8 @@ const AdminDashboard = () => {
   };
 
   if (!isAdmin) {
+    if (hasEncryptionDelegation === null) return <div className="min-h-screen bg-background flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+    if (hasEncryptionDelegation && user?.organization?.id) return <div className="min-h-screen bg-background"><div className="container mx-auto max-w-3xl px-4 py-8"><div className="mb-6 flex items-center justify-between"><div><h1 className="text-2xl font-bold">Agent Operations</h1><p className="text-sm text-muted-foreground">Delegated workflow encryption management</p></div><UserMenu /></div><WorkflowEncryptionManagementPanel organizationId={user.organization.id} /></div></div>;
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Card className="w-full max-w-md">

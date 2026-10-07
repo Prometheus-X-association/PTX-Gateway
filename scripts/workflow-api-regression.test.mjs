@@ -26,18 +26,20 @@ const { handleWorkflowRequest } = load("supabase/functions/workflow-runs/index.t
 const { handleWorkflowWebhook } = load("supabase/functions/workflow-webhook/index.ts");
 const { interactionToken } = load("supabase/functions/_shared/workflowInteraction.ts");
 const { handleWorkflowInteraction } = load("supabase/functions/workflow-interaction/index.ts");
-const { hash, hmac, encrypt, decrypt, compileWorkflow, validateGraph, WORKFLOW_COMPILER_VERSION } = load("supabase/functions/_shared/workflowSecurity.ts");
+const { hash, hmac, encrypt, decryptForOrganization, compileWorkflow, validateGraph, WORKFLOW_COMPILER_VERSION } = load("supabase/functions/_shared/workflowSecurity.ts");
 
 // A PostgREST contract double; database locking and RLS are tested separately in SQL.
 class Query {
   constructor(db, table) { this.db = db; this.table = table; this.filters = []; this.operation = "select"; this.columns = "*"; }
   select(columns = "*", options = {}) { this.columns = columns; this.options = options; return this; }
   eq(key, value) { this.filters.push((row) => row[key] === value); return this; }
+  is(key, value) { this.filters.push((row) => row[key] === value); return this; }
   in(key, values) { this.filters.push((row) => values.includes(row[key])); return this; }
   gt(key, value) { this.filters.push((row) => row[key] > value); return this; }
   order(key, options = {}) { this.ordering = [key, options.ascending !== false]; return this; }
   limit(value) { this.maximum = value; return this; }
   insert(value) { this.operation = "insert"; this.value = value; return this; }
+  upsert(value) { this.operation = "upsert"; this.value = value; return this; }
   update(value) { this.operation = "update"; this.value = value; return this; }
   delete() { this.operation = "delete"; return this; }
   single() { return this.execute(true); }
@@ -46,7 +48,11 @@ class Query {
   async execute(single) {
     const table = this.db.tables[this.table] ||= [];
     let rows = table.filter((row) => this.filters.every((filter) => filter(row)));
-    if (this.operation === "insert") {
+    if (this.operation === "insert" || this.operation === "upsert") {
+      if (this.operation === "upsert") {
+        const match = table.find((row) => row.organization_id === this.value.organization_id && row.user_id === this.value.user_id && row.permission === this.value.permission);
+        if (match) { Object.assign(match, structuredClone(this.value)); return { data: single ? structuredClone(match) : [structuredClone(match)], count: 1, error: null }; }
+      }
       const row = { id: randomUUID(), enabled: true, status: "queued", created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...structuredClone(this.value) };
       if (this.table === "workflow_runs" && row.idempotency_key && table.some((item) => item.organization_id === row.organization_id && item.caller_id === row.caller_id && item.workflow_id === row.workflow_id && item.idempotency_key === row.idempotency_key)) return { data: null, error: { code: "23505" } };
       table.push(row); rows = [row];
@@ -66,8 +72,41 @@ function setup() {
     global_configs: ["org-a", "org-b"].map((organization_id) => ({ organization_id, features: { llmInsights: { enabled: true, workflows: [structuredClone(workflow)], providers: [{ apiKey: "provider-private-key" }] } } })),
     organization_members: [{ organization_id: "org-a", user_id: "admin-a", status: "active" }, { organization_id: "org-a", user_id: "user-a", status: "active" }, { organization_id: "org-a", user_id: "user-b", status: "active" }, { organization_id: "org-b", user_id: "admin-b", status: "active" }],
     user_roles: [{ organization_id: "org-a", user_id: "admin-a", role: "admin" }, { organization_id: "org-b", user_id: "admin-b", role: "admin" }],
+    workflow_organization_keys: [], workflow_encryption_delegations: [], workflow_encryption_audit_events: [], profiles: [],
   }, from(table) { return new Query(this, table); }, async rpc(name, args) {
-    const run = this.tables.workflow_runs.find((run) => run.id === args.p_run_id && run.organization_id === args.p_organization_id);
+    if (name === "workflow_organization_key_material") {
+      const key = (this.tables.workflow_organization_keys ?? []).filter((item) => item.organization_id === args.p_organization_id && (args.p_key_id ? item.id === args.p_key_id : item.status === "active")).sort((a, b) => b.key_version - a.key_version)[0];
+      return { data: key ? structuredClone(key) : null, error: null };
+    }
+    if (name === "activate_workflow_organization_vault_key") {
+      const keys = this.tables.workflow_organization_keys;
+      const existing = keys.find((key) => key.organization_id === args.p_organization_id && key.status === "active");
+      if (args.p_reason === "initialized" && existing) return { data: structuredClone(existing), error: null };
+      keys.filter((key) => key.organization_id === args.p_organization_id && key.status === "active").forEach((key) => Object.assign(key, { status: "retired", retired_at: new Date().toISOString() }));
+      const bytes = webcrypto.getRandomValues(new Uint8Array(32));
+      const key = { id: randomUUID(), organization_id: args.p_organization_id, key_version: Math.max(0, ...keys.filter((item) => item.organization_id === args.p_organization_id).map((item) => item.key_version)) + 1, key_material: btoa(String.fromCharCode(...bytes)), status: "active", activated_at: new Date().toISOString() };
+      keys.push(key); return { data: structuredClone(key), error: null };
+    }
+    if (name === "next_workflow_organization_key_version") return { data: Math.max(0, ...(this.tables.workflow_organization_keys ?? []).filter((key) => key.organization_id === args.p_organization_id).map((key) => key.key_version)) + 1, error: null };
+    if (name === "activate_workflow_organization_key") {
+      const keys = this.tables.workflow_organization_keys;
+      const existing = keys.find((key) => key.organization_id === args.p_organization_id && key.status === "active");
+      if (args.p_reason === "initialized" && existing) return { data: structuredClone(existing), error: null };
+      keys.filter((key) => key.organization_id === args.p_organization_id && key.status === "active").forEach((key) => Object.assign(key, { status: "retired", retired_at: new Date().toISOString() }));
+      const key = { id: args.p_key_id, organization_id: args.p_organization_id, key_version: args.p_key_version, wrapped_key_ciphertext: args.p_wrapped_key_ciphertext, status: "active", activated_at: new Date().toISOString() };
+      keys.push(key); return { data: structuredClone(key), error: null };
+    }
+    if (name === "set_workflow_encryption_delegation") {
+      const delegations = this.tables.workflow_encryption_delegations;
+      const existing = delegations.find((item) => item.organization_id === args.p_organization_id && item.user_id === args.p_subject_user_id);
+      if (args.p_enabled) {
+        const value = { organization_id: args.p_organization_id, user_id: args.p_subject_user_id, permission: "manage_workflow_encryption", delegated_by: args.p_actor_user_id, created_at: new Date().toISOString(), revoked_at: null, revoked_by: null };
+        existing ? Object.assign(existing, value) : delegations.push(value);
+      } else if (existing) Object.assign(existing, { revoked_at: new Date().toISOString(), revoked_by: args.p_actor_user_id });
+      this.tables.workflow_encryption_audit_events.push({ id: randomUUID(), organization_id: args.p_organization_id, actor_user_id: args.p_actor_user_id, subject_user_id: args.p_subject_user_id, event_type: args.p_enabled ? "delegate_granted" : "delegate_revoked", created_at: new Date().toISOString() });
+      return { data: null, error: null };
+    }
+    const run = (this.tables.workflow_runs ?? []).find((run) => run.id === args.p_run_id && run.organization_id === args.p_organization_id);
     if (name === "signal_workflow_run") {
       if (!run || run.status !== "waiting_for_event" || run.event_wait?.signalName !== args.p_signal_name) return { data: null, error: { code: "P0001", message: "Run is not waiting for this signal." } };
       const id = randomUUID();
@@ -100,6 +139,27 @@ test("workflow compilation normalizes execution defaults and rejects malformed g
   assert.throws(() => validateGraph({ ...workflow, execution: { allowedOutboundHosts: ["https://not-a-host.example"] } }), /hostname/);
 });
 
+test("organization admins delegate narrow encryption rotation without exposing key material", async () => {
+  setup();
+  const before = await api({ action: "encryption_status" });
+  assert.equal(before.status, 200); assert.equal(before.body.encryption.initialized, false); assert.equal(before.body.encryption.keyStorage, "supabase_vault");
+  assert.equal(before.body.encryption.members.some((member) => member.userId === "admin-a"), false);
+  assert.equal((await api({ action: "encryption_delegate", userId: "admin-a" })).status, 400);
+  assert.equal((await api({ action: "encryption_delegate", userId: "user-a" })).status, 200);
+  assert.equal((await api({ action: "encryption_status" }, "user-a")).status, 200);
+  assert.equal((await api({ action: "encryption_delegate", userId: "user-b" }, "user-a")).status, 403);
+  const rotated = await api({ action: "encryption_rotate" }, "user-a");
+  assert.equal(rotated.status, 200); assert.equal(rotated.body.key.version, 1);
+  assert.equal(Object.hasOwn(rotated.body.key, "wrapped_key_ciphertext"), false);
+  const started = await api({ action: "start", workflowId: "shared", input: { protected: true } }, "user-a");
+  assert.equal(started.status, 202);
+  const run = database.tables.workflow_runs.find((item) => item.id === started.body.runId);
+  assert.match(run.snapshot.ciphertext, /^wok1\./);
+  assert.deepEqual((await decryptForOrganization(database, "org-a", run.snapshot.ciphertext)).workflow.id, "shared");
+  assert.equal((await api({ action: "encryption_revoke_delegate", userId: "user-a" })).status, 200);
+  assert.equal((await api({ action: "encryption_status" }, "user-a")).status, 403);
+});
+
 test("concurrent users start isolated runs of the same organization workflow", async () => {
   setup();
   // Ignore obsolete saved admin limits when starting independent runs.
@@ -112,7 +172,7 @@ test("concurrent users start isolated runs of the same organization workflow", a
   assert.equal(run.timeout_seconds, null);
   assert.equal(Object.hasOwn(run, "max_concurrent_runs"), false);
   assert.equal(run.organization_id, "org-a"); assert.ok(!JSON.stringify(run.snapshot).includes("provider-private-key"));
-  assert.equal((await decrypt(run.snapshot.ciphertext)).llm.providers[0].apiKey, "provider-private-key");
+  assert.equal((await decryptForOrganization(database, "org-a", run.snapshot.ciphertext)).llm.providers[0].apiKey, "provider-private-key");
 });
 test("standalone API and webhook accept arbitrary JSON while result-page chat is disabled", async () => {
   setup();
@@ -133,7 +193,7 @@ test("standalone API and webhook accept arbitrary JSON while result-page chat is
     const run = database.tables.workflow_runs.find((run) => run.id === started.body.runId);
     assert.deepEqual(run.input.resultData, input);
     assert.equal(run.trigger_source, "api");
-    const saved = await decrypt(run.snapshot.ciphertext);
+    const saved = await decryptForOrganization(database, run.organization_id, run.snapshot.ciphertext);
     assert.equal(saved.llm.enabled, false);
     assert.deepEqual(saved.workflow.targetResources, []);
     const delivery = await hook(endpoint.body.id, endpoint.body.secret, input, `standalone-${index}`);
@@ -165,7 +225,7 @@ test("external signals require privileged access and encrypt their payload", asy
   const delivered = await api({ action: "signal", runId: run.id, signalName: "approval.received", payload: { approved: true } });
   assert.equal(delivered.status, 202);
   assert.equal(run.status, "queued");
-  assert.deepEqual(await decrypt(run.pending_signals[0].ciphertext), { approved: true });
+  assert.deepEqual(await decryptForOrganization(database, run.organization_id, run.pending_signals[0].ciphertext), { approved: true });
   assert.equal(JSON.stringify(run.pending_signals).includes('"approved":true'), false);
 });
 test("idempotent concurrent retries create one run and conflicting input returns 409", async () => {

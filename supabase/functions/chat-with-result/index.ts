@@ -1,5 +1,5 @@
 import { authenticatedWorkerRun } from "../_shared/workflowAccess.ts";
-import { decrypt } from "../_shared/workflowSecurity.ts";
+import { decryptForOrganization } from "../_shared/workflowSecurity.ts";
 import { buildChunkedResultPayload, formatChunkedResultContext, formatUploadedDocumentContext } from "./resultContext.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -1046,7 +1046,7 @@ serve(async (req: Request) => {
       const run = await authenticatedWorkerRun(req, admin);
       if (!run || body.workflowId !== run.workflow_id) return sendError("Workflow mismatch", 403);
       workerOrgId = run.organization_id;
-      workerSnapshot = await decrypt(run.snapshot.ciphertext);
+      workerSnapshot = await decryptForOrganization(admin, run.organization_id, run.snapshot.ciphertext);
     } catch (error) { return sendError(error instanceof Error ? error.message : "Worker authentication failed", 401); }
   }
 

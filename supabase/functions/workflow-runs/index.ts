@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { adminClient, authorize, checkRunAccess, loadWorkflow } from "../_shared/workflowAccess.ts";
 import { createRun, cors, json, publicRun, readBody } from "../_shared/workflowRuns.ts";
 import { interactionUrl, resumeRun } from "../_shared/workflowInteraction.ts";
-import { decrypt, encrypt, hash, HttpError, object, randomSecret, validateWebhookMapping } from "../_shared/workflowSecurity.ts";
+import { createOrganizationKey, decryptForOrganization, encryptForOrganization, hash, HttpError, object, randomSecret, validateWebhookMapping } from "../_shared/workflowSecurity.ts";
 import { MAX_NODE_OUTPUT_BYTES, validateSerializableData } from "../_shared/workflowExecutor.ts";
 
 export const handleWorkflowRequest = async (request: Request) => {
@@ -16,7 +16,67 @@ export const handleWorkflowRequest = async (request: Request) => {
     const admin = adminClient();
     const principal = await authorize(request, body, admin);
     const action = body.action || "start";
-    if (request.method === "GET" && !["get", "steps", "notifications", "state", "artifact", "list", "webhooks", "keys", "policy"].includes(action)) throw new HttpError(405, "Use POST for this action.");
+    if (request.method === "GET" && !["get", "steps", "notifications", "state", "artifact", "list", "webhooks", "keys", "policy", "encryption_status"].includes(action)) throw new HttpError(405, "Use POST for this action.");
+    const canManageEncryption = async () => {
+      if (principal.isAdmin) return true;
+      if (!principal.userId) return false;
+      const { data, error } = await admin.from("workflow_encryption_delegations").select("user_id").eq("organization_id", principal.orgId).eq("user_id", principal.userId).eq("permission", "manage_workflow_encryption").is("revoked_at", null).maybeSingle();
+      if (error) throw error;
+      return Boolean(data);
+    };
+    if (["encryption_status", "encryption_rotate", "encryption_delegate", "encryption_revoke_delegate"].includes(action)) {
+      if (!principal.userId) throw new HttpError(403, "A signed-in organization member is required.");
+      if (action === "encryption_delegate" || action === "encryption_revoke_delegate") {
+        if (!principal.isAdmin) throw new HttpError(403, "Organization admin permission is required to manage encryption delegates.");
+        const subjectUserId = String(body.userId || "");
+        if (action === "encryption_delegate") {
+          if (subjectUserId === principal.userId) throw new HttpError(400, "You already manage workflow encryption as an organization admin and cannot delegate it to yourself.");
+          const { data: member, error: memberError } = await admin.from("organization_members").select("user_id").eq("organization_id", principal.orgId).eq("user_id", subjectUserId).eq("status", "active").maybeSingle();
+          if (memberError) throw memberError;
+          if (!member) throw new HttpError(400, "Choose an active member of this organization.");
+          const { data: subjectRole, error: subjectRoleError } = await admin.from("user_roles").select("role").eq("organization_id", principal.orgId).eq("user_id", subjectUserId).in("role", ["admin", "super_admin"]).maybeSingle();
+          if (subjectRoleError) throw subjectRoleError;
+          if (subjectRole) throw new HttpError(400, "This member is already an organization admin and does not require delegated encryption permission.");
+        }
+        const { error } = await admin.rpc("set_workflow_encryption_delegation", { p_organization_id: principal.orgId, p_subject_user_id: subjectUserId, p_actor_user_id: principal.userId, p_enabled: action === "encryption_delegate" });
+        if (error) throw error;
+        return json({ ok: true });
+      }
+      if (!await canManageEncryption()) throw new HttpError(403, "Workflow encryption management permission is required.");
+      if (action === "encryption_rotate") {
+        const { data: currentKey, error: currentKeyError } = await admin.from("workflow_organization_keys").select("id").eq("organization_id", principal.orgId).eq("status", "active").maybeSingle();
+        if (currentKeyError) throw currentKeyError;
+        const key = await createOrganizationKey(admin, principal.orgId, principal.userId, currentKey ? "rotated" : "initialized");
+        return json({ ok: true, key: { id: key.id, version: key.key_version, status: key.status, activatedAt: key.activated_at } });
+      }
+      const [{ data: keys, error: keyError }, { data: delegates, error: delegateError }, { data: audit, error: auditError }] = await Promise.all([
+        admin.from("workflow_organization_keys").select("id,key_version,status,created_by,created_at,activated_at,retired_at").eq("organization_id", principal.orgId).order("key_version", { ascending: false }).limit(50),
+        admin.from("workflow_encryption_delegations").select("user_id,delegated_by,created_at").eq("organization_id", principal.orgId).eq("permission", "manage_workflow_encryption").is("revoked_at", null).order("created_at"),
+        admin.from("workflow_encryption_audit_events").select("id,actor_user_id,event_type,key_id,subject_user_id,metadata,created_at").eq("organization_id", principal.orgId).order("created_at", { ascending: false }).limit(100),
+      ]);
+      if (keyError) throw keyError;
+      if (delegateError) throw delegateError;
+      if (auditError) throw auditError;
+      let members: any[] = [];
+      if (principal.isAdmin) {
+        const { data: memberRows, error: memberError } = await admin.from("organization_members").select("user_id,status").eq("organization_id", principal.orgId).eq("status", "active");
+        if (memberError) throw memberError;
+        const userIds = (memberRows ?? []).map((member: any) => member.user_id);
+        const [{ data: profiles, error: profileError }, { data: adminRoles, error: roleError }] = userIds.length ? await Promise.all([
+          admin.from("profiles").select("user_id,email,full_name").in("user_id", userIds),
+          admin.from("user_roles").select("user_id,role").eq("organization_id", principal.orgId).in("user_id", userIds).in("role", ["admin", "super_admin"]),
+        ]) : [{ data: [], error: null }, { data: [], error: null }];
+        if (profileError) throw profileError;
+        if (roleError) throw roleError;
+        const profileMap = new Map((profiles ?? []).map((profile: any) => [profile.user_id, profile]));
+        const adminIds = new Set((adminRoles ?? []).map((role: any) => role.user_id));
+        members = userIds.filter((userId: string) => userId !== principal.userId && !adminIds.has(userId)).map((userId: string) => ({ userId, ...profileMap.get(userId) }));
+      }
+      const activeKey = keys?.find((key: any) => key.status === "active") ?? null;
+      let legacyMasterKeyConfigured = false;
+      try { legacyMasterKeyConfigured = Uint8Array.from(atob(Deno.env.get("WORKFLOW_SECRETS_KEY") || ""), (char) => char.charCodeAt(0)).length === 32; } catch { /* optional legacy key is unavailable */ }
+      return json({ ok: true, encryption: { initialized: Boolean(activeKey), keyStorage: "supabase_vault", legacyMasterKeyConfigured, activeKey, keys: keys ?? [], delegates: delegates ?? [], audit: audit ?? [], members, canDelegate: principal.isAdmin } });
+    }
     if (action === "start") {
       const source = principal.keyId ? "api" : body.source === "dashboard" ? "dashboard" : "api";
       return json({ ok: true, ...await createRun(admin, principal, body, source, request.headers.get("idempotency-key") || undefined) }, 202);
@@ -92,8 +152,8 @@ export const handleWorkflowRequest = async (request: Request) => {
       }
       if (action === "state") {
         if (!principal.isAdmin) throw new HttpError(403, "Organization admin permission is required.");
-        const current = run.run_state_ciphertext ? await decrypt(run.run_state_ciphertext) : {};
-        const { workflow } = await decrypt(run.snapshot.ciphertext);
+        const current = run.run_state_ciphertext ? await decryptForOrganization(admin, principal.orgId, run.run_state_ciphertext) : {};
+        const { workflow } = await decryptForOrganization(admin, principal.orgId, run.snapshot.ciphertext);
         const hidden = new Set<string>((workflow.state?.fields ?? []).filter((field: any) => field.sensitive).map((field: any) => String(field.key)));
         const inspected = structuredClone(current);
         for (const path of hidden) {
@@ -112,9 +172,9 @@ export const handleWorkflowRequest = async (request: Request) => {
         const { data: artifact, error: artifactError } = await admin.from("workflow_run_artifacts").select("id,node_id,state_key,content_type,size_bytes,sha256,ciphertext,created_at").eq("organization_id", principal.orgId).eq("run_id", run.id).eq("id", String(body.artifactId || "")).maybeSingle();
         if (artifactError) throw artifactError;
         if (!artifact) throw new HttpError(404, "Workflow artifact was not found.");
-        const { workflow } = await decrypt(run.snapshot.ciphertext);
+        const { workflow } = await decryptForOrganization(admin, principal.orgId, run.snapshot.ciphertext);
         if ((workflow.state?.fields ?? []).some((field: any) => field.key === artifact.state_key && field.sensitive)) throw new HttpError(403, "Sensitive workflow artifacts cannot be revealed through the operations API.");
-        return json({ ok: true, artifact: { id: artifact.id, nodeId: artifact.node_id, stateKey: artifact.state_key, contentType: artifact.content_type, size: artifact.size_bytes, sha256: artifact.sha256, createdAt: artifact.created_at, value: await decrypt(artifact.ciphertext) } });
+        return json({ ok: true, artifact: { id: artifact.id, nodeId: artifact.node_id, stateKey: artifact.state_key, contentType: artifact.content_type, size: artifact.size_bytes, sha256: artifact.sha256, createdAt: artifact.created_at, value: await decryptForOrganization(admin, principal.orgId, artifact.ciphertext) } });
       }
       if (action === "cancel") {
         if (!["queued", "running", "waiting_for_input", "waiting_for_event"].includes(run.status)) throw new HttpError(409, "Run has already finished.");
@@ -134,7 +194,7 @@ export const handleWorkflowRequest = async (request: Request) => {
         else if (resolution === "retry") patch = { status: "queued", stop_reason: "Operator confirmed retry of the uncertain external action.", finished_at: null };
         else {
           validateSerializableData(body.assumedOutput, "Assumed node output", MAX_NODE_OUTPUT_BYTES);
-          const { workflow } = await decrypt(run.snapshot.ciphertext);
+          const { workflow } = await decryptForOrganization(admin, principal.orgId, run.snapshot.ciphertext);
           const node = workflow.graph.nodes.find((item: any) => item.id === run.current_node_id);
           if (!node || !["api", "agent"].includes(node.type)) throw new HttpError(409, "The interrupted node cannot be continued manually.");
           const checkpoint = structuredClone(run.checkpoint || { pending: [], nodeOutputs: {}, visits: {}, documentContext: null });
@@ -154,7 +214,7 @@ export const handleWorkflowRequest = async (request: Request) => {
         const signalName = String(body.signalName || "");
         if (!/^[A-Za-z][A-Za-z0-9_.:-]{0,99}$/.test(signalName)) throw new HttpError(400, "Invalid workflow signal name.");
         validateSerializableData(body.payload ?? null, "Workflow signal payload", 256 * 1024);
-        const { data: signalId, error: signalError } = await admin.rpc("signal_workflow_run", { p_run_id: run.id, p_organization_id: principal.orgId, p_signal_name: signalName, p_payload_ciphertext: await encrypt(body.payload ?? null) });
+        const { data: signalId, error: signalError } = await admin.rpc("signal_workflow_run", { p_run_id: run.id, p_organization_id: principal.orgId, p_signal_name: signalName, p_payload_ciphertext: await encryptForOrganization(admin, principal.orgId, body.payload ?? null) });
         if (signalError?.code === "P0001") throw new HttpError(409, signalError.message);
         if (signalError) throw signalError;
         return json({ ok: true, runId: run.id, signalId, status: "queued" }, 202);
@@ -172,7 +232,7 @@ export const handleWorkflowRequest = async (request: Request) => {
         await loadWorkflow(admin, principal.orgId, String(body.workflowId));
         validateWebhookMapping(object(body.inputMapping));
         const secret = randomSecret();
-        const { data, error } = await admin.from("workflow_webhooks").insert({ organization_id: principal.orgId, workflow_id: body.workflowId, name: String(body.name || "Webhook").slice(0, 100), secret_ciphertext: await encrypt(secret), input_mapping: object(body.inputMapping) }).select("id").single();
+        const { data, error } = await admin.from("workflow_webhooks").insert({ organization_id: principal.orgId, workflow_id: body.workflowId, name: String(body.name || "Webhook").slice(0, 100), secret_ciphertext: await encryptForOrganization(admin, principal.orgId, secret), input_mapping: object(body.inputMapping) }).select("id").single();
         if (error) throw error;
         return json({ ok: true, id: data.id, secret }, 201);
       }
@@ -183,7 +243,7 @@ export const handleWorkflowRequest = async (request: Request) => {
       }
       const secret = action === "rotate_webhook" ? randomSecret() : null;
       if (body.inputMapping) validateWebhookMapping(object(body.inputMapping));
-      const patch = secret ? { secret_ciphertext: await encrypt(secret) } : { enabled: body.enabled !== false, ...(body.name ? { name: String(body.name).slice(0, 100) } : {}), ...(body.inputMapping ? { input_mapping: object(body.inputMapping) } : {}) };
+      const patch = secret ? { secret_ciphertext: await encryptForOrganization(admin, principal.orgId, secret) } : { enabled: body.enabled !== false, ...(body.name ? { name: String(body.name).slice(0, 100) } : {}), ...(body.inputMapping ? { input_mapping: object(body.inputMapping) } : {}) };
       const { data, error } = await admin.from("workflow_webhooks").update(patch).eq("organization_id", principal.orgId).eq("id", body.webhookId).select("id").maybeSingle();
       if (error) throw error;
       if (!data) throw new HttpError(404, "Webhook was not found.");

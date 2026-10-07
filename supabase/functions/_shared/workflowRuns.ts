@@ -1,6 +1,6 @@
 import { adminClient, type Principal, loadWorkflow, checkWorkflowAccess } from "./workflowAccess.ts";
 import { interactionUrl, validateInteractionSettings } from "./workflowInteraction.ts";
-import { compileWorkflow, encrypt, hash, HttpError, object, redact, WORKFLOW_COMPILER_VERSION } from "./workflowSecurity.ts";
+import { compileWorkflow, encryptForOrganization, hash, HttpError, object, redact, WORKFLOW_COMPILER_VERSION } from "./workflowSecurity.ts";
 
 export const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-organization-id, idempotency-key", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
 export const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
@@ -53,8 +53,8 @@ export async function createRun(admin: ReturnType<typeof adminClient>, principal
   const { data: run, error } = await admin.from("workflow_runs").insert({ organization_id: principal.orgId, workflow_id: workflowId, workflow_name: workflow.name,
     caller_id: principal.callerId, caller_user_id: principal.userId ?? null, trigger_source: source, webhook_id: webhook?.id ?? null, delivery_id: webhook?.deliveryId ?? null,
     idempotency_key: idempotencyKey ?? null, request_hash: requestHash, input,
-    snapshot: { compilerVersion: WORKFLOW_COMPILER_VERSION, ciphertext: await encrypt({ compilerVersion: WORKFLOW_COMPILER_VERSION, workflow: executionWorkflow, llm: { ...llm, workflows: [executionWorkflow] } }) },
-    run_state_ciphertext: await encrypt({}), state_version: 0,
+    snapshot: { compilerVersion: WORKFLOW_COMPILER_VERSION, ciphertext: await encryptForOrganization(admin, principal.orgId, { compilerVersion: WORKFLOW_COMPILER_VERSION, workflow: executionWorkflow, llm: { ...llm, workflows: [executionWorkflow] } }) },
+    run_state_ciphertext: await encryptForOrganization(admin, principal.orgId, {}), state_version: 0,
     interaction_expires_at: new Date(Date.now() + Number(execution.notifications?.interactionTtlHours ?? 168) * 3600_000).toISOString(),
     timeout_seconds: null }).select("id,status,organization_id,interaction_expires_at").single();
   if (error?.code === "23505" && idempotencyKey) {

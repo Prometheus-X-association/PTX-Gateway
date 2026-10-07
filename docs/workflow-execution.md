@@ -4,8 +4,8 @@ Workflows can run through the dashboard, organization-scoped API keys, or multip
 
 ## Deployment
 
-1. Apply the workflow migrations through `supabase/migrations/20261007200000_workflow_events.sql` using the project's normal migration process.
-2. Generate two independent random secrets, for example with `openssl rand -base64 32`. Configure `WORKFLOW_SECRETS_KEY` and `WORKFLOW_INTERNAL_SECRET` on both Supabase functions and every worker. The encryption key must decode to exactly 32 bytes. Keep these values out of frontend environment variables. Existing public result-page tokens also require the functions' configured `PDC_EXECUTE_TOKEN_SECRET` or `SUPABASE_INTERNAL_JWT_SECRET`.
+1. Apply all workflow migrations through `supabase/migrations/20261007240000_workflow_organization_vault_keys.sql` using the project's normal migration process. This enables Supabase Vault, whose project root key is managed by Supabase.
+2. Generate `WORKFLOW_INTERNAL_SECRET`, for example with `openssl rand -base64 32`, and configure it on both Supabase functions and every worker. Organization workflow keys are generated in Vault by an organization admin and require no application-wide `WORKFLOW_SECRETS_KEY`. Retain `WORKFLOW_SECRETS_KEY` only when older workflow ciphertext created before the Vault migration still needs to be read. Existing public result-page tokens also require the functions' configured `PDC_EXECUTE_TOKEN_SECRET` or `SUPABASE_INTERNAL_JWT_SECRET`.
 3. Deploy `workflow-runs`, `workflow-webhook`, `workflow-interaction`, and the updated `chat-with-result`, `workflow-api-request`, and `llm-insights` functions. The configuration disables gateway JWT verification for the workflow API, webhook, and interaction functions because they implement user-token/API-key, webhook-signature, and per-run interaction-token authentication themselves. Set `WORKFLOW_INTERACTION_BASE_URL` to the public origin hosting `/workflow/respond` on both the functions and workers. Deploy the frontend to serve this standalone page; no gateway chat/result page is required.
 4. Start the worker using the backend environment in [the example](../services/workflow-worker/.env.example). With Deno installed, export those environment values and run `npm run workflow:worker`. For Docker, build from the repository root:
 
@@ -21,6 +21,14 @@ Workflows can run through the dashboard, organization-scoped API keys, or multip
 
 5. Open **Admin → Agent Operations → Workflows**, edit a workflow, enable the required execution modes, and save the organization settings. Enable **Run chat workflows on backend** to move that workflow's result-page execution to the worker. Existing workflows retain browser execution until enabled. The builder's canvas debug tests remain browser tests; **Run saved workflow** exercises the backend.
 6. Under **Manage integrations and runs**, create organization-specific API keys and as many webhook endpoints as required. New credentials are displayed once; webhook secrets can be rotated and API keys revoked.
+
+## Organization encryption keys
+
+New workflow snapshots, run state, artifacts, signals, parallel-branch results, and webhook secrets use a versioned AES-GCM data key unique to the organization. PostgreSQL generates the key and stores it in Supabase Vault; Vault encrypts it with the Supabase-managed project root key. Ciphertext binds both the organization and key identifier as authenticated data, preventing records or keys from being substituted across organizations. A trusted function or worker can obtain key material only through a service-role-only RPC. It is never returned through the organization management API.
+
+Organization admins manage this once under **Agent Operations → Workflows → Agent workflow settings**. The setting is organization-wide and is intentionally absent from individual workflow editors. Admins can initialize or rotate the active key and delegate only this capability to another active organization member. A delegate receives a restricted Agent Operations view and may inspect status and rotate keys, but cannot view key material, grant delegation, or access unrelated admin settings. Grant, revoke, initialization, and rotation actions are audited. Delegation and its audit event are committed atomically.
+
+Rotation makes the new version active for subsequent writes. Retired Vault versions remain decrypt-only for existing data and must not be deleted until all referenced ciphertext has been re-encrypted or expired. The active key is selected from the database for every write, while decrypted keys may be cached only in trusted process memory.
 
 Applying the migration and deploying the functions alone does not execute jobs: the worker must be running. Accepted jobs remain queued while it is unavailable. The implementation does not provision a production worker automatically.
 
@@ -132,11 +140,11 @@ Workers heartbeat their leases. If a worker dies, a subsequent worker claim resu
 
 The final output-node checkpoint, sanitized output, render mode, terminal status, and lease release are committed in one database transaction. A crash cannot leave an already committed final output to be recovered later as `incomplete`.
 
-Operators can override organization limits and retention windows in `workflow_execution_policies`. By default, terminal successful/cancelled/timed-out/incomplete runs are retained for 30 days and failed runs for 90 days; the worker performs hourly bounded cleanup sweeps. Queued, running, and waiting runs are never deleted. Rotating `WORKFLOW_SECRETS_KEY` requires re-encrypting stored webhook secrets and run snapshots; keep the key stable until that migration is performed.
+Operators can override organization limits and retention windows in `workflow_execution_policies`. By default, terminal successful/cancelled/timed-out/incomplete runs are retained for 30 days and failed runs for 90 days; the worker performs hourly bounded cleanup sweeps. Queued, running, and waiting runs are never deleted.
 
 Monitor the admin health summary or the service-only `workflow_health()` RPC. Alert when there are no live workers, the oldest queued run exceeds the expected start delay, expired leases are present, manual-review runs accumulate, or notification backlog grows continuously. Worker logs are structured JSON containing event, worker/run/organization identifiers, and sanitized errors. Runs stopped during an uncertain non-idempotent action enter `manual_review`; an administrator can confirm completion with an assumed output, explicitly retry after checking the target system, or terminate the run.
 
-Encryption-key rotation is an operator migration: stop new admissions, keep workers on the old key, decrypt and re-encrypt every `workflow_webhooks.secret_ciphertext` and `workflow_runs.snapshot.ciphertext` into a new column/key version, verify samples, deploy all functions and workers with the new key, then resume admissions. Never replace `WORKFLOW_SECRETS_KEY` in place while old ciphertext remains.
+`WORKFLOW_SECRETS_KEY` is now a legacy compatibility setting only. If older deployment-key ciphertext exists, keep that value stable until the old records expire or are re-encrypted with organization Vault keys. New organization-key rotation is performed online from Agent Operations and does not require worker or function environment changes.
 
 `update_result` returns replacement result data. An attached result-page chat applies it to the displayed table; API/webhook execution returns it as the final output without implicitly modifying another user's result page.
 

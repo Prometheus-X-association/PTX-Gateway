@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { adminClient } from "../_shared/workflowAccess.ts";
 import { createRun, json, readBody } from "../_shared/workflowRuns.ts";
-import { decrypt, hmac, equal, HttpError, mapWebhookInput, object } from "../_shared/workflowSecurity.ts";
+import { decryptForOrganization, hmac, equal, HttpError, mapWebhookInput, object } from "../_shared/workflowSecurity.ts";
 
 export const handleWorkflowWebhook = async (request: Request) => {
   try {
@@ -16,7 +16,7 @@ export const handleWorkflowWebhook = async (request: Request) => {
     if (!/^\d+$/.test(timestamp) || Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) throw new HttpError(401, "Webhook timestamp is invalid or expired.");
     if (!deliveryId || deliveryId.length > 200) throw new HttpError(400, "A delivery ID of at most 200 characters is required.");
     const rawBody = String(await readBody(request));
-    const secret = await decrypt(endpoint.secret_ciphertext);
+    const secret = await decryptForOrganization(admin, endpoint.organization_id, endpoint.secret_ciphertext);
     if (!equal(await hmac(secret, `${timestamp}.${deliveryId}.${rawBody}`), signature.replace(/^sha256=/, ""))) throw new HttpError(401, "Invalid webhook signature.");
     let payload: unknown;
     try { payload = JSON.parse(rawBody); } catch { throw new HttpError(400, "Invalid JSON payload."); }
