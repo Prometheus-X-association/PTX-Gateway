@@ -622,15 +622,23 @@ Export API endpoint entries in `features.resultPage.exportApiConfigs` support:
 - result-page action button text (`import_button_text`)
 - post-import redirect button (`post_import_button_text`, `post_import_button_url`)
 
-### Settings Export / Import (Schema v6)
+### Settings Export / Import (Schema v7)
 
-Admin export/import now uses schema version `v6`.
+Admin export/import now uses schema version `v7`.
 
 Backups include (in addition to core org/PDC/resources/chains/global settings):
 
 - `result_page_settings`
 - `data_selection_settings`
 - `processing_page_settings`
+- `agent_operations`
+- `placeholders`
+- `oidc_provider_clients` (signing keys and shared-issuer memberships are excluded)
+
+Cross-organization imports remap resource and service-chain IDs used by agent,
+workflow, result-page, analytics-plugin, data-selection, and visibility settings.
+Embedded service-chain resource overrides are preserved independently from
+top-level resource defaults.
 
 Cross-organization import supports section-level toggles for:
 
@@ -641,6 +649,9 @@ Cross-organization import supports section-level toggles for:
 - Result Page Settings
 - Data Selection Settings
 - Processing Page Settings
+- Agent Operations
+- Placeholders
+- OIDC Provider Clients
 - Embed Settings
 - Organization Settings
 

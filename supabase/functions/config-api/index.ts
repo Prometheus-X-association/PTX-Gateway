@@ -102,9 +102,12 @@ const SettingsBackupSchema = z.object({
   service_chains: z.array(z.record(z.unknown())).optional(),
   global_config: z.record(z.unknown()).nullable().optional(),
   llm_settings: z.record(z.unknown()).nullable().optional(),
+  agent_operations: z.record(z.unknown()).nullable().optional(),
   result_page_settings: z.record(z.unknown()).nullable().optional(),
   data_selection_settings: z.record(z.unknown()).nullable().optional(),
   processing_page_settings: z.record(z.unknown()).nullable().optional(),
+  placeholders: z.array(z.record(z.unknown())).optional(),
+  oidc_provider_clients: z.array(z.record(z.unknown())).optional(),
 }).passthrough();
 
 const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof SettingsBackupSchema> | null => {
@@ -130,11 +133,15 @@ const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof Settin
           : null;
 
   const llmSettings =
-    isRecord(source.llm_settings)
-      ? source.llm_settings
-      : isRecord(source.llmSettings)
-        ? source.llmSettings
-        : null;
+    isRecord(source.agent_operations)
+      ? source.agent_operations
+      : isRecord(source.agentOperations)
+        ? source.agentOperations
+        : isRecord(source.llm_settings)
+          ? source.llm_settings
+          : isRecord(source.llmSettings)
+            ? source.llmSettings
+            : null;
   const dataSelectionSettings =
     isRecord(source.data_selection_settings)
       ? source.data_selection_settings
@@ -196,9 +203,16 @@ const normalizeSettingsBackupForImport = (value: unknown): z.infer<typeof Settin
         : [],
     global_config: globalConfig,
     llm_settings: llmSettings,
+    agent_operations: llmSettings,
     result_page_settings: resultPageSettings,
     data_selection_settings: dataSelectionSettings,
     processing_page_settings: processingPageSettings,
+    placeholders: Array.isArray(source.placeholders) ? source.placeholders.filter(isRecord) : [],
+    oidc_provider_clients: Array.isArray(source.oidc_provider_clients)
+      ? source.oidc_provider_clients.filter(isRecord)
+      : Array.isArray(source.oidcProviderClients)
+        ? source.oidcProviderClients.filter(isRecord)
+        : [],
   };
 };
 
@@ -210,6 +224,9 @@ const ImportSectionsSchema = z.object({
   resultPageSettings: z.boolean().optional(),
   dataSelectionSettings: z.boolean().optional(),
   processingPageSettings: z.boolean().optional(),
+  agentOperations: z.boolean().optional(),
+  placeholders: z.boolean().optional(),
+  oidcProviderSettings: z.boolean().optional(),
   organizationSettings: z.boolean().optional(),
   embedSettings: z.boolean().optional(),
 }).strict();
@@ -221,6 +238,8 @@ const CrossOrgImportSchema = z.object({
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+type SupabaseClientInstance = ReturnType<typeof createClient>;
 
 const sanitizeOrganizationSettingsForBackup = (
   settings: unknown,
@@ -293,6 +312,7 @@ const sanitizeCustomVisualization = (value: unknown): Record<string, unknown> | 
     : 'url';
 
   return {
+    ...value,
     id: typeof value.id === 'string' ? value.id : crypto.randomUUID(),
     name: typeof value.name === 'string' ? value.name : '',
     description: typeof value.description === 'string' ? value.description : '',
@@ -306,6 +326,9 @@ const sanitizeCustomVisualization = (value: unknown): Record<string, unknown> | 
     library_files: libraryFiles,
     json_schema: typeof value.json_schema === 'string' ? value.json_schema : '',
     render_code: typeof value.render_code === 'string' ? value.render_code : '',
+    target_resources: Array.isArray(value.target_resources)
+      ? value.target_resources.map(String).filter(Boolean)
+      : [],
   };
 };
 
@@ -323,13 +346,20 @@ const sanitizeExportApiConfig = (value: unknown): Record<string, unknown> | null
     : [];
 
   return {
+    ...value,
     id: typeof value.id === 'string' && value.id.trim() ? value.id : crypto.randomUUID(),
     name: typeof value.name === 'string' ? value.name : '',
     url: typeof value.url === 'string' ? value.url : '',
     api_version: typeof value.api_version === 'string' ? value.api_version : '',
     is_active: typeof value.is_active === 'boolean' ? value.is_active : false,
     authorization: typeof value.authorization === 'string' ? value.authorization : '',
+    oidc: isRecord(value.oidc) ? value.oidc : undefined,
+    oidc_client_id: typeof value.oidc_client_id === 'string' ? value.oidc_client_id : undefined,
+    server_managed: typeof value.server_managed === 'boolean' ? value.server_managed : undefined,
     params,
+    target_resources: Array.isArray(value.target_resources)
+      ? value.target_resources.map(String).filter(Boolean)
+      : [],
     body_template: typeof value.body_template === 'string' ? value.body_template : '{\n  "data": ##result\n}',
     import_button_text: typeof value.import_button_text === 'string' ? value.import_button_text : '',
     post_import_button_text: typeof value.post_import_button_text === 'string' ? value.post_import_button_text : '',
@@ -529,11 +559,49 @@ const sanitizeServiceChain = (value: Record<string, unknown>) => ({
   result_query_params: Array.isArray(value.result_query_params) ? value.result_query_params : [],
 });
 
-const getResourceImportSignature = (value: {
-  resource_url: string;
-  contract_url: string;
-  resource_type: string;
-}) => `${value.resource_type}::${value.contract_url}::${value.resource_url}`;
+const remapTargetReference = (
+  value: unknown,
+  resourceIds: Map<string, string>,
+  serviceChainIds: Map<string, string>,
+): unknown => {
+  if (typeof value !== 'string') return value;
+  if (value.startsWith('software:')) {
+    const sourceId = value.slice('software:'.length);
+    return `software:${resourceIds.get(sourceId) ?? sourceId}`;
+  }
+  if (value.startsWith('serviceChain:')) {
+    const sourceId = value.slice('serviceChain:'.length);
+    return `serviceChain:${serviceChainIds.get(sourceId) ?? sourceId}`;
+  }
+  return resourceIds.get(value) ?? serviceChainIds.get(value) ?? value;
+};
+
+const remapPortableSettingsReferences = (
+  value: unknown,
+  resourceIds: Map<string, string>,
+  serviceChainIds: Map<string, string>,
+  key = '',
+): unknown => {
+  if (Array.isArray(value)) {
+    if (['targetResources', 'target_resources', 'target_resource_ids'].includes(key)) {
+      return value.map((item) => remapTargetReference(item, resourceIds, serviceChainIds));
+    }
+    if (key === 'customApiTargetSoftwareIds') {
+      return value.map((item) => typeof item === 'string' ? resourceIds.get(item) ?? item : item);
+    }
+    if (key === 'customApiTargetServiceChainIds') {
+      return value.map((item) => typeof item === 'string' ? serviceChainIds.get(item) ?? item : item);
+    }
+    return value.map((item) => remapPortableSettingsReferences(item, resourceIds, serviceChainIds));
+  }
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([childKey, childValue]) => [
+      childKey,
+      remapPortableSettingsReferences(childValue, resourceIds, serviceChainIds, childKey),
+    ]),
+  );
+};
 
 const settingsErrorResponse = (message: string, status = 500) =>
   new Response(
@@ -541,8 +609,8 @@ const settingsErrorResponse = (message: string, status = 500) =>
     { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 
-const buildSettingsBackup = async (adminClient: any, organizationId: string) => {
-  const [orgResult, pdcResult, resourcesResult, chainsResult, globalResult] = await Promise.all([
+const buildSettingsBackup = async (adminClient: SupabaseClientInstance, organizationId: string) => {
+  const [orgResult, pdcResult, resourcesResult, chainsResult, globalResult, placeholdersResult, oidcClientsResult] = await Promise.all([
     adminClient
       .from('organizations')
       .select('id, name, slug, settings')
@@ -565,9 +633,20 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
       .select('*')
       .eq('organization_id', organizationId)
       .maybeSingle(),
+    adminClient
+      .from('param_placeholders')
+      .select('placeholder_key, placeholder_type, static_value, generator_type, custom_function_code, description')
+      .eq('organization_id', organizationId),
+    adminClient
+      .from('oidc_provider_clients')
+      .select('name, client_id, client_secret, redirect_uris, audience, token_expiry_seconds, is_active')
+      .eq('organization_id', organizationId),
   ]);
 
-  if (orgResult.error || pdcResult.error || resourcesResult.error || chainsResult.error) {
+  if (
+    orgResult.error || pdcResult.error || resourcesResult.error || chainsResult.error ||
+    globalResult.error || placeholdersResult.error || oidcClientsResult.error
+  ) {
     return { data: null, error: 'Failed to export settings' };
   }
 
@@ -599,7 +678,7 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
 
   return {
     data: {
-      schema_version: 6,
+      schema_version: 7,
       exported_at: new Date().toISOString(),
       organization: {
         id: orgResult.data?.id ?? organizationId,
@@ -616,9 +695,14 @@ const buildSettingsBackup = async (adminClient: any, organizationId: string) => 
       service_chains: chainsResult.data ?? [],
       global_config: globalConfig,
       llm_settings: llmSettings,
+      agent_operations: llmSettings,
       result_page_settings: resultPageSettings,
       data_selection_settings: dataSelectionSettings,
       processing_page_settings: processingPageSettings,
+      placeholders: placeholdersResult.data ?? [],
+      // Signing keys and shared-issuer membership are deliberately excluded.
+      // Imported clients use the target organization's own issuer.
+      oidc_provider_clients: oidcClientsResult.data ?? [],
     },
     error: null,
   };
@@ -635,8 +719,8 @@ const importSettingsIntoOrganization = async ({
   incoming: z.infer<typeof SettingsBackupSchema>;
   orgId: string;
   userId: string;
-  supabase: any;
-  adminClient: any;
+  supabase: SupabaseClientInstance;
+  adminClient: SupabaseClientInstance;
   sections?: z.infer<typeof ImportSectionsSchema>;
 }) => {
   const shouldImport = (key: keyof z.infer<typeof ImportSectionsSchema>) => sections?.[key] ?? true;
@@ -646,12 +730,18 @@ const importSettingsIntoOrganization = async ({
   const shouldImportResultPageSettings = shouldImport('resultPageSettings');
   const shouldImportDataSelectionSettings = shouldImport('dataSelectionSettings');
   const shouldImportProcessingPageSettings = shouldImport('processingPageSettings');
+  const shouldImportAgentOperations = shouldImport('agentOperations');
   const summary = {
     organizationSettingsImported: false,
     globalConfigImported: false,
     resultPageSettingsImported: false,
     dataSelectionSettingsImported: false,
     processingPageSettingsImported: false,
+    agentOperationsImported: false,
+    placeholdersCreated: 0,
+    placeholdersUpdated: 0,
+    oidcProviderClientsCreated: 0,
+    oidcProviderClientsUpdated: 0,
     embedSettingsImported: false,
     pdcConfigsCreated: 0,
     pdcConfigsUpdated: 0,
@@ -661,6 +751,7 @@ const importSettingsIntoOrganization = async ({
     serviceChainsCreated: 0,
     serviceChainsUpdated: 0,
     embeddedResourcesRemapped: 0,
+    referencesRemapped: 0,
   };
   const fail = (message: string, status?: number) => ({
     errorResponse: settingsErrorResponse(message, status),
@@ -733,9 +824,26 @@ const importSettingsIntoOrganization = async ({
   if (shouldImportGlobalConfig && isRecord(incoming.global_config)) {
     const globalInput = incoming.global_config;
     const incomingFeatures = isRecord(globalInput.features) ? { ...globalInput.features } : {};
-    const incomingLlmSettings = isRecord(incoming.llm_settings) ? incoming.llm_settings : null;
-    if (incomingLlmSettings) {
+    const incomingLlmSettings = isRecord(incoming.agent_operations)
+      ? incoming.agent_operations
+      : isRecord(incoming.llm_settings)
+        ? incoming.llm_settings
+        : null;
+    if (shouldImportAgentOperations && incomingLlmSettings) {
       incomingFeatures.llmInsights = incomingLlmSettings;
+    } else if (!shouldImportAgentOperations) {
+      const { data: currentGlobal, error: currentGlobalError } = await supabase
+        .from('global_configs')
+        .select('features')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+      if (currentGlobalError) return fail('Failed to load current agent operations');
+      const currentFeatures = isRecord(currentGlobal?.features) ? currentGlobal.features : {};
+      if (isRecord(currentFeatures.llmInsights)) {
+        incomingFeatures.llmInsights = currentFeatures.llmInsights;
+      } else {
+        delete incomingFeatures.llmInsights;
+      }
     }
     let importedResultPageSettings: Record<string, unknown> | null = null;
     let importedDataSelectionSettings: Record<string, unknown> | null = null;
@@ -841,6 +949,9 @@ const importSettingsIntoOrganization = async ({
     }
 
     summary.globalConfigImported = true;
+    if (shouldImportAgentOperations && incomingLlmSettings) {
+      summary.agentOperationsImported = true;
+    }
     if (importedResultPageSettings) {
       summary.resultPageSettingsImported = true;
     }
@@ -968,6 +1079,37 @@ const importSettingsIntoOrganization = async ({
     }
   }
 
+  if ((!shouldImportGlobalConfig || !isRecord(incoming.global_config)) && shouldImportAgentOperations) {
+    const incomingAgentOperations = isRecord(incoming.agent_operations)
+      ? incoming.agent_operations
+      : isRecord(incoming.llm_settings)
+        ? incoming.llm_settings
+        : null;
+    if (incomingAgentOperations) {
+      const { data: currentGlobal, error: currentGlobalError } = await supabase
+        .from('global_configs')
+        .select('*')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+      if (currentGlobalError) return fail('Failed to load current agent operations');
+      const currentFeatures = isRecord(currentGlobal?.features) ? currentGlobal.features : {};
+      const { error: globalError } = await supabase
+        .from('global_configs')
+        .upsert({
+          organization_id: orgId,
+          app_name: typeof currentGlobal?.app_name === 'string' ? currentGlobal.app_name : null,
+          app_version: typeof currentGlobal?.app_version === 'string' ? currentGlobal.app_version : null,
+          environment: typeof currentGlobal?.environment === 'string' ? currentGlobal.environment : null,
+          features: { ...currentFeatures, llmInsights: incomingAgentOperations },
+          logging: isRecord(currentGlobal?.logging) ? currentGlobal.logging : {},
+        }, { onConflict: 'organization_id' });
+      if (globalError) return fail('Failed to import agent operations');
+      summary.agentOperationsImported = true;
+    }
+  }
+
+  const pdcConfigIdMap = new Map<string, string>();
+
   if (shouldImport('pdc')) {
     const incomingPdcConfigs = Array.isArray(incoming.pdc?.configs) ? incoming.pdc!.configs : [];
     if (incomingPdcConfigs.length > 0) {
@@ -989,7 +1131,7 @@ const importSettingsIntoOrganization = async ({
         if (!cfg.pdc_url) continue;
 
         const incomingId = typeof rawConfig.id === 'string' ? rawConfig.id : null;
-        const match = existingList.find((c: any) =>
+        const match = existingList.find((c: Record<string, unknown>) =>
           (incomingId && c.id === incomingId) ||
           (!!cfg.name && c.name === cfg.name)
         );
@@ -1017,6 +1159,7 @@ const importSettingsIntoOrganization = async ({
             return fail('Failed to update PDC config during import');
           }
           summary.pdcConfigsUpdated += 1;
+          if (incomingId) pdcConfigIdMap.set(incomingId, updated.id);
           if (cfg.is_active) importedActiveConfigId = updated.id;
         } else {
           const { data: inserted, error: insertErr } = await supabase
@@ -1028,6 +1171,7 @@ const importSettingsIntoOrganization = async ({
             return fail('Failed to create PDC config during import');
           }
           summary.pdcConfigsCreated += 1;
+          if (incomingId) pdcConfigIdMap.set(incomingId, inserted.id);
           if (cfg.is_active) importedActiveConfigId = inserted.id;
         }
       }
@@ -1063,6 +1207,22 @@ const importSettingsIntoOrganization = async ({
     }
   }
 
+  if (Array.isArray(incoming.pdc?.configs)) {
+    const { data: targetPdcConfigs, error: targetPdcError } = await supabase
+      .from('dataspace_configs')
+      .select('id, name, pdc_url')
+      .eq('organization_id', orgId);
+    if (targetPdcError) return fail('Failed to resolve PDC configuration references');
+    for (const raw of incoming.pdc.configs) {
+      if (!isRecord(raw) || typeof raw.id !== 'string' || pdcConfigIdMap.has(raw.id)) continue;
+      const match = (targetPdcConfigs ?? []).find((item: Record<string, unknown>) =>
+        (typeof raw.name === 'string' && item.name === raw.name) ||
+        (typeof raw.pdc_url === 'string' && item.pdc_url === raw.pdc_url)
+      );
+      if (match) pdcConfigIdMap.set(raw.id, match.id);
+    }
+  }
+
   const { data: activeConfig } = await supabase
     .from('dataspace_configs')
     .select('id')
@@ -1070,7 +1230,8 @@ const importSettingsIntoOrganization = async ({
     .eq('is_active', true)
     .maybeSingle();
 
-  const importedResourceMap = new Map<string, ReturnType<typeof sanitizeResource>>();
+  const resourceIdMap = new Map<string, string>();
+  const pendingResourceVisibility: Array<{ targetId: string; sourceSoftwareIds: string[] }> = [];
 
   if (shouldImport('resources')) {
     const incomingResources = Array.isArray(incoming.resources) ? incoming.resources : [];
@@ -1090,8 +1251,7 @@ const importSettingsIntoOrganization = async ({
         const res = sanitizeResource(raw);
         if (!res.resource_url || !res.contract_url) continue;
 
-        const signature = getResourceImportSignature(res);
-        const match = existing.find((item: any) =>
+        const match = existing.find((item: Record<string, unknown>) =>
           (res.id && item.id === res.id) ||
           (
             item.resource_url === res.resource_url &&
@@ -1102,7 +1262,9 @@ const importSettingsIntoOrganization = async ({
 
         const payload = {
           organization_id: orgId,
-          config_id: activeConfig?.id ?? null,
+          config_id: typeof raw.config_id === 'string'
+            ? pdcConfigIdMap.get(raw.config_id) ?? activeConfig?.id ?? null
+            : activeConfig?.id ?? null,
           resource_url: res.resource_url,
           contract_url: res.contract_url,
           resource_type: res.resource_type,
@@ -1127,29 +1289,48 @@ const importSettingsIntoOrganization = async ({
         };
 
         if (match) {
-          const { error: updateErr } = await supabase
+          const { data: updated, error: updateErr } = await supabase
             .from('dataspace_params')
             .update(payload)
             .eq('id', match.id)
-            .eq('organization_id', orgId);
+            .eq('organization_id', orgId)
+            .select('id')
+            .single();
           if (updateErr) {
             return fail('Failed to update resource during import');
           }
           summary.resourcesUpdated += 1;
+          if (res.id) resourceIdMap.set(res.id, updated.id);
+          pendingResourceVisibility.push({ targetId: updated.id, sourceSoftwareIds: res.visible_for_software_ids });
         } else {
-          const { error: insertErr } = await supabase
+          const { data: inserted, error: insertErr } = await supabase
             .from('dataspace_params')
-            .insert(payload);
+            .insert(payload)
+            .select('id')
+            .single();
           if (insertErr) {
             return fail('Failed to insert resource during import');
           }
           summary.resourcesCreated += 1;
+          if (res.id) resourceIdMap.set(res.id, inserted.id);
+          pendingResourceVisibility.push({ targetId: inserted.id, sourceSoftwareIds: res.visible_for_software_ids });
         }
+      }
 
-        importedResourceMap.set(signature, res);
+      for (const pending of pendingResourceVisibility) {
+        const remappedIds = pending.sourceSoftwareIds.map((id) => resourceIdMap.get(id) ?? id);
+        const { error: visibilityError } = await supabase
+          .from('dataspace_params')
+          .update({ visible_for_software_ids: remappedIds })
+          .eq('id', pending.targetId)
+          .eq('organization_id', orgId);
+        if (visibilityError) return fail('Failed to remap resource visibility during import');
+        summary.referencesRemapped += remappedIds.filter((id, index) => id !== pending.sourceSoftwareIds[index]).length;
       }
     }
   }
+
+  const serviceChainIdMap = new Map<string, string>();
 
   if (shouldImport('serviceChains')) {
     const incomingChains = Array.isArray(incoming.service_chains) ? incoming.service_chains : [];
@@ -1169,52 +1350,23 @@ const importSettingsIntoOrganization = async ({
         const chain = sanitizeServiceChain(raw);
         if (!chain.catalog_id || !chain.contract_url) continue;
 
-        const match = existing.find((item: any) =>
+        const match = existing.find((item: Record<string, unknown>) =>
           (chain.id && item.id === chain.id) ||
           (item.catalog_id === chain.catalog_id && item.contract_url === chain.contract_url)
         );
 
-        const normalizedEmbeddedResources = chain.embedded_resources.map((resource) => {
-          if (!isRecord(resource)) return resource;
-
-          const resourceSignature = getResourceImportSignature({
-            resource_url: typeof resource.resource_url === 'string' ? resource.resource_url : '',
-            contract_url: typeof resource.contract_url === 'string' ? resource.contract_url : '',
-            resource_type: typeof resource.resource_type === 'string' ? resource.resource_type : 'data',
-          });
-          const importedResource = importedResourceMap.get(resourceSignature);
-
-          if (!importedResource) {
-            return resource;
-          }
-
-          summary.embeddedResourcesRemapped += 1;
-
-          return {
-            ...resource,
-            resource_name: importedResource.resource_name,
-            resource_description: importedResource.resource_description,
-            provider: importedResource.provider,
-            service_offering: importedResource.service_offering,
-            parameters: importedResource.parameters,
-            api_response_representation: importedResource.api_response_representation,
-            visualization_type: importedResource.visualization_type,
-            upload_url: importedResource.upload_url,
-            upload_authorization: importedResource.upload_authorization,
-            result_url_source: importedResource.result_url_source,
-            custom_result_url: importedResource.custom_result_url,
-            result_authorization: importedResource.result_authorization,
-            // Keep embedded-resource-specific query params from the chain backup.
-            // These can differ from top-level resource defaults.
-            result_query_params: Array.isArray(resource.result_query_params)
-              ? resource.result_query_params
-              : importedResource.result_query_params,
-          };
-        });
+        // Embedded resources contain chain-specific overrides. Preserve the
+        // exported objects verbatim instead of replacing them with top-level
+        // resource defaults.
+        const normalizedEmbeddedResources = chain.embedded_resources.map((resource) =>
+          isRecord(resource) ? { ...resource } : resource
+        );
 
         const payload = {
           organization_id: orgId,
-          config_id: activeConfig?.id ?? null,
+          config_id: typeof raw.config_id === 'string'
+            ? pdcConfigIdMap.get(raw.config_id) ?? activeConfig?.id ?? null
+            : activeConfig?.id ?? null,
           catalog_id: chain.catalog_id,
           contract_url: chain.contract_url,
           services: chain.services,
@@ -1231,25 +1383,185 @@ const importSettingsIntoOrganization = async ({
         };
 
         if (match) {
-          const { error: updateErr } = await supabase
+          const { data: updated, error: updateErr } = await supabase
             .from('service_chains')
             .update(payload)
             .eq('id', match.id)
-            .eq('organization_id', orgId);
+            .eq('organization_id', orgId)
+            .select('id')
+            .single();
           if (updateErr) {
             return fail('Failed to update service chain during import');
           }
           summary.serviceChainsUpdated += 1;
+          if (chain.id) serviceChainIdMap.set(chain.id, updated.id);
         } else {
-          const { error: insertErr } = await supabase
+          const { data: inserted, error: insertErr } = await supabase
             .from('service_chains')
-            .insert(payload);
+            .insert(payload)
+            .select('id')
+            .single();
           if (insertErr) {
             return fail('Failed to insert service chain during import');
           }
           summary.serviceChainsCreated += 1;
+          if (chain.id) serviceChainIdMap.set(chain.id, inserted.id);
         }
       }
+    }
+  }
+
+  // Even when resources/chains were not selected for import, map references in
+  // selected settings to matching records that already exist in the target org.
+  if (Array.isArray(incoming.resources) && incoming.resources.length > 0) {
+    const { data: targetResources, error: targetResourcesError } = await supabase
+      .from('dataspace_params')
+      .select('id, resource_url, contract_url, resource_type')
+      .eq('organization_id', orgId);
+    if (targetResourcesError) return fail('Failed to resolve resource references');
+    for (const raw of incoming.resources) {
+      if (!isRecord(raw) || typeof raw.id !== 'string' || resourceIdMap.has(raw.id)) continue;
+      const match = (targetResources ?? []).find((item: Record<string, unknown>) =>
+        item.resource_url === raw.resource_url &&
+        item.contract_url === raw.contract_url &&
+        item.resource_type === raw.resource_type
+      );
+      if (match) resourceIdMap.set(raw.id, match.id);
+    }
+  }
+
+  if (Array.isArray(incoming.service_chains) && incoming.service_chains.length > 0) {
+    const { data: targetChains, error: targetChainsError } = await supabase
+      .from('service_chains')
+      .select('id, catalog_id, contract_url')
+      .eq('organization_id', orgId);
+    if (targetChainsError) return fail('Failed to resolve service-chain references');
+    for (const raw of incoming.service_chains) {
+      if (!isRecord(raw) || typeof raw.id !== 'string' || serviceChainIdMap.has(raw.id)) continue;
+      const match = (targetChains ?? []).find((item: Record<string, unknown>) =>
+        item.catalog_id === raw.catalog_id && item.contract_url === raw.contract_url
+      );
+      if (match) serviceChainIdMap.set(raw.id, match.id);
+    }
+  }
+
+  if (shouldImport('placeholders')) {
+    const incomingPlaceholders = Array.isArray(incoming.placeholders) ? incoming.placeholders : [];
+    const { data: existingPlaceholders, error: placeholdersLoadError } = await supabase
+      .from('param_placeholders')
+      .select('id, placeholder_key')
+      .eq('organization_id', orgId);
+    if (placeholdersLoadError) return fail('Failed to load placeholders');
+
+    for (const raw of incomingPlaceholders) {
+      if (!isRecord(raw) || typeof raw.placeholder_key !== 'string' || !raw.placeholder_key.trim()) continue;
+      const payload = {
+        organization_id: orgId,
+        placeholder_key: raw.placeholder_key.trim(),
+        placeholder_type: raw.placeholder_type === 'dynamic' ? 'dynamic' : 'static',
+        static_value: typeof raw.static_value === 'string' ? raw.static_value : null,
+        generator_type: typeof raw.generator_type === 'string' ? raw.generator_type : null,
+        custom_function_code: typeof raw.custom_function_code === 'string' ? raw.custom_function_code : null,
+        description: typeof raw.description === 'string' ? raw.description : null,
+      };
+      const match = (existingPlaceholders ?? []).find((item: Record<string, unknown>) => item.placeholder_key === payload.placeholder_key);
+      const query = match
+        ? supabase.from('param_placeholders').update(payload).eq('id', match.id).eq('organization_id', orgId)
+        : supabase.from('param_placeholders').insert(payload);
+      const { error } = await query;
+      if (error) return fail('Failed to import placeholders');
+      if (match) summary.placeholdersUpdated += 1;
+      else summary.placeholdersCreated += 1;
+    }
+  }
+
+  if (shouldImport('oidcProviderSettings')) {
+    const incomingClients = Array.isArray(incoming.oidc_provider_clients) ? incoming.oidc_provider_clients : [];
+    const { data: existingClients, error: clientsLoadError } = await adminClient
+      .from('oidc_provider_clients')
+      .select('id, name, client_id, client_secret')
+      .eq('organization_id', orgId);
+    if (clientsLoadError) return fail('Failed to load OIDC provider clients');
+
+    for (const raw of incomingClients) {
+      if (!isRecord(raw) || typeof raw.name !== 'string' || !raw.name.trim()) continue;
+      const match = (existingClients ?? []).find((item: Record<string, unknown>) =>
+        item.name === raw.name || (typeof raw.client_id === 'string' && item.client_id === raw.client_id)
+      );
+      let clientId = match?.client_id ?? (typeof raw.client_id === 'string' ? raw.client_id : crypto.randomUUID());
+      if (!match) {
+        const { data: collision } = await adminClient
+          .from('oidc_provider_clients')
+          .select('id')
+          .eq('client_id', clientId)
+          .maybeSingle();
+        if (collision) clientId = crypto.randomUUID();
+      }
+      const payload = {
+        organization_id: orgId,
+        name: raw.name.trim(),
+        client_id: clientId,
+        client_secret: typeof raw.client_secret === 'string' && raw.client_secret
+          ? raw.client_secret
+          : typeof match?.client_secret === 'string' && match.client_secret
+            ? match.client_secret
+            : crypto.randomUUID(),
+        shared_issuer_id: null,
+        redirect_uris: Array.isArray(raw.redirect_uris) ? raw.redirect_uris.map(String).filter(Boolean) : [],
+        audience: typeof raw.audience === 'string' ? raw.audience : null,
+        token_expiry_seconds: typeof raw.token_expiry_seconds === 'number' ? raw.token_expiry_seconds : 3600,
+        is_active: raw.is_active !== false,
+        created_by: userId,
+      };
+      const query = match
+        ? adminClient.from('oidc_provider_clients').update(payload).eq('id', match.id).eq('organization_id', orgId)
+        : adminClient.from('oidc_provider_clients').insert(payload);
+      const { error } = await query;
+      if (error) return fail('Failed to import OIDC provider clients');
+      if (match) summary.oidcProviderClientsUpdated += 1;
+      else summary.oidcProviderClientsCreated += 1;
+    }
+  }
+
+  if (resourceIdMap.size > 0 || serviceChainIdMap.size > 0) {
+    const { data: currentGlobal, error: currentGlobalError } = await supabase
+      .from('global_configs')
+      .select('features')
+      .eq('organization_id', orgId)
+      .maybeSingle();
+    if (currentGlobalError) return fail('Failed to load settings for reference remapping');
+    if (isRecord(currentGlobal?.features)) {
+      const remappedFeatures = remapPortableSettingsReferences(
+        currentGlobal.features,
+        resourceIdMap,
+        serviceChainIdMap,
+      );
+      if (JSON.stringify(remappedFeatures) !== JSON.stringify(currentGlobal.features)) {
+        const { error: remapError } = await supabase
+          .from('global_configs')
+          .update({ features: remappedFeatures })
+          .eq('organization_id', orgId);
+        if (remapError) return fail('Failed to remap imported settings references');
+        summary.referencesRemapped += 1;
+      }
+    }
+
+    const { data: importedPdcConfigs, error: importedPdcError } = await supabase
+      .from('dataspace_configs')
+      .select('id, export_api_configs')
+      .eq('organization_id', orgId);
+    if (importedPdcError) return fail('Failed to load PDC settings for reference remapping');
+    for (const config of importedPdcConfigs ?? []) {
+      if (!Array.isArray(config.export_api_configs)) continue;
+      const remapped = remapPortableSettingsReferences(config.export_api_configs, resourceIdMap, serviceChainIdMap);
+      if (JSON.stringify(remapped) === JSON.stringify(config.export_api_configs)) continue;
+      const { error: remapError } = await supabase
+        .from('dataspace_configs')
+        .update({ export_api_configs: remapped })
+        .eq('id', config.id)
+        .eq('organization_id', orgId);
+      if (remapError) return fail('Failed to remap PDC export settings');
+      summary.referencesRemapped += 1;
     }
   }
 
