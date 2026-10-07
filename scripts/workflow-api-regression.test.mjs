@@ -139,25 +139,15 @@ test("workflow compilation normalizes execution defaults and rejects malformed g
   assert.throws(() => validateGraph({ ...workflow, execution: { allowedOutboundHosts: ["https://not-a-host.example"] } }), /hostname/);
 });
 
-test("organization admins delegate narrow encryption rotation without exposing key material", async () => {
+test("workflow encryption is provisioned internally without a public key-management API", async () => {
   setup();
-  const before = await api({ action: "encryption_status" });
-  assert.equal(before.status, 200); assert.equal(before.body.encryption.initialized, false); assert.equal(before.body.encryption.keyStorage, "supabase_vault");
-  assert.equal(before.body.encryption.members.some((member) => member.userId === "admin-a"), false);
-  assert.equal((await api({ action: "encryption_delegate", userId: "admin-a" })).status, 400);
-  assert.equal((await api({ action: "encryption_delegate", userId: "user-a" })).status, 200);
-  assert.equal((await api({ action: "encryption_status" }, "user-a")).status, 200);
-  assert.equal((await api({ action: "encryption_delegate", userId: "user-b" }, "user-a")).status, 403);
-  const rotated = await api({ action: "encryption_rotate" }, "user-a");
-  assert.equal(rotated.status, 200); assert.equal(rotated.body.key.version, 1);
-  assert.equal(Object.hasOwn(rotated.body.key, "wrapped_key_ciphertext"), false);
+  assert.equal((await api({ action: "encryption_status" })).status, 400);
   const started = await api({ action: "start", workflowId: "shared", input: { protected: true } }, "user-a");
   assert.equal(started.status, 202);
+  assert.equal(database.tables.workflow_organization_keys.length, 1);
   const run = database.tables.workflow_runs.find((item) => item.id === started.body.runId);
   assert.match(run.snapshot.ciphertext, /^wok1\./);
   assert.deepEqual((await decryptForOrganization(database, "org-a", run.snapshot.ciphertext)).workflow.id, "shared");
-  assert.equal((await api({ action: "encryption_revoke_delegate", userId: "user-a" })).status, 200);
-  assert.equal((await api({ action: "encryption_status" }, "user-a")).status, 403);
 });
 
 test("concurrent users start isolated runs of the same organization workflow", async () => {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Plus, Pencil, Play, Square, ChevronDown, ChevronUp,
-  GitBranch, Code2, Bot, Globe2, Route, X, Copy, History, RotateCcw, ShieldCheck,
+  GitBranch, Code2, Bot, Globe2, Route, X, Copy, History, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,6 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ConfirmRecycleButton, RecycleBinPanel } from "@/components/admin/RecycleBinControls";
 import { recycleExpiry } from "@/components/admin/recycleBin";
 import { WorkflowOperationsPanel } from "@/components/admin/WorkflowOperationsPanel";
-import { WorkflowEncryptionManagementPanel } from "@/components/admin/WorkflowEncryptionManagementPanel";
 import { WorkflowBuilder } from "@/components/admin/WorkflowBuilder";
 import {
   ChatAvailabilitySelector,
@@ -309,7 +308,6 @@ interface WorkflowsManagementProps {
 export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, skills, globalProviders, mcpServers, organizationId, onChange }: WorkflowsManagementProps) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
-  const [showWorkflowSettings, setShowWorkflowSettings] = useState(false);
   const activeWorkflows = workflows.filter((workflow) => !workflow.deletedAt);
   const recycledWorkflows = workflows.filter((workflow) => Boolean(workflow.deletedAt));
 
@@ -406,15 +404,8 @@ export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, sk
             {activeCount} active
           </Badge>
         )}
-        <div className="ml-auto flex items-center gap-2"><Button type="button" size="sm" variant="outline" className="gap-2" disabled={!organizationId} onClick={() => setShowWorkflowSettings(true)}><ShieldCheck className="h-4 w-4" />Agent workflow settings</Button><RecycleBinPanel title="Workflow recycle bin" itemLabel="workflow" items={recycledWorkflows} open={showRecycleBin} onToggle={() => setShowRecycleBin((value) => !value)} onRestore={restore} onDelete={permanentlyDelete} /></div>
+        <div className="ml-auto"><RecycleBinPanel title="Workflow recycle bin" itemLabel="workflow" items={recycledWorkflows} open={showRecycleBin} onToggle={() => setShowRecycleBin((value) => !value)} onRestore={restore} onDelete={permanentlyDelete} /></div>
       </div>
-
-      <Dialog open={showWorkflowSettings} onOpenChange={setShowWorkflowSettings}>
-        <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-3xl overflow-y-auto">
-          <DialogHeader><DialogTitle>Agent workflow settings</DialogTitle><DialogDescription>Organization-wide settings shared by every agent workflow. Initialize encryption once for the organization.</DialogDescription></DialogHeader>
-          {organizationId && <WorkflowEncryptionManagementPanel organizationId={organizationId} />}
-        </DialogContent>
-      </Dialog>
 
       {activeWorkflows.length === 0 ? (
         <div className="border border-dashed rounded-lg p-6 text-center space-y-2">
