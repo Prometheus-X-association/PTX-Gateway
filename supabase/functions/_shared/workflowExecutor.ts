@@ -1,5 +1,5 @@
 import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge, WorkflowWaitingState, WorkflowStateDefinition, WorkflowArtifactReference, WorkflowEventWait, WorkflowSignal } from "./workflowTypes.ts";
-import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, EventNodeData, WorkflowRetryPolicy } from "./workflowTypes.ts";
+import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, EventNodeData, ParallelNodeData, JoinNodeData, WorkflowRetryPolicy } from "./workflowTypes.ts";
 export interface SandboxRequest { operation: "plugin" | "condition" | "transform" | "retrieval"; code: string; input: unknown; state?: Record<string, unknown>; nodeOutputs?: Record<string, unknown>; timeoutMs?: number }
 type Sandbox = (request: SandboxRequest) => Promise<unknown>;
 
@@ -29,6 +29,16 @@ export interface WorkflowCheckpoint {
   changedStateKeys?: string[];
 }
 
+export interface ParallelBranchResult {
+  id: string;
+  label: string;
+  status: "succeeded" | "failed";
+  output: unknown;
+  error?: string;
+  durationMs: number;
+  steps: Array<{ nodeId: string; nodeType: string; status: "succeeded" | "failed"; durationMs?: number; attemptCount?: number; error?: string }>;
+}
+
 export interface ExecutorContext {
   runId?: string;
   triggerSource?: "dashboard" | "api" | "webhook";
@@ -41,6 +51,10 @@ export interface ExecutorContext {
   onArtifactCreate?: (nodeId: string, stateKey: string, value: unknown) => Promise<WorkflowArtifactReference>;
   onArtifactRead?: (reference: WorkflowArtifactReference) => Promise<unknown>;
   onCheckpoint?: (checkpoint: WorkflowCheckpoint) => Promise<void>;
+  /** Encrypted durable branch results loaded by the backend worker on recovery. */
+  parallelBranchResults?: Record<string, ParallelBranchResult>;
+  onParallelBranchStart?: (activationId: string, branchId: string, nodeIds: string[]) => void | Promise<void>;
+  onParallelBranchDone?: (activationId: string, branch: ParallelBranchResult) => void | Promise<void>;
   executeJavascript: Sandbox;
   documentContext?: Pick<DocumentContextNodeData, "source" | "delivery" | "reuseScope">;
   onDocumentContext?: (context: Pick<DocumentContextNodeData, "source" | "delivery" | "reuseScope">) => void;
@@ -327,6 +341,18 @@ const routerRuleMatches = (input: unknown, rule: RouterRule, caseSensitive: bool
       default: return false;
     }
   });
+};
+
+const runWithConcurrency = async <T, R>(items: T[], limit: number, operation: (item: T, index: number) => Promise<R>): Promise<R[]> => {
+  const results = new Array<R>(items.length); let cursor = 0;
+  const workers = Array.from({ length: Math.min(items.length, Math.max(1, limit)) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await operation(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 };
 
 export async function executeWorkflow(
@@ -709,6 +735,79 @@ export async function executeWorkflow(
         }
         routerResults.set(node.id, new Set(matchingRuleIds.length > 0 ? matchingRuleIds : ["fallback"]));
 
+      } else if (node.type === "parallel") {
+        const d = node.data as ParallelNodeData;
+        const branchEdges = edges.filter((edge) => edge.source === node.id);
+        const join = nodes.find((candidate) => candidate.type === "join" && (candidate.data as JoinNodeData).parallelNodeId === node.id);
+        if (!join || branchEdges.length < 2) throw new Error(`Parallel node "${node.id}" is not connected to a valid Join.`);
+        const activationId = `${node.id}.${visits}`;
+        const branches = await runWithConcurrency(branchEdges, d.maxConcurrency || 4, async (branchEdge, branchIndex): Promise<ParallelBranchResult> => {
+          const branchNodes: WorkflowNode[] = []; const branchGraphEdges: WorkflowEdge[] = [];
+          let current = branchEdge.target; const seen = new Set<string>();
+          while (current !== join.id) {
+            if (seen.has(current)) throw new Error(`Parallel branch ${branchEdge.id} contains a cycle.`);
+            seen.add(current);
+            const branchNode = nodes.find((candidate) => candidate.id === current);
+            if (!branchNode) throw new Error(`Parallel branch ${branchEdge.id} references a missing node.`);
+            branchNodes.push(branchNode);
+            const next = edges.filter((edge) => edge.source === current);
+            if (next.length !== 1) throw new Error(`Parallel branch node "${current}" must have one outgoing connection.`);
+            if (next[0].target !== join.id) branchGraphEdges.push(next[0]);
+            current = next[0].target;
+          }
+          const durableKey = `${activationId}:${branchEdge.id}`;
+          const durable = ctx.parallelBranchResults?.[durableKey];
+          if (durable) return structuredClone(durable);
+          await ctx.onParallelBranchStart?.(activationId, branchEdge.id, branchNodes.map((branchNode) => branchNode.id));
+          const branchStarted = performance.now();
+          const branchResult = await executeWorkflow({ nodes: [trigger, ...branchNodes], edges: branchGraphEdges }, {
+            ...ctx,
+            runId: `${ctx.runId ?? "local"}.parallel.${activationId}.${branchEdge.id}`,
+            checkpoint: undefined,
+            startNodeId: branchEdge.target,
+            startFromEdge: undefined,
+            startInput: selectDataPath(prevOutput, branchEdge.dataPath),
+            initialNodeOutputs: undefined,
+            resume: undefined,
+            onCheckpoint: undefined,
+            onStateChange: undefined,
+            onSignalConsumed: undefined,
+            onStepStart: undefined,
+            onStepDone: () => {},
+            stopAfterNodeId: branchNodes.at(-1)?.id,
+            stopOnError: true,
+          });
+          const last = branchResult.results.at(-1);
+          const completed: ParallelBranchResult = {
+            id: branchEdge.id,
+            label: String(branchEdge.label || branchNodes[0]?.data.label || `Branch ${branchIndex + 1}`),
+            status: branchResult.error || last?.error ? "failed" as const : "succeeded" as const,
+            output: last?.output ?? null,
+            error: branchResult.error || last?.error,
+            durationMs: Math.round((performance.now() - branchStarted) * 10) / 10,
+            steps: branchResult.results.map((result) => ({ nodeId: result.nodeId, nodeType: result.nodeType, status: result.error ? "failed" : "succeeded", durationMs: result.durationMs, attemptCount: result.attemptCount, error: result.error })),
+          };
+          await ctx.onParallelBranchDone?.(activationId, completed);
+          return completed;
+        });
+        const failures = branches.filter((branch) => branch.status === "failed");
+        if (failures.length && d.failurePolicy === "fail_fast") throw new Error(`Parallel group failed: ${failures.map((branch) => `${branch.label}: ${branch.error || "failed"}`).join("; ")}`);
+        output = { parallelNodeId: node.id, branches, succeeded: branches.length - failures.length, failed: failures.length };
+
+      } else if (node.type === "join") {
+        const d = node.data as JoinNodeData;
+        const aggregate = prevOutput && typeof prevOutput === "object" ? prevOutput as Record<string, unknown> : {};
+        const branches = Array.isArray(aggregate.branches) ? aggregate.branches as Array<Record<string, unknown>> : [];
+        const successes = branches.filter((branch) => branch.status === "succeeded");
+        const required = d.mode === "quorum" ? Math.max(1, d.quorum ?? 1) : d.mode === "any" ? 1 : branches.length;
+        if (d.mode !== "all_settled" && successes.length < required) throw new Error(`Join "${d.label || node.id}" received ${successes.length} successful branches; ${required} required.`);
+        output = {
+          ...aggregate,
+          join: { mode: d.mode, required, succeeded: successes.length, total: branches.length },
+          ...(d.mode === "any" ? { selected: successes[0]?.output } : {}),
+          outputs: successes.map((branch) => branch.output),
+        };
+
       } else if (node.type === "output") {
         const d = node.data as OutputNodeData;
         if (d.renderAs === "update_result" && d.transformCode?.trim()) {
@@ -770,7 +869,12 @@ export async function executeWorkflow(
     }
 
     // Follow outgoing edges. Conditions select one boolean branch; routers can fan out.
-    const outEdges = edges.filter((e) => {
+    const outEdges = node.type === "parallel"
+      ? (() => {
+          const join = nodes.find((candidate) => candidate.type === "join" && (candidate.data as JoinNodeData).parallelNodeId === node.id);
+          return join ? [{ id: `${node.id}:join`, source: node.id, target: join.id } satisfies WorkflowEdge] : [];
+        })()
+      : edges.filter((e) => {
       if (e.source !== node.id) return false;
       if (node.type === "router") {
         const handle = e.sourceHandle ?? "";
@@ -788,7 +892,7 @@ export async function executeWorkflow(
         return conditionResults.get(node.id) === branch;
       }
       return true;
-    });
+        });
 
     if (outEdges.length === 0) {
       stopReason = node.type === "condition"

@@ -5,14 +5,21 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { workflowBackend, type BackendWorkflowRun, type BackendWorkflowStep, type WorkflowBackendHealth, type WorkflowBackendState } from "@/lib/workflowBackend";
 import type { WorkflowConfig, WorkflowStateField, WorkflowStateReducer, WorkflowStateValueType } from "@/types/workflow";
 
 interface Webhook { id: string; name: string; enabled: boolean; input_mapping: Record<string, string> }
 interface Key { id: string; name: string; enabled: boolean; workflow_ids: string[]; expires_at?: string }
+interface ExecutionPolicy {
+  maxRunningRuns: number; maxQueuedRuns: number; maxOutstandingRuns: number; maxCallerOutstandingRuns: number; maxStartsPerHour: number;
+  completedRetentionDays: number; failedRetentionDays: number;
+}
+const DEFAULT_EXECUTION_POLICY: ExecutionPolicy = { maxRunningRuns: 64, maxQueuedRuns: 200, maxOutstandingRuns: 1000, maxCallerOutstandingRuns: 100, maxStartsPerHour: 1000, completedRetentionDays: 30, failedRetentionDays: 90 };
+const MAXIMUM_EXECUTION_POLICY: ExecutionPolicy = { maxRunningRuns: 100_000, maxQueuedRuns: 1_000_000, maxOutstandingRuns: 2_000_000, maxCallerOutstandingRuns: 1_000_000, maxStartsPerHour: 10_000_000, completedRetentionDays: 30, failedRetentionDays: 90 };
 
 export function WorkflowOperationsPanel({ config, organizationId, onChange, onFocusNode }: { config: WorkflowConfig; organizationId?: string; onChange: (config: WorkflowConfig) => void; onFocusNode?: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
+  const [activeWindow, setActiveWindow] = useState<"settings" | "integrations" | "runs" | null>(null);
   const [runs, setRuns] = useState<BackendWorkflowRun[]>([]);
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [keys, setKeys] = useState<Key[]>([]);
@@ -28,6 +35,8 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
   const [answer, setAnswer] = useState("");
   const [signalPayload, setSignalPayload] = useState("{}");
   const [health, setHealth] = useState<WorkflowBackendHealth | null>(null);
+  const [policy, setPolicy] = useState<ExecutionPolicy>(DEFAULT_EXECUTION_POLICY);
+  const [policyDirty, setPolicyDirty] = useState(false);
   const [runState, setRunState] = useState<WorkflowBackendState | null>(null);
   const [assumedOutput, setAssumedOutput] = useState("null");
   const base = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
@@ -39,11 +48,25 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
   const setStateDefinition = (patch: Partial<typeof stateDefinition>) => onChange({ ...config, state: { ...stateDefinition, ...patch } });
   const patchStateField = (index: number, patch: Partial<WorkflowStateField>) => setStateDefinition({ fields: stateDefinition.fields.map((field, current) => current === index ? { ...field, ...patch } : field) });
   const api = useCallback((action: string, body: Record<string, unknown> = {}) => workflowBackend(action, organizationId, { workflowId: config.id, ...body }), [organizationId, config.id]);
-  const refresh = useCallback(async () => {
-    const [history, endpoints, credentials, healthResult] = await Promise.all([api("list"), api("webhooks"), api("keys"), api("health")]);
-    setRuns(history.runs); setWebhooks(endpoints.webhooks); setKeys(credentials.keys.filter((key: Key) => key.workflow_ids.includes(config.id)));
-    setHealth(healthResult.health);
-  }, [api, config.id]);
+  const refresh = useCallback(async (target: typeof activeWindow = activeWindow) => {
+    const contextual = async (label: string, action: string) => {
+      try { return await api(action); }
+      catch (error) { throw new Error(`${label} could not be loaded: ${error instanceof Error ? error.message : String(error)}`); }
+    };
+    if (target === "settings") {
+      const [healthResult, policyResult] = await Promise.all([contextual("Worker health", "health"), contextual("Organization execution policy", "policy")]);
+      setHealth(healthResult.health);
+      if (!policyDirty) setPolicy(policyResult.policy ?? DEFAULT_EXECUTION_POLICY);
+    } else if (target === "integrations") {
+      const [endpoints, credentials] = await Promise.all([contextual("Webhooks", "webhooks"), contextual("API keys", "keys")]);
+      setWebhooks(endpoints.webhooks);
+      setKeys(credentials.keys.filter((key: Key) => key.workflow_ids.includes(config.id)));
+    } else if (target === "runs") {
+      const [history, healthResult] = await Promise.all([contextual("Execution history", "list"), contextual("Worker health", "health")]);
+      setRuns(history.runs);
+      setHealth(healthResult.health);
+    }
+  }, [activeWindow, api, config.id, policyDirty]);
   const loadRun = useCallback(async (id: string) => {
     const detail = await api("get", { runId: id });
     const collected: BackendWorkflowStep[] = [];
@@ -65,30 +88,64 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
     finally { setBusy(false); }
   };
   useEffect(() => {
-    if (!open || !organizationId) return;
+    if (!activeWindow || !organizationId) return;
     let disposed = false; let inFlight = false;
     const update = async () => {
       if (inFlight) return;
       inFlight = true;
-      try { await refresh(); if (selected?.id) await loadRun(selected.id); }
+      try { await refresh(activeWindow); if (activeWindow === "runs" && selected?.id) await loadRun(selected.id); }
       catch (error) { if (!disposed) setError(error instanceof Error ? error.message : String(error)); }
       finally { inFlight = false; }
     };
     void update();
     const timer = window.setInterval(update, 5000);
     return () => { disposed = true; window.clearInterval(timer); };
-  }, [open, organizationId, refresh, loadRun, selected?.id]);
+  }, [activeWindow, organizationId, refresh, loadRun, selected?.id]);
+  const fleetCapacity = health?.workers.reduce((total, worker) => total + worker.capacity, 0) ?? 0;
+  const recommendedRunning = fleetCapacity > 0 ? (fleetCapacity <= 8 ? fleetCapacity : Math.max(1, Math.floor(fleetCapacity * 0.8))) : 4;
+  const recommendedPolicy: ExecutionPolicy = {
+    maxRunningRuns: recommendedRunning,
+    maxQueuedRuns: Math.max(200, recommendedRunning * 20),
+    maxOutstandingRuns: Math.max(1000, recommendedRunning * 30),
+    maxCallerOutstandingRuns: Math.max(100, recommendedRunning * 4),
+    maxStartsPerHour: Math.max(1000, recommendedRunning * 60),
+    completedRetentionDays: policy.completedRetentionDays,
+    failedRetentionDays: policy.failedRetentionDays,
+  };
+  const updatePolicyNumber = (key: keyof ExecutionPolicy, value: string, minimum: number, maximum: number) => { setPolicyDirty(true); setPolicy((current) => ({ ...current, [key]: Math.max(minimum, Math.min(maximum, Math.floor(Number(value) || minimum))) })); };
+  const openWindow = (target: NonNullable<typeof activeWindow>) => { setError(""); setActiveWindow(target); };
+
+  const windowTitle = activeWindow === "settings" ? "Backend execution, API and webhooks" : activeWindow === "integrations" ? "Manage integrations" : "Manage runs";
+  const windowDescription = activeWindow === "settings"
+    ? "Configure backend execution, organization capacity, API access, webhooks, state, and callbacks."
+    : activeWindow === "integrations"
+      ? "Create and maintain this workflow's webhook endpoints and API credentials."
+      : "Start, monitor, inspect, resume, recover, and cancel backend workflow runs.";
 
   return <div className="rounded-lg border p-3 space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <Label>Backend execution, API and webhooks</Label>
-      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(!open)}>{open ? "Hide execution management" : "Manage integrations and runs"}</Button>
+      <div>
+        <Label>Backend execution, API and webhooks</Label>
+        <p className="mt-1 text-xs text-muted-foreground">Open execution configuration, integration credentials, or run operations in a separate window.</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" variant="outline" onClick={() => openWindow("settings")}>Execution settings</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => openWindow("integrations")}>Manage integrations</Button>
+        <Button type="button" size="sm" onClick={() => openWindow("runs")}>Manage runs</Button>
+      </div>
     </div>
+    <Dialog open={activeWindow !== null} onOpenChange={(isOpen) => { if (!isOpen) setActiveWindow(null); }}>
+      <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-6xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{windowTitle}</DialogTitle>
+          <DialogDescription>{windowDescription}</DialogDescription>
+        </DialogHeader>
+        {activeWindow === "settings" && <div className="space-y-3">
     <div className="flex flex-wrap gap-5 text-xs">
       {([['backendEnabled', 'Run chat workflows on backend'], ['apiEnabled', 'Allow API execution'], ['webhookEnabled', 'Allow webhook execution']] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2"><Switch checked={Boolean(execution[key])} onCheckedChange={(checked) => setExecution({ [key]: checked })} />{label}</label>)}
     </div>
     <p className="text-xs text-muted-foreground">API and webhook execution work independently of the result page and its chat switch. A workflow can have no result-page assignments. Choose Request data in its trigger to process the payload supplied by the caller.</p>
-    <p className="text-xs text-muted-foreground">Every request has separate inputs, state, and execution logs. Runs start automatically as backend capacity becomes available; no parallel-run count or whole-run deadline needs to be configured.</p>
+    <p className="text-xs text-muted-foreground">Every request has separate inputs, state, and execution logs. Runs start automatically as backend capacity becomes available and are bounded by the organization execution policy.</p>
     <details className="rounded border p-3 space-y-2 text-xs">
       <summary className="cursor-pointer font-medium">Execution state schema</summary>
       <p className="text-muted-foreground">Declare typed values shared during one run. Dotted keys are supported; values are encrypted and never shared across runs.</p>
@@ -125,11 +182,40 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
       <label className="block space-y-1">Response link lifetime (hours)<Input type="number" min={1} max={720} value={notificationSettings.interactionTtlHours ?? 168} onChange={(event) => setNotificationsConfig({ interactionTtlHours: Math.max(1, Math.min(720, Math.floor(Number(event.target.value) || 1))) })} /></label>
       <label className="block space-y-1">Maximum delivery attempts per event<Input type="number" min={1} max={10} value={notificationSettings.maxAttempts ?? 6} onChange={(event) => setNotificationsConfig({ maxAttempts: Math.max(1, Math.min(10, Math.floor(Number(event.target.value) || 1))) })} /></label>
     </details>
-    {open && <div className="space-y-4">
+        </div>}
+        <div className="space-y-4">
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      {revealed && <div className="rounded border p-2 space-y-2"><p className="text-xs">Copy this credential now. It is displayed only after creation or rotation.</p><Textarea readOnly value={revealed} /><Button type="button" size="sm" variant="outline" onClick={() => setRevealed("")}>Dismiss credential</Button></div>}
-      {health && <div className="grid grid-cols-2 gap-2 rounded border p-2 text-xs md:grid-cols-4"><span>Workers: {health.workers.length}</span><span>Queue: {health.queueDepth}</span><span>Running: {health.runningRuns}</span><span>Waiting: {health.waitingRuns}</span><span>Manual review: {health.manualReviewRuns}</span><span>Expired leases: {health.expiredLeases}</span><span>Notifications: {health.notificationBacklog}</span>{health.oldestQueuedAt && <span>Oldest: {new Date(health.oldestQueuedAt).toLocaleString()}</span>}</div>}
-      <div className="space-y-2">
+      {activeWindow === "integrations" && revealed && <div className="rounded border p-2 space-y-2"><p className="text-xs">Copy this credential now. It is displayed only after creation or rotation.</p><Textarea readOnly value={revealed} /><Button type="button" size="sm" variant="outline" onClick={() => setRevealed("")}>Dismiss credential</Button></div>}
+      {activeWindow === "runs" && health && <div className="grid grid-cols-2 gap-2 rounded border p-2 text-xs md:grid-cols-4"><span>Workers: {health.workers.length}</span><span>Queue: {health.queueDepth}</span><span>Running: {health.runningRuns}</span><span>Waiting: {health.waitingRuns}</span><span>Manual review: {health.manualReviewRuns}</span><span>Expired leases: {health.expiredLeases}</span><span>Notifications: {health.notificationBacklog}</span>{health.oldestQueuedAt && <span>Oldest: {new Date(health.oldestQueuedAt).toLocaleString()}</span>}</div>}
+      {activeWindow === "settings" && <details className="rounded border p-3 text-xs">
+        <summary className="cursor-pointer font-medium">Organization execution capacity</summary>
+        <div className="mt-3 space-y-3">
+          <div className="rounded border border-sky-500/30 bg-sky-500/5 p-2 text-muted-foreground">
+            <p>Live fleet capacity: <strong className="text-foreground">{fleetCapacity || "no workers detected"}</strong> execution slots. Recommended active-run limit: <strong className="text-foreground">{recommendedRunning.toLocaleString()}</strong>.</p>
+            <p className="mt-1">The active-run limit is an admission ceiling, not additional compute. Setting it above live worker capacity increases queue dispatch flexibility but cannot create more simultaneous execution. LLM/MCP rate limits may require a lower value.</p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {([
+              ["maxRunningRuns", "Maximum active runs", 1, 100000, "Scheduler cap for this organization. Best starting point: about 80% of live worker slots."],
+              ["maxQueuedRuns", "Maximum queued runs", 1, 1000000, "Backlog accepted before new starts receive HTTP 429."],
+              ["maxOutstandingRuns", "Maximum outstanding runs", 1, 2000000, "Combined queued, running, waiting, and manual-review records."],
+              ["maxCallerOutstandingRuns", "Maximum per caller", 1, 1000000, "Prevents one API key or user from consuming the organization allowance."],
+              ["maxStartsPerHour", "Maximum starts per hour", 1, 10000000, "Admission-rate guard; this does not control simultaneous execution."],
+              ["completedRetentionDays", "Completed retention days", 1, 3650, "Longer retention increases database and backup storage."],
+              ["failedRetentionDays", "Failed retention days", 1, 3650, "Keep failures longer when operational investigation requires it."],
+            ] as const).map(([key, label, minimum, maximum, effect]) => <label key={key} className="space-y-1 rounded border p-2"><span className="font-medium">{label}</span><Input type="number" min={minimum} max={maximum} value={policy[key]} onChange={(event) => updatePolicyNumber(key, event.target.value, minimum, maximum)} /><span className="block text-[10px] text-muted-foreground">{effect} Allowed: {minimum.toLocaleString()}–{maximum.toLocaleString()}.</span></label>)}
+          </div>
+          {policy.maxOutstandingRuns < policy.maxRunningRuns + policy.maxQueuedRuns && <p className="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-amber-700 dark:text-amber-300">Outstanding capacity must be at least active plus queued capacity.</p>}
+          {policy.maxCallerOutstandingRuns > policy.maxOutstandingRuns && <p className="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-amber-700 dark:text-amber-300">Per-caller capacity cannot exceed organization outstanding capacity.</p>}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={() => { setPolicy(recommendedPolicy); setPolicyDirty(true); }}>Use recommended limits</Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => { setPolicy(MAXIMUM_EXECUTION_POLICY); setPolicyDirty(true); }}>Use schema maximum</Button>
+            <Button type="button" size="sm" disabled={busy || !policyDirty || policy.maxOutstandingRuns < policy.maxRunningRuns + policy.maxQueuedRuns || policy.maxCallerOutstandingRuns > policy.maxOutstandingRuns} onClick={() => void perform(async () => { const result = await api("update_policy", policy); setPolicy(result.policy); setPolicyDirty(false); })}>Save organization limits</Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground"><strong>Maximum preset warning:</strong> it only removes admission restrictions. Use it only with a load-tested database, autoscaled workers, provider quotas, monitoring, and sufficient storage. For most deployments, the recommended preset is the best balance between throughput and recovery reliability.</p>
+        </div>
+      </details>}
+      {activeWindow === "integrations" && <div className="space-y-2">
         <p className="text-sm font-medium">Integration access</p>
         <code className="block break-all text-xs">POST {base}/workflow-runs</code>
         <p className="text-xs text-muted-foreground">Use Authorization: Bearer &lt;API key&gt; with a JSON body containing action: "start", workflowId: "{config.id}", input and userMessage.</p>
@@ -154,13 +240,13 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
           }} />
         </div>)}
         {keys.map((key) => <div key={key.id} className="flex items-center gap-2 text-xs"><span>{key.name}</span><Badge variant="outline">{key.enabled ? "Active" : "Revoked"}</Badge>{key.enabled && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void perform(async () => { await api("revoke_key", { keyId: key.id }); })}>Revoke</Button>}</div>)}
-      </div>
-      <div className="space-y-2">
+      </div>}
+      {activeWindow === "runs" && <div className="space-y-2">
         <p className="text-sm font-medium">Start a backend run</p><Label className="text-xs">Input JSON</Label>
         <Textarea value={payload} onChange={(event) => setPayload(event.target.value)} />
         <Button type="button" size="sm" disabled={busy || !execution.backendEnabled} onClick={() => void perform(async () => { const result = await api("start", { source: "dashboard", input: JSON.parse(payload) }); await loadRun(result.runId); })}>Run saved workflow</Button>
-      </div>
-      <div className="space-y-2">
+      </div>}
+      {activeWindow === "runs" && <div className="space-y-2">
         <div className="flex items-center justify-between"><p className="text-sm font-medium">Execution history</p><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void perform(refresh)}>Refresh</Button></div>
         {!runs.length && <p className="text-xs text-muted-foreground">No backend executions yet.</p>}
         <div className="max-h-64 overflow-auto space-y-1">{runs.map((run) => <button type="button" key={run.id} className={`w-full rounded border p-2 text-left text-xs ${selected?.id === run.id ? "bg-muted" : ""}`} onClick={() => void perform(() => loadRun(run.id))}>
@@ -182,7 +268,9 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
           {notifications.length > 0 && <details className="text-xs"><summary>Notification delivery log</summary><div className="space-y-2 pt-2">{notifications.map((notification) => <div key={notification.id} className="rounded border p-2">{notification.event_type} · {notification.status} · {notification.attempts} attempts{notification.last_error && <p className="text-muted-foreground">{notification.last_error}</p>}</div>)}</div></details>}
           {selected.status === "succeeded" && <details className="text-xs"><summary>Final output</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap">{JSON.stringify(selected.output, null, 2)}</pre></details>}
         </div>}
-      </div>
-    </div>}
+      </div>}
+        </div>
+      </DialogContent>
+    </Dialog>
   </div>;
 }

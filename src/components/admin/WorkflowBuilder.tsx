@@ -8,7 +8,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import {
-  Play, Plus, Trash2, X, Code2, GitBranch, Route, Radio,
+  Play, Plus, Trash2, X, Code2, GitBranch, Route, Radio, GitFork, Combine,
   Bot, Square, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, BookOpen, RotateCcw, GripVertical, Workflow, Settings2, Link2, Maximize2, Minimize2,
   FlaskConical, Loader2, CircleStop, CheckCircle2, XCircle,
   Globe2, Send, KeyRound, FileText,
@@ -25,7 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type {
   AgentWorkflow, WorkflowNode, WorkflowEdge,
-  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, EventNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, OutputNodeData, WorkflowStepResult, WorkflowWaitingState, WorkflowRetryPolicy, WorkflowStateDefinition, WorkflowStateRead, WorkflowStateWrite, WorkflowStateReducer,
+  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, EventNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, ParallelNodeData, JoinNodeData, OutputNodeData, WorkflowStepResult, WorkflowWaitingState, WorkflowRetryPolicy, WorkflowStateDefinition, WorkflowStateRead, WorkflowStateWrite, WorkflowStateReducer,
 } from "@/types/workflow";
 import { executeWorkflow } from "@/lib/workflowExecutor";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
@@ -111,6 +111,8 @@ const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
   plugin:    ({ className }) => <Code2 className={className} />,
   condition: ({ className }) => <GitBranch className={className} />,
   router:    ({ className }) => <Route className={className} />,
+  parallel:  ({ className }) => <GitFork className={className} />,
+  join:      ({ className }) => <Combine className={className} />,
   output:    ({ className }) => <Square className={className} />,
 };
 
@@ -125,6 +127,8 @@ const NODE_LIBRARY = [
   { type: "plugin", icon: Code2, label: "JavaScript", description: "Transforms data safely", color: "text-amber-600", iconBg: "bg-amber-500/10" },
   { type: "condition", icon: GitBranch, label: "Condition", description: "Branches the workflow", color: "text-rose-500", iconBg: "bg-rose-500/10" },
   { type: "router", icon: Route, label: "Result Router", description: "Matches any number of result rules", color: "text-orange-600", iconBg: "bg-orange-500/10" },
+  { type: "parallel", icon: GitFork, label: "Parallel", description: "Runs safe branches concurrently", color: "text-purple-600", iconBg: "bg-purple-500/10" },
+  { type: "join", icon: Combine, label: "Join", description: "Deterministically joins branches", color: "text-teal-600", iconBg: "bg-teal-500/10" },
   { type: "output", icon: Square, label: "Output", description: "Renders the final result", color: "text-emerald-600", iconBg: "bg-emerald-500/10" },
 ] as const;
 
@@ -139,6 +143,8 @@ const NODE_ACCENTS: Record<string, string> = {
   plugin: "border-l-amber-500",
   condition: "border-l-rose-500",
   router: "border-l-orange-500",
+  parallel: "border-l-purple-500",
+  join: "border-l-teal-500",
   output: "border-l-emerald-500",
 };
 
@@ -404,6 +410,8 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
         </div>
       )}
       {type === "event" && <p className="text-[10px] text-muted-foreground truncate">{(data as EventNodeData).eventType === "external_signal" ? `Signal: ${(data as EventNodeData).signalName || "not configured"}` : `State changed: ${(data as EventNodeData).stateKey || "not configured"}`}</p>}
+      {type === "parallel" && <p className="text-[10px] text-muted-foreground">Up to {(data as ParallelNodeData).maxConcurrency || 4} concurrent branches</p>}
+      {type === "join" && <p className="text-[10px] text-muted-foreground">{(data as JoinNodeData).mode || "all"} completion</p>}
       {isOutput && <p className="text-[10px] text-muted-foreground">Final workflow response</p>}
       </div>
 
@@ -444,6 +452,8 @@ const nodeTypes = {
   plugin:    (p: FlowNodeProps) => <FlowNode {...p} type="plugin" />,
   condition: (p: FlowNodeProps) => <FlowNode {...p} type="condition" />,
   router:    (p: FlowNodeProps) => <FlowNode {...p} type="router" />,
+  parallel:  (p: FlowNodeProps) => <FlowNode {...p} type="parallel" />,
+  join:      (p: FlowNodeProps) => <FlowNode {...p} type="join" />,
   output:    (p: FlowNodeProps) => <FlowNode {...p} type="output" />,
 };
 
@@ -1469,7 +1479,7 @@ trigger(result) -> retrieval(list result skills without sending full JSON) -> us
 `.trim();
 
 const WORKFLOW_GENERATION_SYSTEM_PROMPT = `You design executable agentic workflows. Return JSON only with {"nodes":[],"edges":[]}.
-Allowed node types: trigger, document_context, retrieval, user_input, event, agent, api, plugin, condition, router, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision. Use event with eventType external_signal when an authenticated external system must resume the backend run.
+Allowed node types: trigger, document_context, retrieval, user_input, event, agent, api, plugin, condition, router, parallel, join, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision. Use event with eventType external_signal when an authenticated external system must resume the backend run. For concurrent work use one parallel node, two or more disjoint linear safe branches, and one join referencing the parallel node; parallel branches must be read-only/idempotent and cannot write shared state.
 Prefer deterministic plugin nodes for parsing, validation, looping, accumulation, formatting, evidence verification, and resultData updates. Use LLM agents only for semantic interpretation or generation.
 Each node: {"id":"short-unique-id","type":"allowed type","data":{...}}. Do not include positions.
 All inputSchema and outputSchema values must be concise human-readable strings. Do not return schema objects in these fields.
@@ -1805,6 +1815,29 @@ const RouterPanel = ({
       />
     </div>
   );
+};
+
+const ParallelPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (data: ParallelNodeData) => void }) => {
+  const data = node.data as ParallelNodeData;
+  return <div className="space-y-3">
+    <div className="space-y-1"><Label className="text-xs">Label</Label><Input className="h-7 text-xs" value={data.label} onChange={(event) => onChange({ ...data, label: event.target.value })} /></div>
+    <div className="space-y-1"><Label className="text-xs">Maximum concurrent branches</Label><Input type="number" min={1} max={32} className="h-8 text-xs" value={data.maxConcurrency ?? 4} onChange={(event) => onChange({ ...data, maxConcurrency: Math.max(1, Math.min(32, Math.floor(Number(event.target.value) || 1))) })} /><p className="text-[10px] text-muted-foreground">This per-run limit is independent from worker capacity.</p></div>
+    <div className="space-y-1"><Label className="text-xs">Branch failure policy</Label><Select value={data.failurePolicy ?? "fail_fast"} onValueChange={(failurePolicy) => onChange({ ...data, failurePolicy: failurePolicy as ParallelNodeData["failurePolicy"] })}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fail_fast">Fail the parallel group</SelectItem><SelectItem value="all_settled">Collect successes and failures</SelectItem></SelectContent></Select></div>
+    <p className="rounded-md border border-purple-500/30 bg-purple-500/5 p-2 text-[10px] text-muted-foreground">For durable recovery, branch paths may contain only JavaScript, retrieval, read-only agents/APIs, or explicitly idempotent agents/APIs. Shared state is merged after Join.</p>
+    <SchemaRow inputSchema={data.inputSchema} outputSchema={data.outputSchema} onInputChange={(inputSchema) => onChange({ ...data, inputSchema: inputSchema || undefined })} onOutputChange={(outputSchema) => onChange({ ...data, outputSchema: outputSchema || undefined })} />
+  </div>;
+};
+
+const JoinPanel = ({ node, nodes, onChange }: { node: WorkflowNode; nodes: Node[]; onChange: (data: JoinNodeData) => void }) => {
+  const data = node.data as JoinNodeData;
+  const parallelNodes = nodes.filter((candidate) => candidate.type === "parallel");
+  return <div className="space-y-3">
+    <div className="space-y-1"><Label className="text-xs">Label</Label><Input className="h-7 text-xs" value={data.label} onChange={(event) => onChange({ ...data, label: event.target.value })} /></div>
+    <div className="space-y-1"><Label className="text-xs">Parallel group</Label><Select value={data.parallelNodeId || "__none"} onValueChange={(parallelNodeId) => onChange({ ...data, parallelNodeId: parallelNodeId === "__none" ? "" : parallelNodeId })}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none">Select parallel node</SelectItem>{parallelNodes.map((candidate) => <SelectItem key={candidate.id} value={candidate.id}>{String((candidate.data as { label?: string }).label || candidate.id)}</SelectItem>)}</SelectContent></Select></div>
+    <div className="space-y-1"><Label className="text-xs">Completion rule</Label><Select value={data.mode ?? "all"} onValueChange={(mode) => onChange({ ...data, mode: mode as JoinNodeData["mode"] })}><SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All branches succeed</SelectItem><SelectItem value="all_settled">All settled</SelectItem><SelectItem value="any">Any branch succeeds</SelectItem><SelectItem value="quorum">Success quorum</SelectItem></SelectContent></Select></div>
+    {data.mode === "quorum" && <div className="space-y-1"><Label className="text-xs">Required successful branches</Label><Input type="number" min={1} max={32} className="h-8 text-xs" value={data.quorum ?? 1} onChange={(event) => onChange({ ...data, quorum: Math.max(1, Math.min(32, Math.floor(Number(event.target.value) || 1))) })} /></div>}
+    <SchemaRow inputSchema={data.inputSchema} outputSchema={data.outputSchema} onInputChange={(inputSchema) => onChange({ ...data, inputSchema: inputSchema || undefined })} onOutputChange={(outputSchema) => onChange({ ...data, outputSchema: outputSchema || undefined })} />
+  </div>;
 };
 
 const RENDER_OPTIONS: Array<{ value: OutputNodeData["renderAs"]; label: string; desc: string }> = [
@@ -4585,6 +4618,8 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, state, agen
       plugin:    { label: "Plugin", code: "return input.prevOutput;", description: "" } satisfies PluginNodeData,
       condition: { label: "Condition", expression: "prevOutput?.length > 0" } satisfies ConditionNodeData,
       router:    { label: "Result Router", inputPath: "", matchMode: "all_matches", caseSensitive: false, rules: [{ id: `rule-${uid()}`, label: "Process A", operator: "contains", value: "123" }], fallbackLabel: "No match" } satisfies RouterNodeData,
+      parallel:  { label: "Run in Parallel", maxConcurrency: 4, failurePolicy: "fail_fast", outputSchema: "{ branches[], succeeded, failed }" } satisfies ParallelNodeData,
+      join:      { label: "Join Branches", parallelNodeId: nodes.find((node) => node.type === "parallel")?.id ?? "", mode: "all", outputSchema: "{ branches[], outputs[], join }" } satisfies JoinNodeData,
       output:    { label: "Output", renderAs: "auto" } satisfies OutputNodeData,
     };
     const newNode: Node = {
@@ -5638,9 +5673,9 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
           const sourceNode = rawNodes.find((node) => String(node.id || "") === source);
           const sourceType = String(sourceNode?.type || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
           if ((edge.branch === "true" || edge.branch === "false") && sourceType !== "condition") issues.push(`Edge ${index + 1} uses branch but source is not a condition node.`);
+          if (edge.route && sourceType !== "router") issues.push(`Edge ${index + 1} uses route but source is not a router node.`);
         });
         if (rawEdges.length === 0 && rawNodes.length > 1) issues.push("Graph should include explicit edges between nodes.");
-          if (edge.route && sourceType !== "router") issues.push(`Edge ${index + 1} uses route but source is not a router node.`);
         return issues;
       };
       let parsed = parseGeneratedWorkflowResponse(generated);
@@ -5666,9 +5701,9 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         generated = await callWorkflowGenerator(repairPrompt, activeSystemPrompt, { ...generationContextPayload, plan, validationIssues, graph: parsed });
         parsed = parseGeneratedWorkflowResponse(generated);
       }
-      const allowedTypes = new Set(["trigger", "document_context", "retrieval", "user_input", "event", "agent", "api", "plugin", "condition", "router", "output"]);
+      const allowedTypes = new Set(["trigger", "document_context", "retrieval", "user_input", "event", "agent", "api", "plugin", "condition", "router", "parallel", "join", "output"]);
       const typeAliases: Record<string, WorkflowNode["type"]> = {
-        start: "trigger", input: "trigger", user_input: "trigger",
+        start: "trigger", input: "trigger",
         document: "document_context", document_context: "document_context", file_context: "document_context",
         rag: "retrieval", retrieval: "retrieval", search: "retrieval", browser: "retrieval", data_lookup: "retrieval", data_retrieval: "retrieval", tool: "retrieval",
         ask: "user_input", question: "user_input", user_input: "user_input", wait: "user_input", pause: "user_input", human_input: "user_input",
@@ -5676,6 +5711,8 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         ai: "agent", llm: "agent", ai_agent: "agent",
         http: "api", request: "api", api_request: "api",
         router: "router", route: "router", switch: "router", multi_condition: "router",
+        parallel: "parallel", fork: "parallel", concurrent: "parallel",
+        join: "join", merge_branches: "join", barrier: "join",
         javascript: "plugin", code: "plugin", transform: "plugin", function: "plugin",
         branch: "condition", decision: "condition", if: "condition",
         end: "output", result: "output", response: "output", final: "output",
@@ -5871,6 +5908,21 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
             outputSchema: normalizeGeneratedSchema(rawData.outputSchema),
           };
         }
+        else if (type === "parallel") data = {
+          label,
+          maxConcurrency: typeof rawData.maxConcurrency === "number" ? Math.max(1, Math.min(32, Math.floor(rawData.maxConcurrency))) : 4,
+          failurePolicy: rawData.failurePolicy === "all_settled" ? "all_settled" : "fail_fast",
+          inputSchema: normalizeGeneratedSchema(rawData.inputSchema),
+          outputSchema: normalizeGeneratedSchema(rawData.outputSchema) || "{ branches[], succeeded, failed }",
+        };
+        else if (type === "join") data = {
+          label,
+          parallelNodeId: String(rawData.parallelNodeId || "").slice(0, 100),
+          mode: ["all", "all_settled", "any", "quorum"].includes(String(rawData.mode)) ? rawData.mode : "all",
+          quorum: typeof rawData.quorum === "number" ? Math.max(1, Math.min(32, Math.floor(rawData.quorum))) : undefined,
+          inputSchema: normalizeGeneratedSchema(rawData.inputSchema),
+          outputSchema: normalizeGeneratedSchema(rawData.outputSchema) || "{ branches[], outputs[], join }",
+        };
         else data = { label, renderAs: workflowOutput, inputSchema: normalizeGeneratedSchema(rawData.inputSchema) };
         return { id, type, position: { x: 240 + (index % 3) * 280, y: 40 + Math.floor(index / 3) * 170 }, data: data as WorkflowNode["data"] };
       });
@@ -6287,7 +6339,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 <Background gap={20} size={1} color="hsl(var(--border))" />
                 <Controls showInteractive={false} className="!m-3 !overflow-hidden !rounded-lg !border !border-border !bg-background/90 !shadow-sm" />
                 <MiniMap
-                  nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", event: "#2563eb", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+                  nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", event: "#2563eb", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", parallel: "#9333ea", join: "#0d9488", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
                   maskColor="hsl(var(--background) / 0.65)"
                   className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
                 />
@@ -6350,6 +6402,8 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                       {exampleSelectedNode.type === "plugin" && <PluginPanel node={exampleSelectedNode} organizationId={organizationId} generationContext={examplePluginGenerationContext} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
                       {exampleSelectedNode.type === "condition" && <ConditionPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
                       {exampleSelectedNode.type === "router" && <RouterPanel node={exampleSelectedNode} onChange={updateExampleSelectedRouterData} onRemoveRule={removeExampleSelectedRouterRule} />}
+                      {exampleSelectedNode.type === "parallel" && <ParallelPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
+                      {exampleSelectedNode.type === "join" && <JoinPanel node={exampleSelectedNode} nodes={exampleNodes} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
                       {exampleSelectedNode.type === "output" && <OutputPanel
                         node={exampleSelectedNode}
                         incomingEdges={exampleEdges.filter((edge) => edge.target === exampleSelectedNode.id) as Array<Edge & { dataPath?: string }>}
@@ -6843,7 +6897,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
               className="!m-3 !overflow-hidden !rounded-lg !border-2 !border-foreground/70 !bg-transparent !shadow-none [&_button]:!border-border [&_button]:!bg-transparent [&_button]:!text-foreground [&_button]:hover:!bg-muted/50 [&_svg]:!fill-current [&_svg]:!stroke-current"
             />
             <MiniMap
-              nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", event: "#2563eb", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+              nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", event: "#2563eb", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", parallel: "#9333ea", join: "#0d9488", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
               maskColor="hsl(var(--background) / 0.65)"
               className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
             />
@@ -6957,6 +7011,8 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 {selectedNode.type === "plugin" && <PluginPanel node={selectedNode} organizationId={organizationId} generationContext={pluginGenerationContext} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "condition" && <ConditionPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "router" && <RouterPanel node={selectedNode} onChange={updateSelectedRouterData} onRemoveRule={removeSelectedRouterRule} />}
+                {selectedNode.type === "parallel" && <ParallelPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
+                {selectedNode.type === "join" && <JoinPanel node={selectedNode} nodes={nodes} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "output" && <OutputPanel
                   node={selectedNode}
                   incomingEdges={edges.filter((edge) => edge.target === selectedNode.id) as Array<Edge & { dataPath?: string }>}

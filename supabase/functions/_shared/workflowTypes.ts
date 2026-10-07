@@ -1,6 +1,6 @@
 // Agentic workflow graph — persisted inside llmInsights.workflows[] in global_configs.
 
-export type NodeType = "trigger" | "document_context" | "retrieval" | "user_input" | "event" | "agent" | "api" | "plugin" | "condition" | "router" | "output";
+export type NodeType = "trigger" | "document_context" | "retrieval" | "user_input" | "event" | "agent" | "api" | "plugin" | "condition" | "router" | "parallel" | "join" | "output";
 
 // ─── Node data payloads ───────────────────────────────────────────────────────
 
@@ -234,6 +234,28 @@ export interface RouterNodeData {
   outputSchema?: string;
 }
 
+/** Starts every directly connected branch as one durable, replay-safe composite step. */
+export interface ParallelNodeData {
+  label: string;
+  /** Bounds work started by this run independently of worker-wide capacity. */
+  maxConcurrency: number;
+  /** fail_fast rejects the group; all_settled passes branch errors to the Join node. */
+  failurePolicy: "fail_fast" | "all_settled";
+  inputSchema?: string;
+  outputSchema?: string;
+}
+
+export interface JoinNodeData {
+  label: string;
+  /** Stable ID of the Parallel node whose branches converge here. */
+  parallelNodeId: string;
+  mode: "all" | "all_settled" | "any" | "quorum";
+  /** Used only by quorum. */
+  quorum?: number;
+  inputSchema?: string;
+  outputSchema?: string;
+}
+
 export interface OutputNodeData {
   label: string;
   /** How to render the final output in chat */
@@ -255,6 +277,8 @@ export type AnyNodeData =
   | PluginNodeData
   | ConditionNodeData
   | RouterNodeData
+  | ParallelNodeData
+  | JoinNodeData
   | OutputNodeData;
 
 // ─── Graph primitives ─────────────────────────────────────────────────────────

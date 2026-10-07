@@ -18,7 +18,7 @@ const edges = (...ids) => ids.slice(1).map((target, index) => ({ id: `${ids[inde
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("worker persists concurrent runs, agent results, failures and paused continuations", { timeout: 40_000 }, async () => {
-  const runs = []; const steps = []; const heartbeats = []; let claimed = 0; let maximumActive = 0; let maintenanceCalls = 0;
+  const runs = []; const steps = []; const heartbeats = []; const parallelBranches = []; let claimed = 0; let maximumActive = 0; let maintenanceCalls = 0;
   const org = randomUUID();
   const graph = { nodes: [node("start", "trigger", { inputSources: ["input"] }), node("plugin", "plugin", { code: "return { id: input.input.id };" }), node("agent", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true }), node("end", "output", { renderAs: "json" })], edges: edges("start", "plugin", "agent", "end") };
   function addRun(graph, id) {
@@ -40,11 +40,13 @@ test("worker persists concurrent runs, agent results, failures and paused contin
       if (url.pathname === "/rest/v1/rpc/maintain_workflow_interactions") { maintenanceCalls++; response.end("null"); return; }
       if (url.pathname === "/rest/v1/rpc/cleanup_workflow_runs") { response.end("0"); return; }
       if (url.pathname === "/rest/v1/rpc/cleanup_workflow_worker_heartbeats") { response.end("0"); return; }
+      if (url.pathname === "/rest/v1/rpc/start_workflow_parallel_branch" || url.pathname === "/rest/v1/rpc/complete_workflow_parallel_branch") { response.end("null"); return; }
       if (url.pathname === "/rest/v1/rpc/commit_workflow_run_node") {
         const run = runs.find((item) => item.id === body.p_run_id && item.lease_token === body.p_lease_token && Number(item.state_version || 0) === Number(body.p_expected_state_version));
         const step = steps.find((item) => item.id === body.p_step_id && item.status === "running");
         assert.ok(run && step, "Atomic commit must use the active lease, state version and step");
         Object.assign(run, { checkpoint: body.p_checkpoint, current_node_id: null, current_operation_id: null, current_side_effect_class: null, last_node_id: step.node_id });
+        if (body.p_terminal_status) Object.assign(run, { status: body.p_terminal_status, output: body.p_final_output, render_as: body.p_render_as, stop_reason: body.p_stop_reason, finished_at: new Date().toISOString(), lease_token: null, lease_expires_at: null });
         run.pending_signals = body.p_pending_signals;
         Object.assign(step, { status: body.p_step_status, output_summary: body.p_step_output, error: body.p_step_error, duration_ms: body.p_step_duration_ms, attempt_count: body.p_step_attempt_count, selected_routes: body.p_selected_routes });
         if (body.p_state_ciphertext) { run.run_state_ciphertext = body.p_state_ciphertext; run.state_version = Number(run.state_version || 0) + 1; }
@@ -66,13 +68,14 @@ test("worker persists concurrent runs, agent results, failures and paused contin
         response.setHeader("Content-Type", "text/event-stream");
         response.end(`data: ${JSON.stringify({ type: "token", content: JSON.stringify(body.inputData) })}\n\ndata: {"type":"done"}\n\n`); return;
       }
-      const table = url.pathname.endsWith("workflow_runs") ? runs : url.pathname.endsWith("workflow_run_steps") ? steps : url.pathname.endsWith("workflow_worker_heartbeats") ? heartbeats : null;
+      const table = url.pathname.endsWith("workflow_runs") ? runs : url.pathname.endsWith("workflow_run_steps") ? steps : url.pathname.endsWith("workflow_worker_heartbeats") ? heartbeats : url.pathname.endsWith("workflow_parallel_branches") ? parallelBranches : null;
       assert.ok(table, `Unexpected route ${url.pathname}`);
       let rows = table.filter((row) => Array.from(url.searchParams).every(([key, value]) => {
         if (["select", "order", "limit"].includes(key)) return true;
         const dot = value.indexOf("."); const operation = value.slice(0, dot); const expected = value.slice(dot + 1);
         if (operation === "eq") return String(row[key]) === expected;
         if (operation === "gt") return String(row[key]) > expected;
+        if (operation === "in") return expected.slice(1, -1).split(",").includes(String(row[key]));
         throw new Error(`Unexpected filter ${value}`);
       }));
       if (request.method === "POST") { const row = { id: randomUUID(), ...body }; table.push(row); rows = [row]; }

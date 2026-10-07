@@ -1,6 +1,6 @@
 import { adminClient } from "../../supabase/functions/_shared/workflowAccess.ts";
 import { collectSecrets, decrypt, encrypt, hash, hmac, redact, sanitizeOutput } from "../../supabase/functions/_shared/workflowSecurity.ts";
-import { executeWorkflow } from "../../supabase/functions/_shared/workflowExecutor.ts";
+import { executeWorkflow, type ParallelBranchResult } from "../../supabase/functions/_shared/workflowExecutor.ts";
 import { runRequest } from "../../supabase/functions/_shared/workflowHttp.ts";
 import { waitPolicy } from "../../supabase/functions/_shared/workflowInteraction.ts";
 import { maintainInteractions, maintainRetention } from "./interactions.ts";
@@ -11,7 +11,9 @@ const internalSecret = Deno.env.get("WORKFLOW_INTERNAL_SECRET");
 const functionsUrl = Deno.env.get("WORKFLOW_FUNCTIONS_URL") || `${Deno.env.get("SUPABASE_URL")}/functions/v1`;
 const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
 if (!internalSecret || !anonKey || !Deno.env.get("WORKFLOW_SECRETS_KEY")) throw new Error("Configure WORKFLOW_INTERNAL_SECRET, WORKFLOW_SECRETS_KEY and SUPABASE_ANON_KEY.");
-const slots = Math.max(1, Math.min(32, Math.floor(Number(Deno.env.get("WORKFLOW_WORKER_CONCURRENCY")) || 4)));
+// High-capacity deployments may use more slots, but horizontal replicas are
+// normally safer than placing hundreds of long-lived LLM calls in one process.
+const slots = Math.max(1, Math.min(256, Math.floor(Number(Deno.env.get("WORKFLOW_WORKER_CONCURRENCY")) || 4)));
 const active = new Set<Promise<void>>();
 const workerId = crypto.randomUUID();
 const workerStartedAt = new Date().toISOString();
@@ -28,7 +30,8 @@ async function executeRun(run: any) {
   let secrets: string[] = [];
   let sequence = 0;
   let stepId: string | null = null;
-  let pendingStep: { status: string; output: unknown; error: unknown; durationMs: number; attemptCount: number } | null = null;
+  let pendingStep: { status: string; output: unknown; finalOutput: unknown; error: unknown; durationMs: number; attemptCount: number; nodeType: string; renderAs?: string } | null = null;
+  let terminalCommitted = false;
   let latestRunState: Record<string, unknown> = {};
   let stateDirty = false;
   let pendingChangedKeys: string[] = [];
@@ -36,6 +39,7 @@ async function executeRun(run: any) {
   let currentNode: string | null = null;
   let pendingSignals: Array<{ id: string; name: string; ciphertext: string; receivedAt: string }> = Array.isArray(run.pending_signals) ? structuredClone(run.pending_signals) : [];
   let consumedSignalIds: string[] = [];
+  const parallelBranchResults: Record<string, ParallelBranchResult> = {};
   const segmentStarted = Date.now();
   const elapsed = () => Number(run.execution_ms ?? 0) + Date.now() - segmentStarted;
   const leaseQuery = () => admin.from("workflow_runs").update({ updated_at: new Date().toISOString() }).eq("id", run.id).eq("organization_id", run.organization_id).eq("lease_token", run.lease_token).eq("status", "running").gt("lease_expires_at", new Date().toISOString());
@@ -62,6 +66,9 @@ async function executeRun(run: any) {
     Math.max(1, run.timeout_seconds * 1000 - Number(run.execution_ms ?? 0)));
   try {
     const { workflow, llm } = await decrypt(run.snapshot.ciphertext);
+    const { data: durableBranches, error: durableBranchError } = await admin.from("workflow_parallel_branches").select("activation_id,branch_id,status,result_ciphertext").eq("organization_id", run.organization_id).eq("run_id", run.id).in("status", ["succeeded", "failed"]);
+    if (durableBranchError) throw durableBranchError;
+    for (const branch of durableBranches ?? []) if (branch.result_ciphertext) parallelBranchResults[`${branch.activation_id}:${branch.branch_id}`] = await decrypt(branch.result_ciphertext) as ParallelBranchResult;
     const initialRunState = run.run_state_ciphertext ? await decrypt(run.run_state_ciphertext) : {};
     if (!initialRunState || typeof initialRunState !== "object" || Array.isArray(initialRunState)) throw new Error("Encrypted workflow run state is invalid.");
     latestRunState = initialRunState as Record<string, unknown>;
@@ -88,6 +95,7 @@ async function executeRun(run: any) {
       checkpoint: run.checkpoint ?? undefined, resume: run.waiting && run.resume_answer ? { waiting: run.waiting, answer: run.resume_answer } : undefined,
       stateDefinition: workflow.state, runState: initialRunState as Record<string, unknown>,
       signals,
+      parallelBranchResults,
       stopOnError: true, executeJavascript: (request) => executeJavascript(request, abort.signal),
       onStepStart: async (nodeId, value, execution) => {
         if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -103,8 +111,9 @@ async function executeRun(run: any) {
       onStepDone: async (step) => {
         const waiting = ["user_input", "event"].includes(step.nodeType) && step.output && typeof step.output === "object" && (step.output as any).waiting;
         const redactionSecrets = [...secrets, ...sensitiveStateStrings()];
-        pendingStep = { status: step.error ? "failed" : waiting ? "waiting" : "succeeded", output: redact(step.output, redactionSecrets),
-          error: step.error ? redact(step.error, redactionSecrets) : null, durationMs: Math.max(0, Math.round(step.durationMs ?? 0)), attemptCount: step.attemptCount ?? 1 };
+        pendingStep = { status: step.error ? "failed" : waiting ? "waiting" : "succeeded", output: redact(step.output, redactionSecrets), finalOutput: sanitizeOutput(step.output, redactionSecrets),
+          error: step.error ? redact(step.error, redactionSecrets) : null, durationMs: Math.max(0, Math.round(step.durationMs ?? 0)), attemptCount: step.attemptCount ?? 1,
+          nodeType: step.nodeType, renderAs: step.renderAs };
       },
       onArtifactCreate: async (nodeId, stateKey, value) => {
         const serialized = JSON.stringify(value); const size = new TextEncoder().encode(serialized).byteLength;
@@ -126,8 +135,20 @@ async function executeRun(run: any) {
         pendingSignals = pendingSignals.filter((signal) => signal.id !== signalId);
         consumedSignalIds.push(signalId);
       },
+      onParallelBranchStart: async (activationId, branchId, nodeIds) => {
+        const { error } = await admin.rpc("start_workflow_parallel_branch", { p_run_id: run.id, p_organization_id: run.organization_id, p_lease_token: run.lease_token,
+          p_activation_id: activationId, p_branch_id: branchId, p_node_ids: nodeIds });
+        if (error) throw error;
+      },
+      onParallelBranchDone: async (activationId, branch) => {
+        const { error } = await admin.rpc("complete_workflow_parallel_branch", { p_run_id: run.id, p_organization_id: run.organization_id, p_lease_token: run.lease_token,
+          p_activation_id: activationId, p_branch_id: branch.id, p_status: branch.status, p_result_ciphertext: await encrypt(branch), p_node_ids: branch.steps.map((step) => step.nodeId) });
+        if (error) throw error;
+        parallelBranchResults[`${activationId}:${branch.id}`] = structuredClone(branch);
+      },
       onCheckpoint: async (checkpoint) => {
         if (!stepId || !pendingStep) throw new Error("Workflow checkpoint has no completed step to commit.");
+        const terminalOutput = pendingStep.nodeType === "output" && pendingStep.status === "succeeded" && checkpoint.pending.length === 0;
         const { data, error } = await admin.rpc("commit_workflow_run_node", { p_run_id: run.id, p_organization_id: run.organization_id, p_lease_token: run.lease_token,
           p_expected_state_version: stateVersion, p_checkpoint: checkpoint, p_step_id: stepId, p_step_status: pendingStep.status,
           p_step_output: pendingStep.output, p_step_error: pendingStep.error, p_step_duration_ms: pendingStep.durationMs, p_step_attempt_count: pendingStep.attemptCount,
@@ -135,8 +156,13 @@ async function executeRun(run: any) {
           p_changed_keys: pendingChangedKeys,
           p_pending_signals: pendingSignals,
           p_consumed_signal_ids: consumedSignalIds,
-          p_state_ciphertext: stateDirty ? await encrypt(latestRunState) : null });
+          p_state_ciphertext: stateDirty ? await encrypt(latestRunState) : null,
+          p_terminal_status: terminalOutput ? "succeeded" : null,
+          p_final_output: terminalOutput ? pendingStep.finalOutput : null,
+          p_render_as: terminalOutput ? pendingStep.renderAs ?? "auto" : null,
+          p_stop_reason: terminalOutput ? `Workflow completed at output node "${currentNode}".` : null });
         if (error) throw error;
+        if (terminalOutput) terminalCommitted = true;
         stateVersion = Number(data); stateDirty = false; pendingChangedKeys = []; consumedSignalIds = []; pendingStep = null;
       },
       onApiRequest: async (_nodeId, config, value, execution, state) => {
@@ -190,6 +216,7 @@ async function executeRun(run: any) {
       },
     });
     if (leaseLost) return;
+    if (terminalCommitted) return;
     if (result.aborted || abort.signal.aborted) throw new DOMException("Execution interrupted", "AbortError");
     if (result.error) throw new Error(result.error);
     if (result.waiting) {

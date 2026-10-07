@@ -16,7 +16,7 @@ export const handleWorkflowRequest = async (request: Request) => {
     const admin = adminClient();
     const principal = await authorize(request, body, admin);
     const action = body.action || "start";
-    if (request.method === "GET" && !["get", "steps", "notifications", "state", "artifact", "list", "webhooks", "keys"].includes(action)) throw new HttpError(405, "Use POST for this action.");
+    if (request.method === "GET" && !["get", "steps", "notifications", "state", "artifact", "list", "webhooks", "keys", "policy"].includes(action)) throw new HttpError(405, "Use POST for this action.");
     if (action === "start") {
       const source = principal.keyId ? "api" : body.source === "dashboard" ? "dashboard" : "api";
       return json({ ok: true, ...await createRun(admin, principal, body, source, request.headers.get("idempotency-key") || undefined) }, 202);
@@ -35,6 +35,44 @@ export const handleWorkflowRequest = async (request: Request) => {
       const { data, error } = await admin.rpc("workflow_health", { p_organization_id: principal.orgId });
       if (error) throw error;
       return json({ ok: true, health: data });
+    }
+    if (action === "policy") {
+      if (!principal.isAdmin) throw new HttpError(403, "Organization admin permission is required.");
+      const { data, error } = await admin.rpc("workflow_execution_policy", { p_organization_id: principal.orgId });
+      if (error) {
+        console.error("Workflow execution policy lookup failed", error);
+        if (["PGRST202", "42883", "42P01", "42703"].includes(String(error.code))) {
+          throw new HttpError(503, "Organization execution policy is unavailable. Apply the latest workflow database migrations.");
+        }
+        throw error;
+      }
+      return json({ ok: true, policy: data });
+    }
+    if (action === "update_policy") {
+      if (!principal.isAdmin) throw new HttpError(403, "Organization admin permission is required.");
+      const integer = (key: string, minimum: number, maximum: number) => {
+        const value = Number(body[key]);
+        if (!Number.isInteger(value) || value < minimum || value > maximum) throw new HttpError(400, `${key} must be between ${minimum.toLocaleString()} and ${maximum.toLocaleString()}.`);
+        return value;
+      };
+      const policy = {
+        max_running_runs: integer("maxRunningRuns", 1, 100_000),
+        max_queued_runs: integer("maxQueuedRuns", 1, 1_000_000),
+        max_outstanding_runs: integer("maxOutstandingRuns", 1, 2_000_000),
+        max_caller_outstanding_runs: integer("maxCallerOutstandingRuns", 1, 1_000_000),
+        max_starts_per_hour: integer("maxStartsPerHour", 1, 10_000_000),
+        completed_retention_days: integer("completedRetentionDays", 1, 3650),
+        failed_retention_days: integer("failedRetentionDays", 1, 3650),
+      };
+      if (policy.max_outstanding_runs < policy.max_running_runs + policy.max_queued_runs) throw new HttpError(400, "Outstanding runs must cover the configured running plus queued capacity.");
+      if (policy.max_caller_outstanding_runs > policy.max_outstanding_runs) throw new HttpError(400, "Per-caller outstanding runs cannot exceed organization outstanding runs.");
+      const { error } = await admin.from("workflow_execution_policies").upsert({ organization_id: principal.orgId, ...policy, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      return json({ ok: true, policy: {
+        maxRunningRuns: policy.max_running_runs, maxQueuedRuns: policy.max_queued_runs, maxOutstandingRuns: policy.max_outstanding_runs,
+        maxCallerOutstandingRuns: policy.max_caller_outstanding_runs, maxStartsPerHour: policy.max_starts_per_hour,
+        completedRetentionDays: policy.completed_retention_days, failedRetentionDays: policy.failed_retention_days,
+      } });
     }
     if (["get", "steps", "notifications", "state", "artifact", "cancel", "resume", "recover", "signal"].includes(action)) {
       const { data: run, error } = await admin.from("workflow_runs").select("*").eq("organization_id", principal.orgId).eq("id", body.runId).maybeSingle();

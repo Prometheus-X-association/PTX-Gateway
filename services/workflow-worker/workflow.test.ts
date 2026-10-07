@@ -1,4 +1,4 @@
-import { executeWorkflow, type ExecutorContext, type WorkflowCheckpoint } from "../../supabase/functions/_shared/workflowExecutor.ts";
+import { executeWorkflow, type ExecutorContext, type ParallelBranchResult, type WorkflowCheckpoint } from "../../supabase/functions/_shared/workflowExecutor.ts";
 import type { AgentWorkflow } from "../../supabase/functions/_shared/workflowTypes.ts";
 import { decrypt, encrypt, equal, hmac, mapWebhookInput, redact, sanitizeOutput, validateGraph } from "../../supabase/functions/_shared/workflowSecurity.ts";
 import { executeJavascript } from "./sandbox.ts";
@@ -15,6 +15,38 @@ Deno.test("same workflow runs concurrently with independent node outputs", async
   const graph: AgentWorkflow = { nodes: [node("start", "trigger", { inputSources: ["result"] }), node("transform", "plugin", { code: "return { id: input.result.id, doubled: input.result.value * 2 };" }), node("end", "output", { renderAs: "json" })], edges: [edge("start", "transform"), edge("transform", "end")] };
   const results = await Promise.all(Array.from({ length: 8 }, (_, id) => executeWorkflow(graph, context({ id, value: id }))));
   results.forEach((result, id) => { assert(!result.error); same(result.results.at(-1)?.output, { id, doubled: id * 2 }); });
+});
+Deno.test("structured parallel branches execute concurrently and join deterministically", async () => {
+  const graph: AgentWorkflow = {
+    nodes: [
+      node("start", "trigger", { inputSources: ["result"] }),
+      node("fork", "parallel", { maxConcurrency: 2, failurePolicy: "fail_fast" }),
+      node("left", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true, sideEffectClass: "read_only" }),
+      node("right", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true, sideEffectClass: "read_only" }),
+      node("join", "join", { parallelNodeId: "fork", mode: "all" }),
+      node("end", "output", { renderAs: "json" }),
+    ],
+    edges: [edge("start", "fork"), { ...edge("fork", "left"), id: "branch-left", label: "Left" }, { ...edge("fork", "right"), id: "branch-right", label: "Right" }, edge("left", "join"), edge("right", "join"), edge("join", "end")],
+  };
+  validateGraph({ graph });
+  let active = 0; let maximumActive = 0; const durable: Record<string, ParallelBranchResult> = {};
+  const result = await executeWorkflow(graph, { ...context({ request: 7 }), onParallelBranchDone: async (activationId, branch) => { durable[`${activationId}:${branch.id}`] = structuredClone(branch); }, onAgentStep: async (nodeId) => {
+    active++; maximumActive = Math.max(maximumActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 40)); active--;
+    return JSON.stringify({ branch: nodeId });
+  } });
+  assert(!result.error); assert(maximumActive === 2, `Expected two active branches, got ${maximumActive}`);
+  const output = result.results.at(-1)?.output as Record<string, unknown>;
+  same(output.outputs, [{ branch: "left" }, { branch: "right" }]);
+  same(output.join, { mode: "all", required: 2, succeeded: 2, total: 2 });
+  let replayedCalls = 0;
+  const recovered = await executeWorkflow(graph, { ...context({ request: 7 }), parallelBranchResults: durable, onAgentStep: async () => { replayedCalls++; return "unexpected"; } });
+  assert(!recovered.error && replayedCalls === 0, "Recovered parallel branches should use their durable results without replaying external calls");
+});
+Deno.test("parallel validation rejects unsafe external writes", () => {
+  const graph: AgentWorkflow = { nodes: [node("start", "trigger"), node("fork", "parallel", { maxConcurrency: 2, failurePolicy: "fail_fast" }), node("left", "api", { method: "POST", url: "https://example.com" }), node("right", "plugin", { code: "return input.prevOutput;" }), node("join", "join", { parallelNodeId: "fork", mode: "all" }), node("end", "output")], edges: [edge("start", "fork"), edge("fork", "left"), edge("fork", "right"), edge("left", "join"), edge("right", "join"), edge("join", "end")] };
+  let failed = false; try { validateGraph({ graph }); } catch (error) { failed = /read-only or idempotent/.test(String(error)); }
+  assert(failed, "Expected unsafe parallel API write to be rejected");
 });
 Deno.test("request inputs reach trigger, plugins and agents without a result page or document", async () => {
   const graph: AgentWorkflow = { nodes: [node("start", "trigger", { inputSources: ["input"] }), node("plugin", "plugin", { code: "return { current: input.input, legacy: input.result };" }),

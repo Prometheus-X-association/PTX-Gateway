@@ -97,7 +97,7 @@ export function validateGraph(workflow: any) {
   if (!Array.isArray(nodes) || !Array.isArray(edges) || !nodes.length || nodes.length > 200 || edges.length > 1000) throw new HttpError(400, "Invalid workflow graph size.");
   const validId = (value: unknown) => typeof value === "string" && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(value);
   const ids = new Set(nodes.map((node: any) => node.id));
-  const allowed = new Set(["trigger", "document_context", "retrieval", "user_input", "event", "agent", "api", "plugin", "condition", "router", "output"]);
+  const allowed = new Set(["trigger", "document_context", "retrieval", "user_input", "event", "agent", "api", "plugin", "condition", "router", "parallel", "join", "output"]);
   const stateFields = workflow.state?.fields ?? [];
   if (!Array.isArray(stateFields) || stateFields.length > 100) throw new HttpError(400, "Workflow state supports at most 100 fields.");
   const stateKeys = new Set<string>();
@@ -178,6 +178,8 @@ export function validateGraph(workflow: any) {
     }
     if (["plugin", "retrieval"].includes(node.type) && typeof data.code !== "string") throw new HttpError(400, `Node ${node.id} requires JavaScript code.`);
     if (node.type === "condition" && typeof data.expression !== "string") throw new HttpError(400, `Condition ${node.id} requires an expression.`);
+    if (node.type === "parallel" && (!Number.isInteger(data.maxConcurrency) || data.maxConcurrency < 1 || data.maxConcurrency > 32 || !["fail_fast", "all_settled"].includes(String(data.failurePolicy)))) throw new HttpError(400, `Parallel node ${node.id} has invalid concurrency or failure policy.`);
+    if (node.type === "join" && (typeof data.parallelNodeId !== "string" || !ids.has(data.parallelNodeId) || !["all", "all_settled", "any", "quorum"].includes(String(data.mode)) || (data.mode === "quorum" && (!Number.isInteger(data.quorum) || data.quorum < 1 || data.quorum > 32)))) throw new HttpError(400, `Join node ${node.id} has invalid parallel-group settings.`);
   }
   const sources = nodes.find((node: any) => node.type === "trigger").data.inputSources;
   if (sources !== undefined && (!Array.isArray(sources) || !sources.length || sources.some((source: unknown) => !["input", "result", "document", "user_upload"].includes(String(source))))) throw new HttpError(400, "Invalid workflow input sources.");
@@ -200,6 +202,36 @@ export function validateGraph(workflow: any) {
   const unreachable = nodes.filter((node: any) => !reachable.has(node.id));
   if (unreachable.length) throw new HttpError(400, `Workflow contains unreachable nodes: ${unreachable.slice(0, 5).map((node: any) => node.id).join(", ")}.`);
   if (!nodes.some((node: any) => node.type === "output" && reachable.has(node.id))) throw new HttpError(400, "Workflow has no reachable output node.");
+  // Parallel blocks are deliberately structured. Each direct branch is a
+  // linear, disjoint safe path ending at one explicit Join. This gives the
+  // worker real concurrency without making crash recovery replay an unknown
+  // non-idempotent action or merge shared state in completion order.
+  for (const parallel of nodes.filter((node: any) => node.type === "parallel")) {
+    const outgoing = edges.filter((edge: any) => edge.source === parallel.id);
+    const joins = nodes.filter((node: any) => node.type === "join" && node.data.parallelNodeId === parallel.id);
+    if (outgoing.length < 2 || joins.length !== 1) throw new HttpError(400, `Parallel node ${parallel.id} needs at least two branches and exactly one matching Join node.`);
+    const join = joins[0]; const branchNodes = new Set<string>();
+    for (const branch of outgoing) {
+      let current = branch.target; const seen = new Set<string>();
+      while (current !== join.id) {
+        if (seen.has(current)) throw new HttpError(400, `Parallel branch from ${parallel.id} contains a cycle.`);
+        seen.add(current);
+        if (branchNodes.has(current)) throw new HttpError(400, `Parallel branches from ${parallel.id} merge before Join ${join.id}.`);
+        branchNodes.add(current);
+        const node = nodes.find((item: any) => item.id === current);
+        if (!node || ["trigger", "document_context", "user_input", "event", "condition", "router", "parallel", "join", "output"].includes(node.type)) throw new HttpError(400, `Parallel branch ${parallel.id} contains unsupported node ${current}; use safe agent, API, retrieval, or JavaScript nodes before the Join.`);
+        const sideEffect = node.type === "api" ? (node.data.sideEffectClass ?? (node.data.method === "GET" ? "read_only" : "non_idempotent")) : node.type === "agent" ? (node.data.sideEffectClass ?? "non_idempotent") : "pure";
+        if (sideEffect === "non_idempotent") throw new HttpError(400, `Parallel branch node ${current} must be read-only or idempotent for durable crash recovery.`);
+        if ((node.stateWrites ?? []).length) throw new HttpError(400, `Parallel branch node ${current} cannot write shared state; merge branch outputs at Join ${join.id}.`);
+        const next = edges.filter((edge: any) => edge.source === current);
+        if (next.length !== 1) throw new HttpError(400, `Parallel branch node ${current} must have one connection leading toward Join ${join.id}.`);
+        current = next[0].target;
+      }
+    }
+    const incoming = edges.filter((edge: any) => edge.target === join.id);
+    if (incoming.length !== outgoing.length) throw new HttpError(400, `Join ${join.id} must receive exactly one connection from every branch of ${parallel.id}.`);
+    if (join.data.mode === "quorum" && join.data.quorum > outgoing.length) throw new HttpError(400, `Join ${join.id} quorum cannot exceed its branch count.`);
+  }
   const canReach = (source: string, target: string) => {
     const seen = new Set<string>([source]); const pending = [source];
     while (pending.length) { const current = pending.shift()!; for (const edge of edges.filter((item: any) => item.source === current)) { if (edge.target === target) return true; if (!seen.has(edge.target)) { seen.add(edge.target); pending.push(edge.target); } } }
@@ -219,7 +251,7 @@ export function validateGraph(workflow: any) {
   if (hosts !== undefined && (!Array.isArray(hosts) || hosts.length > 100 || hosts.some((host: unknown) => typeof host !== "string" || host.length > 253 || !/^(?:\*\.)?[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host)))) throw new HttpError(400, "Invalid outbound hostname allowlist.");
 }
 
-export const WORKFLOW_COMPILER_VERSION = 1;
+export const WORKFLOW_COMPILER_VERSION = 2;
 export function compileWorkflow(workflow: any) {
   const compiled = structuredClone(workflow);
   compiled.state = { fields: [], allowDynamicScratch: false, ...compiled.state };
@@ -228,6 +260,8 @@ export function compileWorkflow(workflow: any) {
     if (node.type === "agent") { data.timeoutSeconds ??= 120; data.sideEffectClass ??= "non_idempotent"; }
     if (node.type === "api") { data.timeoutSeconds ??= 20; data.sideEffectClass ??= data.method === "GET" ? "read_only" : "non_idempotent"; }
     if (node.type === "user_input") { data.responseTimeoutHours ??= 48; data.reminderIntervalHours ??= 12; data.maxReminders ??= 3; }
+    if (node.type === "parallel") { data.maxConcurrency ??= 4; data.failurePolicy ??= "fail_fast"; }
+    if (node.type === "join") { data.mode ??= "all"; }
     return { ...node, data };
   });
   compiled.graph.edges = compiled.graph.edges.map((edge: any) => ({ ...edge, ...(typeof edge.dataPath === "string" ? { dataPath: edge.dataPath.trim() || undefined } : {}) }));
