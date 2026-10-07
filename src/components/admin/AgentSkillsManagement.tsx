@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BookOpen, Copy, Download, Loader2, Pencil, Plus, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,8 @@ import type { AgentSkill, AgentSkillInputField, AgentSkillInputType, AgentSkillO
 import { createDocumentBasedSkillDescriptionTemplate, createEscoSkillDescriptionLookupTemplate, createSfiaSkillDescriptionAgentTemplate, createSkillsFrameworkDescriptionTemplate, createSkillsFrameworkMapperTemplate, ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID, SFIA_SKILL_DESCRIPTION_AGENT_SKILL_ID, serializeAgentSkillMarkdown } from "@/types/agentSkill";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { ConfirmRecycleButton, RecycleBinPanel } from "@/components/admin/RecycleBinControls";
+import { recycleExpiry } from "@/components/admin/recycleBin";
 
 const uid = () => crypto.randomUUID();
 
@@ -193,7 +195,10 @@ interface AgentSkillsManagementProps {
 }
 
 export const AgentSkillsManagement = ({ skills, onChange, organizationId }: AgentSkillsManagementProps) => {
-  const [editingId, setEditingId] = useState<string | null>(skills[0]?.id ?? null);
+  const activeSkills = skills.filter((item) => !item.deletedAt);
+  const recycledSkills = skills.filter((item) => Boolean(item.deletedAt));
+  const [editingId, setEditingId] = useState<string | null>(activeSkills[0]?.id ?? null);
+  const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [generationPrompt, setGenerationPrompt] = useState("");
   const [isGeneratingSkill, setIsGeneratingSkill] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
@@ -208,11 +213,26 @@ export const AgentSkillsManagement = ({ skills, onChange, organizationId }: Agen
     onChange([...skills, unique]);
     setEditingId(unique.id);
   };
-  const remove = (id: string) => {
-    const next = skills.filter((item) => item.id !== id);
-    onChange(next);
-    if (editingId === id) setEditingId(next[0]?.id ?? null);
+  const recycle = (id: string) => {
+    onChange(skills.map((item) => item.id === id ? { ...item, enabled: false, deletedAt: new Date().toISOString(), deletedPreviousEnabled: item.enabled } : item));
+    if (editingId === id) setEditingId(activeSkills.find((item) => item.id !== id)?.id ?? null);
   };
+  const restore = (id: string) => onChange(skills.map((item) => item.id === id ? { ...item, enabled: item.deletedPreviousEnabled === true, deletedAt: undefined, deletedPreviousEnabled: undefined } : item));
+  const permanentlyDelete = (id: string) => onChange(skills.filter((item) => item.id !== id));
+  const duplicate = (item: AgentSkill) => add({ ...structuredClone(item), id: uid(), name: `${item.name} (copy)`, enabled: false, version: 1, deletedAt: undefined, deletedPreviousEnabled: undefined });
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const cleanAndSchedule = () => {
+      const now = Date.now();
+      const retained = skills.filter((item) => !item.deletedAt || recycleExpiry(item) > now);
+      if (retained.length !== skills.length) { onChange(retained); return; }
+      const nextExpiry = Math.min(...skills.filter((item) => item.deletedAt).map(recycleExpiry));
+      if (Number.isFinite(nextExpiry)) timer = window.setTimeout(cleanAndSchedule, Math.max(1_000, Math.min(nextExpiry - now, 2_000_000_000)));
+    };
+    cleanAndSchedule();
+    return () => { if (timer !== undefined) window.clearTimeout(timer); };
+  }, [skills, onChange]);
 
   const generateSkill = async () => {
     if (!generationPrompt.trim() || isGeneratingSkill) return;
@@ -315,6 +335,7 @@ ${generationPrompt.trim()}`,
           <p className="mt-1 text-xs text-muted-foreground">Reusable operational playbooks attached to agents and workflow agent nodes.</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <RecycleBinPanel title="Skill recycle bin" itemLabel="agent skill" items={recycledSkills} open={showRecycleBin} onToggle={() => setShowRecycleBin((value) => !value)} onRestore={restore} onDelete={permanentlyDelete} />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs">
@@ -360,8 +381,8 @@ ${generationPrompt.trim()}`,
 
       <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="space-y-2 rounded-lg border bg-background p-2">
-          {skills.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No skills configured. Create a skill or add a template.</p>}
-          {skills.map((item) => (
+          {activeSkills.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No skills configured. Create a skill or add a template.</p>}
+          {activeSkills.map((item) => (
             <button key={item.id} type="button" onClick={() => setEditingId(item.id)}
               className={`w-full rounded-md border p-3 text-left transition-colors ${editingId === item.id ? "border-primary/50 bg-primary/5" : "border-transparent hover:bg-muted/60"}`}>
               <div className="flex items-start justify-between gap-2">
@@ -383,8 +404,8 @@ ${generationPrompt.trim()}`,
               </div>
               <div className="flex gap-1">
                 <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" title="Download as SKILL.md" onClick={() => downloadSkill(skill)}><Download className="h-3.5 w-3.5" />SKILL.md</Button>
-                <Button type="button" variant="ghost" size="icon" className="h-8 w-8" title="Duplicate skill" onClick={() => add({ ...skill, id: uid(), name: `${skill.name} (copy)`, version: 1 })}><Copy className="h-3.5 w-3.5" /></Button>
-                <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" title="Delete skill" onClick={() => remove(skill.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                <Button type="button" variant="ghost" size="icon" className="h-8 w-8" title="Duplicate skill" onClick={() => duplicate(skill)}><Copy className="h-3.5 w-3.5" /></Button>
+                <ConfirmRecycleButton name={skill.name || "Unnamed skill"} itemLabel="agent skill" onConfirm={() => recycle(skill.id)} />
               </div>
             </div>
 

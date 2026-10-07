@@ -33,6 +33,8 @@ export interface AgentSkill {
   references: AgentSkillReference[];
   enabled: boolean;
   version: number;
+  deletedAt?: string;
+  deletedPreviousEnabled?: boolean;
 }
 
 const markdownCell = (value: string): string => value.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");

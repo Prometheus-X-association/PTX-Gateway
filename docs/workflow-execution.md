@@ -4,7 +4,7 @@ Workflows can run through the dashboard, organization-scoped API keys, or multip
 
 ## Deployment
 
-1. Apply `supabase/migrations/20261005120000_workflow_execution.sql`, `supabase/migrations/20261005140000_independent_workflow_runs.sql`, and `supabase/migrations/20261005160000_workflow_interactions.sql` using the project's normal migration process.
+1. Apply the workflow migrations through `supabase/migrations/20261007200000_workflow_events.sql` using the project's normal migration process.
 2. Generate two independent random secrets, for example with `openssl rand -base64 32`. Configure `WORKFLOW_SECRETS_KEY` and `WORKFLOW_INTERNAL_SECRET` on both Supabase functions and every worker. The encryption key must decode to exactly 32 bytes. Keep these values out of frontend environment variables. Existing public result-page tokens also require the functions' configured `PDC_EXECUTE_TOKEN_SECRET` or `SUPABASE_INTERNAL_JWT_SECRET`.
 3. Deploy `workflow-runs`, `workflow-webhook`, `workflow-interaction`, and the updated `chat-with-result`, `workflow-api-request`, and `llm-insights` functions. The configuration disables gateway JWT verification for the workflow API, webhook, and interaction functions because they implement user-token/API-key, webhook-signature, and per-run interaction-token authentication themselves. Set `WORKFLOW_INTERACTION_BASE_URL` to the public origin hosting `/workflow/respond` on both the functions and workers. Deploy the frontend to serve this standalone page; no gateway chat/result page is required.
 4. Start the worker using the backend environment in [the example](../services/workflow-worker/.env.example). With Deno installed, export those environment values and run `npm run workflow:worker`. For Docker, build from the repository root:
@@ -25,6 +25,8 @@ Workflows can run through the dashboard, organization-scoped API keys, or multip
 Applying the migration and deploying the functions alone does not execute jobs: the worker must be running. Accepted jobs remain queued while it is unavailable. The implementation does not provision a production worker automatically.
 
 The JavaScript sandbox uses fresh Deno workers with `permissions: "none"`, a per-node deadline, and no access to the parent's environment, files, network or subprocesses. This uses Deno's [worker permission controls](https://docs.deno.com/api/web/workers/). The Docker memory/CPU limits bound the entire worker service; each service runs at most `WORKFLOW_WORKER_CONCURRENCY` jobs. Use the tested Deno version pinned in the Dockerfile.
+
+For restricted deployments, set `execution.allowedOutboundHosts` in saved workflow configuration to exact hostnames or subdomain rules such as `*.example.com`; the same allowlist covers API nodes and notification callbacks. URL validation rejects local/private destinations, embedded credentials, redirects, and forwarding headers. Because runtime DNS can change after validation, route worker/function traffic through a network egress proxy or firewall that independently blocks private and metadata ranges when protection against DNS rebinding is required.
 
 ## API
 
@@ -71,6 +73,9 @@ Additional actions:
 | `steps` | `runId`, optional `after` sequence | Up to 200 ordered node visits; paginate using the last sequence |
 | `list` | Optional `workflowId` | Latest 50 accessible runs |
 | `resume` | `runId`, `nodeId`, `answer`, optional `waitingVersion` | Atomically queues continuation of a waiting question |
+| `signal` | `runId`, `signalName`, optional JSON `payload` | Delivers an encrypted external event and atomically queues its waiting run |
+| `state` | `runId` | Admin-only masked state plus state/signal metadata timelines |
+| `artifact` | `runId`, `artifactId` | Admin-only content for a non-sensitive run artifact |
 | `cancel` | `runId` | Cancels queued/waiting runs or requests cancellation of active execution |
 
 Organization admins can inspect all organization runs. Users and API keys can inspect and control their own runs only. An API key is limited to the workflows selected at creation. Webhook runs are visible to organization admins; possessing another integration's key does not grant access to them.
@@ -113,13 +118,17 @@ Workers atomically claim separate runs. A workflow definition is never locked fo
 
 Each node visit receives its own sequence number, including loops and repeated questions. Traces include input/output summaries, start/end timestamps, duration, selected outgoing connections and errors. The dashboard displays the failed/current/last node and can focus it on the canvas. If the current graph has changed, a historical node ID may no longer exist on that canvas; the run trace retains its original name/type.
 
-Run statuses are `queued`, `running`, `waiting_for_input`, `succeeded`, `failed`, `cancelled`, `timed_out`, and `incomplete`. An unconnected branch ends as `incomplete`. Backend runs stop on node errors. New runs have no whole-run deadline. Individual JavaScript and HTTP operations retain their node timeouts; cancellation, lease recovery, and graph visit limits still apply. Legacy active runs may retain their previously accepted deadline, measured in active time. Concurrent resume requests accept one answer. Cancellation of an active request is cooperative and cannot undo an external action already performed.
+Run statuses are `queued`, `running`, `waiting_for_input`, `waiting_for_event`, `manual_review`, `succeeded`, `failed`, `cancelled`, `timed_out`, and `incomplete`. An unconnected branch ends as `incomplete`. Backend runs stop on node errors. New runs have no whole-run deadline. Individual JavaScript and HTTP operations retain their node timeouts; cancellation, lease recovery, and graph visit limits still apply. Legacy active runs may retain their previously accepted deadline, measured in active time. Concurrent resume or signal requests accept one matching continuation. Cancellation of an active request is cooperative and cannot undo an external action already performed.
 
 Run definitions and provider credentials are encrypted snapshots. Trace summaries redact configured secrets and sensitive field names, and are truncated for readability. Final outputs preserve their full arrays and strings while redacting secrets. Run inputs and checkpoints are private database records, accessible only to the backend service. No direct table access is granted to anonymous or authenticated clients.
 
 Workers heartbeat their leases. If a worker dies, a subsequent worker claim marks the interrupted run and active node failed with an explanatory stop reason. It does not replay the run automatically: a remote action might have completed before its response was lost. Review external effects before submitting a new run. Automatic node retries are not enabled. Question/reminder/completion notifications use the durable outbox and bounded retries described below.
 
-Set a database retention policy for completed run records appropriate to your organization. Deleting a run cascades to its steps. Preserve queued/running/waiting runs. Rotating `WORKFLOW_SECRETS_KEY` requires re-encrypting stored webhook secrets and run snapshots; keep the key stable until that migration is performed.
+Operators can override organization limits and retention windows in `workflow_execution_policies`. By default, terminal successful/cancelled/timed-out/incomplete runs are retained for 30 days and failed runs for 90 days; the worker performs hourly bounded cleanup sweeps. Queued, running, and waiting runs are never deleted. Rotating `WORKFLOW_SECRETS_KEY` requires re-encrypting stored webhook secrets and run snapshots; keep the key stable until that migration is performed.
+
+Monitor the admin health summary or the service-only `workflow_health()` RPC. Alert when there are no live workers, the oldest queued run exceeds the expected start delay, expired leases are present, manual-review runs accumulate, or notification backlog grows continuously. Worker logs are structured JSON containing event, worker/run/organization identifiers, and sanitized errors. Runs stopped during an uncertain non-idempotent action enter `manual_review`; an administrator can confirm completion with an assumed output, explicitly retry after checking the target system, or terminate the run.
+
+Encryption-key rotation is an operator migration: stop new admissions, keep workers on the old key, decrypt and re-encrypt every `workflow_webhooks.secret_ciphertext` and `workflow_runs.snapshot.ciphertext` into a new column/key version, verify samples, deploy all functions and workers with the new key, then resume admissions. Never replace `WORKFLOW_SECRETS_KEY` in place while old ciphertext remains.
 
 `update_result` returns replacement result data. An attached result-page chat applies it to the displayed table; API/webhook execution returns it as the final output without implicitly modifying another user's result page.
 
@@ -130,6 +139,19 @@ Set a database retention policy for completed run records appropriate to your or
 - `npm run test:workflow:worker` starts the real Deno worker against a temporary localhost PostgREST/agent contract server and verifies persisted concurrent execution, failed-node traces, signed agent calls and paused-run continuation. It requires Deno on PATH, or `DENO_BIN` pointing to a Deno executable.
 - Run `scripts/workflow-database-regression.sql` after the migration in a disposable database to verify independent claims, organization foreign keys, privilege restrictions and interrupted-worker traces.
 - `npm run build` validates the frontend bundle.
+
+## Execution-scoped state, artifacts, and events
+
+The builder's **Execution state schema** declares typed values shared by nodes in one run. Node read/write mappings make access explicit while avoiding graph edges whose only purpose is carrying shared data. Reducers (`replace`, `merge`, append variants, numeric reducers, and `first`) define deterministic updates. Parallel replacement writers are rejected; per-field reader/writer lists and separate agent/API exposure switches restrict sensitive data.
+
+State and JSON artifacts are encrypted at rest and isolated by organization and run. Artifact fields store small references in checkpoints and load content only for reads configured as **content**. Node commits atomically persist the step, checkpoint, encrypted state version, remaining signals, and metadata audit event. Terminal transitions erase the temporary state ciphertext, pending signal payloads, and artifact content; metadata-only timelines remain for operations review.
+
+The **Wait for Event** node supports two modes:
+
+- **State changed** is a deterministic in-run event. The compiler requires a reachable upstream writer for the selected state key, and the node emits the new value once for that recorded change.
+- **External signal** durably pauses with `waiting_for_event`. An organization admin or a workflow-scoped API key sends `{"action":"signal","runId":"…","signalName":"approval.received","payload":{…}}`. The name must match the waiting node. Payloads are limited to 256 KiB, encrypted before persistence, consumed once, and never included in the metadata audit log.
+
+The operations panel shows masked current state, state-version events, signal receipt/consumption metadata, and a control for sending a signal during administrative testing. Public interaction links can answer user questions but cannot deliver external signals or inspect run state.
 
 
 ## Standalone questions, response deadlines, and callbacks

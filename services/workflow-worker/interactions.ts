@@ -1,8 +1,8 @@
 import { decrypt, hmac, object } from "../../supabase/functions/_shared/workflowSecurity.ts";
 import { interactionUrl } from "../../supabase/functions/_shared/workflowInteraction.ts";
-import { assertPublicUrl } from "../../supabase/functions/_shared/workflowHttp.ts";
+import { assertAllowedOutboundUrl } from "../../supabase/functions/_shared/workflowHttp.ts";
 
-export async function deliverNotification(admin: any, job: any, send: typeof fetch = fetch, validateUrl = assertPublicUrl) {
+export async function deliverNotification(admin: any, job: any, send: typeof fetch = fetch, validateUrl = assertAllowedOutboundUrl) {
   const { data: run, error } = await admin.from("workflow_runs").select("*").eq("id", job.run_id).eq("organization_id", job.organization_id).maybeSingle();
   if (error) throw error;
   const patch = async (values: Record<string, unknown>) => {
@@ -27,7 +27,7 @@ export async function deliverNotification(admin: any, job: any, send: typeof fet
   try {
     const url = new URL(settings.url);
     if (url.protocol !== "https:") throw new Error("Notification URL must use HTTPS.");
-    await validateUrl(url);
+    await validateUrl(url, workflow.execution?.allowedOutboundHosts);
     const body = JSON.stringify({ eventId: job.id, type: `workflow.${job.event_type}`, runId: run.id, organizationId: run.organization_id,
       workflowId: run.workflow_id, workflowName: run.workflow_name, ...job.payload,
       ...(job.event_type !== "completed" ? { interactionUrl: await interactionUrl(run) } : {}) });
@@ -50,4 +50,14 @@ export async function maintainInteractions(admin: any) {
   const { data: jobs, error: claimError } = await admin.rpc("claim_workflow_notification", {});
   if (claimError) throw claimError;
   if (jobs?.[0]) await deliverNotification(admin, jobs[0]);
+}
+
+let lastRetentionSweep = 0;
+export async function maintainRetention(admin: any, now = Date.now()) {
+  if (now - lastRetentionSweep < 60 * 60 * 1000) return;
+  const { error } = await admin.rpc("cleanup_workflow_runs", { p_batch: 500 });
+  if (error) throw error;
+  const { error: heartbeatError } = await admin.rpc("cleanup_workflow_worker_heartbeats", {});
+  if (heartbeatError) throw heartbeatError;
+  lastRetentionSweep = now;
 }

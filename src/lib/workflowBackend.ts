@@ -1,6 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { BrowserExecutorContext } from "@/lib/workflowExecutor";
-import type { WorkflowConfig, WorkflowStepResult, WorkflowWaitingState } from "@/types/workflow";
+import type { WorkflowConfig, WorkflowEventWait, WorkflowStepResult, WorkflowWaitingState } from "@/types/workflow";
 import type { WorkflowResult } from "../../supabase/functions/_shared/workflowExecutor.ts";
 
 export interface BackendWorkflowRun {
@@ -10,10 +10,19 @@ export interface BackendWorkflowRun {
   output?: unknown; renderAs?: string; createdAt: string; startedAt?: string; finishedAt?: string;
   webhookId?: string; deliveryId?: string;
   waiting?: { nodeId: string; question: string; inputType: string; options?: string[] };
+  eventWait?: WorkflowEventWait;
 }
 export interface BackendWorkflowStep {
   id: string; sequence: number; node_id: string; node_name: string; node_type: string;
   status: string; duration_ms?: number; error?: string; input_summary?: unknown; output_summary?: unknown; selected_routes?: unknown;
+}
+export interface WorkflowBackendHealth { workers: Array<{ workerId: string; activeRuns: number; capacity: number; version: string; lastSeenAt: string }>; queueDepth: number; oldestQueuedAt?: string; runningRuns: number; waitingRuns: number; manualReviewRuns: number; expiredLeases: number; notificationBacklog: number }
+export interface WorkflowBackendState {
+  state: Record<string, unknown>;
+  stateVersion: number;
+  sensitiveKeys: string[];
+  events: Array<{ state_version: number; node_id: string; changed_keys: string[]; created_at: string }>;
+  signalEvents: Array<{ id: string; signal_name: string; received_at: string; consumed_at?: string; consumed_by_node_id?: string }>;
 }
 let memoryPublicSessionId: string | undefined;
 
@@ -50,7 +59,10 @@ export async function executeBackendWorkflow(config: WorkflowConfig, ctx: Browse
     runId = started.runId;
     storeRun(key, runId!);
   }
-  if (ctx.resume) await call("resume", { runId, nodeId: ctx.resume.waiting.nodeId, answer: ctx.resume.answer });
+  if (ctx.resume) {
+    if (!ctx.resume.waiting.waitingVersion) throw new Error("The workflow question version is missing. Refresh the run before answering.");
+    await call("resume", { runId, nodeId: ctx.resume.waiting.nodeId, waitingVersion: ctx.resume.waiting.waitingVersion, answer: ctx.resume.answer });
+  }
   const results: WorkflowStepResult[] = [];
   let after = 0;
   let cancellation: Promise<unknown> | undefined;
@@ -62,10 +74,10 @@ export async function executeBackendWorkflow(config: WorkflowConfig, ctx: Browse
         cancel();
         try { await cancellation; } catch {
           const { run } = await call("get", { runId });
-          if (["queued", "running", "waiting_for_input"].includes(run.status)) throw new Error("Cancellation could not be confirmed. The backend run may still be active.");
+          if (["queued", "running", "waiting_for_input", "waiting_for_event"].includes(run.status)) throw new Error("Cancellation could not be confirmed. The backend run may still be active.");
         }
         storeRun(key, null);
-        return { results, aborted: true, stopReason: "Cancellation requested." };
+        return { results, aborted: true, stopReason: "Cancellation requested.", state: {} };
       }
       const { run } = await call("get", { runId }) as { run: BackendWorkflowRun };
       let page: BackendWorkflowStep[];
@@ -80,12 +92,13 @@ export async function executeBackendWorkflow(config: WorkflowConfig, ctx: Browse
           if (!converted.error) await ctx.onStepDone(converted);
         }
       } while (page.length === 200 && page.at(-1)?.sequence === after);
-      if (run.status === "waiting_for_input" && run.waiting) return { results, aborted: false, stopReason: run.stopReason,
-        waiting: { ...run.waiting, runId, workflowId: config.id, answerKey: "answer", input: null, nodeOutputs: {} } as WorkflowWaitingState };
+      if (run.status === "waiting_for_input" && run.waiting) return { results, aborted: false, stopReason: run.stopReason, state: {},
+        waiting: { ...run.waiting, runId, workflowId: config.id, waitingVersion: run.waitingVersion, answerKey: "answer", input: null, nodeOutputs: {} } as WorkflowWaitingState };
+      if (run.status === "waiting_for_event" && run.eventWait) return { results, aborted: false, stopReason: run.stopReason, state: {}, eventWait: run.eventWait };
       if (!["queued", "running"].includes(run.status)) {
         storeRun(key, null);
         if (run.status === "succeeded") results.push({ nodeId: run.lastNodeId || "backend-output", nodeType: "output", output: run.output, renderAs: run.renderAs as WorkflowStepResult["renderAs"] });
-        return { results, aborted: run.status === "cancelled", error: run.status === "succeeded" || run.status === "cancelled" ? undefined : run.stopReason || `Workflow ${run.status}`, stopReason: run.stopReason };
+        return { results, aborted: run.status === "cancelled", error: run.status === "succeeded" || run.status === "cancelled" ? undefined : run.stopReason || `Workflow ${run.status}`, stopReason: run.stopReason, state: {} };
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1500));
     }

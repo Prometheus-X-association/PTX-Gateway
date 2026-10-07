@@ -26,7 +26,7 @@ const { handleWorkflowRequest } = load("supabase/functions/workflow-runs/index.t
 const { handleWorkflowWebhook } = load("supabase/functions/workflow-webhook/index.ts");
 const { interactionToken } = load("supabase/functions/_shared/workflowInteraction.ts");
 const { handleWorkflowInteraction } = load("supabase/functions/workflow-interaction/index.ts");
-const { hash, hmac, encrypt, decrypt } = load("supabase/functions/_shared/workflowSecurity.ts");
+const { hash, hmac, encrypt, decrypt, compileWorkflow, validateGraph, WORKFLOW_COMPILER_VERSION } = load("supabase/functions/_shared/workflowSecurity.ts");
 
 // A PostgREST contract double; database locking and RLS are tested separately in SQL.
 class Query {
@@ -67,8 +67,14 @@ function setup() {
     organization_members: [{ organization_id: "org-a", user_id: "admin-a", status: "active" }, { organization_id: "org-a", user_id: "user-a", status: "active" }, { organization_id: "org-a", user_id: "user-b", status: "active" }, { organization_id: "org-b", user_id: "admin-b", status: "active" }],
     user_roles: [{ organization_id: "org-a", user_id: "admin-a", role: "admin" }, { organization_id: "org-b", user_id: "admin-b", role: "admin" }],
   }, from(table) { return new Query(this, table); }, async rpc(name, args) {
-    assert.equal(name, "resume_workflow_run");
     const run = this.tables.workflow_runs.find((run) => run.id === args.p_run_id && run.organization_id === args.p_organization_id);
+    if (name === "signal_workflow_run") {
+      if (!run || run.status !== "waiting_for_event" || run.event_wait?.signalName !== args.p_signal_name) return { data: null, error: { code: "P0001", message: "Run is not waiting for this signal." } };
+      const id = randomUUID();
+      Object.assign(run, { status: "queued", event_wait: null, pending_signals: [{ id, name: args.p_signal_name, ciphertext: args.p_payload_ciphertext, receivedAt: new Date().toISOString() }] });
+      return { data: id, error: null };
+    }
+    assert.equal(name, "resume_workflow_run");
     if (!run || run.status !== 'waiting_for_input' || run.waiting.nodeId !== args.p_node_id || run.waiting_version !== args.p_waiting_version) return { data: false };
     if (run.waiting_expires_at && Date.parse(run.waiting_expires_at) <= Date.now()) { run.status = 'timed_out'; return { data: false }; }
     Object.assign(run, { status: 'queued', resume_answer: args.p_answer }); return { data: true };
@@ -84,6 +90,15 @@ async function hook(id, secret, payload, delivery = "event-1", timestamp = Strin
   const response = await handleWorkflowWebhook(new Request(`http://test.invalid/workflow-webhook/${id}`, { method: "POST", headers: { "x-workflow-timestamp": timestamp, "x-workflow-delivery-id": delivery, "x-workflow-signature": await hmac(secret, `${timestamp}.${delivery}.${raw}`) }, body: raw }));
   return { status: response.status, body: await response.json() };
 }
+
+test("workflow compilation normalizes execution defaults and rejects malformed graphs", () => {
+  const workflow = setup().tables.global_configs[0].features.llmInsights.workflows[0];
+  const compiled = compileWorkflow(workflow);
+  assert.equal(compiled.compilerVersion, WORKFLOW_COMPILER_VERSION);
+  assert.equal(compiled.graph.nodes[0].data.label, "trigger");
+  assert.throws(() => validateGraph({ ...workflow, graph: { ...workflow.graph, nodes: [...workflow.graph.nodes, { id: "orphan", type: "output", data: {} }] } }), /unreachable/);
+  assert.throws(() => validateGraph({ ...workflow, execution: { allowedOutboundHosts: ["https://not-a-host.example"] } }), /hostname/);
+});
 
 test("concurrent users start isolated runs of the same organization workflow", async () => {
   setup();
@@ -140,6 +155,19 @@ test("organization membership and caller ownership protect execution traces", as
   const visible = await api({ action: "get", runId: started.body.runId });
   assert.equal(visible.status, 200); assert.ok(!JSON.stringify(visible.body).includes("ciphertext")); assert.ok(!JSON.stringify(visible.body).includes("caller_id"));
 });
+
+test("external signals require privileged access and encrypt their payload", async () => {
+  setup();
+  const started = await api({ action: "start", workflowId: "shared", input: {} }, "user-a");
+  const run = database.tables.workflow_runs.find((item) => item.id === started.body.runId);
+  Object.assign(run, { status: "waiting_for_event", event_wait: { nodeId: "wait", eventType: "external_signal", signalName: "approval.received" }, pending_signals: [] });
+  assert.equal((await api({ action: "signal", runId: run.id, signalName: "approval.received", payload: { approved: true } }, "user-a")).status, 403);
+  const delivered = await api({ action: "signal", runId: run.id, signalName: "approval.received", payload: { approved: true } });
+  assert.equal(delivered.status, 202);
+  assert.equal(run.status, "queued");
+  assert.deepEqual(await decrypt(run.pending_signals[0].ciphertext), { approved: true });
+  assert.equal(JSON.stringify(run.pending_signals).includes('"approved":true'), false);
+});
 test("idempotent concurrent retries create one run and conflicting input returns 409", async () => {
   setup();
   const body = { action: "start", workflowId: "shared", input: { id: 1 } };
@@ -177,7 +205,9 @@ test("one waiting question accepts only one concurrent answer", async () => {
   setup();
   const started = await api({ action: "start", workflowId: "shared" }, "user-a");
   const run = database.tables.workflow_runs[0]; Object.assign(run, { status: "waiting_for_input", waiting_version: randomUUID(), waiting_expires_at: new Date(Date.now()+60000).toISOString(), waiting: { nodeId: "ask", question: "Continue?" } });
-  const responses = await Promise.all([api({ action: "resume", runId: started.body.runId, nodeId: "ask", answer: "yes" }, "user-a"), api({ action: "resume", runId: started.body.runId, nodeId: "ask", answer: "no" }, "user-a")]);
+  assert.equal((await api({ action: "resume", runId: started.body.runId, nodeId: "ask", answer: "yes" }, "user-a")).status, 400);
+  assert.equal((await api({ action: "resume", runId: started.body.runId, nodeId: "ask", waitingVersion: randomUUID(), answer: "yes" }, "user-a")).status, 409);
+  const responses = await Promise.all([api({ action: "resume", runId: started.body.runId, nodeId: "ask", waitingVersion: run.waiting_version, answer: "yes" }, "user-a"), api({ action: "resume", runId: started.body.runId, nodeId: "ask", waitingVersion: run.waiting_version, answer: "no" }, "user-a")]);
   assert.deepEqual(responses.map((result) => result.status).sort(), [202, 409]);
   assert.equal(run.status, "queued");
 });
@@ -235,7 +265,8 @@ test("expired questions reject answers even before the background scheduler runs
 });
 test("response policies and notification configuration are validated before accepting a run", async () => {
   setup(); const workflow=database.tables.global_configs[0].features.llmInsights.workflows[0];
-  workflow.graph.nodes.splice(1,0,{id:'ask',type:'user_input',data:{inputType:'text',responseTimeoutHours:0}});
+  workflow.graph.nodes.splice(1,0,{id:'ask',type:'user_input',data:{question:'Continue?',inputType:'text',responseTimeoutHours:0}});
+  workflow.graph.edges = [{ id: 'start-ask', source: 'start', target: 'ask' }, { id: 'ask-end', source: 'ask', target: 'end' }];
   assert.equal((await api({action:'start',workflowId:'shared'})).status,400);
   workflow.graph.nodes[1].data.responseTimeoutHours=48;
   workflow.execution.notifications={url:'https://receiver.example',secret:'short'};

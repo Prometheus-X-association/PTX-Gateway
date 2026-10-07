@@ -1,6 +1,6 @@
-import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge, WorkflowWaitingState } from "./workflowTypes.ts";
-import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData } from "./workflowTypes.ts";
-export interface SandboxRequest { operation: "plugin" | "condition" | "transform" | "retrieval"; code: string; input: unknown; nodeOutputs?: Record<string, unknown>; timeoutMs?: number }
+import type { AgentWorkflow, WorkflowNode, WorkflowStepResult, OutputNodeData, WorkflowEdge, WorkflowWaitingState, WorkflowStateDefinition, WorkflowArtifactReference, WorkflowEventWait, WorkflowSignal } from "./workflowTypes.ts";
+import type { AgentNodeData, ApiNodeData, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, EventNodeData, WorkflowRetryPolicy } from "./workflowTypes.ts";
+export interface SandboxRequest { operation: "plugin" | "condition" | "transform" | "retrieval"; code: string; input: unknown; state?: Record<string, unknown>; nodeOutputs?: Record<string, unknown>; timeoutMs?: number }
 type Sandbox = (request: SandboxRequest) => Promise<unknown>;
 
 export interface InlineAgentConfig {
@@ -12,18 +12,34 @@ export interface InlineAgentConfig {
   agentProviders?: AgentNodeData["agentProviders"];
 }
 
+export interface WorkflowAgentOverrides {
+  skillIds?: string[];
+  mcpServerIds?: string[];
+  mcpToolFilter?: Record<string, string[]>;
+  nodeOutputType?: "text" | "json" | "html" | "mixed";
+  nodeOutputInstructions?: string;
+}
+
 export interface WorkflowCheckpoint {
   pending: Array<{ nodeId: string; fromEdge?: WorkflowEdge }>;
   nodeOutputs: Record<string, unknown>;
   visits: Record<string, number>;
   selectedEdges?: WorkflowEdge[];
   documentContext: Pick<DocumentContextNodeData, "source" | "delivery" | "reuseScope"> | null;
+  changedStateKeys?: string[];
 }
 
 export interface ExecutorContext {
   runId?: string;
   triggerSource?: "dashboard" | "api" | "webhook";
   checkpoint?: WorkflowCheckpoint;
+  stateDefinition?: WorkflowStateDefinition;
+  runState?: Record<string, unknown>;
+  onStateChange?: (state: Record<string, unknown>, changedKeys: string[], nodeId: string) => void | Promise<void>;
+  signals?: WorkflowSignal[];
+  onSignalConsumed?: (signalId: string, nodeId: string) => void | Promise<void>;
+  onArtifactCreate?: (nodeId: string, stateKey: string, value: unknown) => Promise<WorkflowArtifactReference>;
+  onArtifactRead?: (reference: WorkflowArtifactReference) => Promise<unknown>;
   onCheckpoint?: (checkpoint: WorkflowCheckpoint) => Promise<void>;
   executeJavascript: Sandbox;
   documentContext?: Pick<DocumentContextNodeData, "source" | "delivery" | "reuseScope">;
@@ -39,13 +55,13 @@ export interface ExecutorContext {
   supabaseUrl: string;
   onAgentStep: (
     nodeId: string,
-    agentConfig: { resultContextMode?: "full" | "chunked"; resultChunkSize?: number; agentId?: string; inline?: InlineAgentConfig; contextMode?: "combined" | "document_only"; includeResultData: boolean; includeDocument: boolean; documentDelivery?: "automatic" | "text" | "native_file" },
+    agentConfig: { timeoutSeconds?: number; sideEffectClass?: NodeSideEffectClass; operationId?: string; resultContextMode?: "full" | "chunked"; resultChunkSize?: number; agentId?: string; inline?: InlineAgentConfig; overrides?: WorkflowAgentOverrides; contextMode?: "combined" | "document_only"; includeResultData: boolean; includeDocument: boolean; documentDelivery?: "automatic" | "text" | "native_file" },
     prompt: string,
     prevOutput: unknown,
   ) => Promise<string>;
-  onApiRequest: (nodeId: string, config: ApiNodeData, prevOutput: unknown) => Promise<unknown>;
+  onApiRequest: (nodeId: string, config: ApiNodeData, prevOutput: unknown, execution?: NodeExecutionMetadata, state?: Record<string, unknown>) => Promise<unknown>;
   onStepDone: (step: WorkflowStepResult) => void | Promise<void>;
-  onStepStart?: (nodeId: string, input: unknown) => void | Promise<void>;
+  onStepStart?: (nodeId: string, input: unknown, execution: NodeExecutionMetadata) => void | Promise<void>;
   stopAfterNodeId?: string;
   /** Test/debug runs can start at one node instead of the trigger. */
   startNodeId?: string;
@@ -64,12 +80,66 @@ export interface ExecutorContext {
   signal?: AbortSignal;
 }
 
+export type NodeSideEffectClass = "pure" | "read_only" | "idempotent" | "non_idempotent";
+export interface NodeExecutionMetadata { visit: number; attempt: number; sideEffectClass: NodeSideEffectClass; operationId: string }
+
+export function nodeSideEffectClass(node: WorkflowNode): NodeSideEffectClass {
+  if (node.type === "api") {
+    const data = node.data as ApiNodeData;
+    return data.sideEffectClass ?? (data.method === "GET" ? "read_only" : "non_idempotent");
+  }
+  if (node.type === "agent") return (node.data as AgentNodeData).sideEffectClass ?? "non_idempotent";
+  return "pure";
+}
+
+const retryDelay = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal?.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
+  const onAbort = () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", onAbort);
+    resolve();
+  }, ms);
+  signal?.addEventListener("abort", onAbort, { once: true });
+});
+
+const retryableError = (error: unknown, retryOn: NonNullable<WorkflowRetryPolicy["retryOn"]>) => {
+  const record = error && typeof error === "object" ? error as Record<string, unknown> : {};
+  const status = Number(record.status) || Number(String((error as Error)?.message || "").match(/HTTP\s+(\d{3})/i)?.[1]);
+  const name = String(record.name || "");
+  const message = String((error as Error)?.message || error || "");
+  if (retryOn.includes("429") && status === 429) return true;
+  if (retryOn.includes("5xx") && status >= 500 && status <= 599) return true;
+  if (retryOn.includes("timeout") && (name === "TimeoutError" || /timed?\s*out|deadline|exceeded .*seconds/i.test(message))) return true;
+  return retryOn.includes("network") && (error instanceof TypeError || /network|fetch failed|connection|stream ended/i.test(message));
+};
+
+async function withRetry<T>(operation: () => Promise<T>, policy: WorkflowRetryPolicy | undefined, sideEffectClass: NodeSideEffectClass, signal?: AbortSignal): Promise<{ value: T; attempts: number }> {
+  const safeToRetry = sideEffectClass === "read_only" || sideEffectClass === "idempotent";
+  const defaultAttempts = safeToRetry ? 3 : 1;
+  const maxAttempts = safeToRetry ? Math.max(1, Math.min(10, Math.floor(policy?.maxAttempts ?? defaultAttempts))) : 1;
+  const retryOn: NonNullable<WorkflowRetryPolicy["retryOn"]> = policy?.retryOn?.length
+    ? policy.retryOn
+    : ["timeout", "network", "429", "5xx"];
+  const initial = Math.max(0, Math.min(60_000, Math.floor(policy?.initialDelayMs ?? 1000)));
+  const maximum = Math.max(initial, Math.min(300_000, Math.floor(policy?.maxDelayMs ?? 30_000)));
+  for (let attempt = 1; ; attempt++) {
+    try { return { value: await operation(), attempts: attempt }; }
+    catch (error) {
+      if (attempt >= maxAttempts || !retryableError(error, retryOn)) throw Object.assign(error instanceof Error ? error : new Error(String(error)), { workflowAttemptCount: attempt });
+      const advised = Number(error && typeof error === "object" ? (error as Record<string, unknown>).retryAfterMs : 0);
+      const base = policy?.backoff === "fixed" ? initial : Math.min(maximum, initial * 2 ** (attempt - 1));
+      const jittered = Math.min(maximum, Math.max(base, advised || 0)) * (0.8 + Math.random() * 0.4);
+      await retryDelay(jittered, signal);
+    }
+  }
+}
+
 // ─── Sandboxed JS eval ────────────────────────────────────────────────────────
 
 async function runPlugin(
   executeSandboxedJavascript: Sandbox,
   code: string,
-  input: { result: unknown; input?: unknown; docText: string | null; prevOutput: unknown },
+  input: { result: unknown; input?: unknown; docText: string | null; prevOutput: unknown; state: Record<string, unknown> },
   nodeOutputs: Record<string, unknown>,
 ): Promise<unknown> {
   try {
@@ -91,6 +161,7 @@ async function runRetrieval(
     userMessage: string;
     query: string;
     maxItems: number;
+    state: Record<string, unknown>;
   },
 ): Promise<unknown> {
   try {
@@ -100,13 +171,13 @@ async function runRetrieval(
   }
 }
 
-async function evalCondition(executeSandboxedJavascript: Sandbox, expression: string, prevOutput: unknown): Promise<boolean> {
-  return Boolean(await executeSandboxedJavascript({ operation: "condition", code: expression, input: prevOutput }));
+async function evalCondition(executeSandboxedJavascript: Sandbox, expression: string, prevOutput: unknown, state: Record<string, unknown>): Promise<boolean> {
+  return Boolean(await executeSandboxedJavascript({ operation: "condition", code: expression, input: prevOutput, state }));
 }
 
-async function runTransform(executeSandboxedJavascript: Sandbox, code: string, prevOutput: unknown): Promise<unknown> {
+async function runTransform(executeSandboxedJavascript: Sandbox, code: string, prevOutput: unknown, state: Record<string, unknown>): Promise<unknown> {
   try {
-    return await executeSandboxedJavascript({ operation: "transform", code, input: prevOutput });
+    return await executeSandboxedJavascript({ operation: "transform", code, input: prevOutput, state });
   } catch (error) {
     throw new Error(`Output transform failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -116,6 +187,34 @@ async function runTransform(executeSandboxedJavascript: Sandbox, code: string, p
 
 const MAX_NODE_VISITS = 500; // safety cap for loop iterations
 const MAX_TOTAL_NODE_VISITS = 10_000;
+export const MAX_NODE_OUTPUT_BYTES = 5 * 1024 * 1024;
+export const MAX_CHECKPOINT_BYTES = 20 * 1024 * 1024;
+const MAX_DATA_DEPTH = 50;
+const MAX_DATA_ENTRIES = 100_000;
+
+/** Reject values that cannot be safely serialized, persisted, and restored. */
+export function validateSerializableData(value: unknown, label: string, maxBytes: number): void {
+  const ancestors = new WeakSet<object>();
+  let entries = 0;
+  const visit = (item: unknown, depth: number): void => {
+    if (depth > MAX_DATA_DEPTH) throw new Error(`${label} exceeds the maximum nesting depth (${MAX_DATA_DEPTH}).`);
+    if (typeof item === "bigint" || typeof item === "function" || typeof item === "symbol") throw new Error(`${label} contains a non-serializable value.`);
+    if (!item || typeof item !== "object") return;
+    if (ancestors.has(item)) throw new Error(`${label} contains a circular reference.`);
+    ancestors.add(item);
+    const values = Array.isArray(item) ? item : Object.values(item as Record<string, unknown>);
+    entries += values.length;
+    if (entries > MAX_DATA_ENTRIES) throw new Error(`${label} exceeds the maximum item count (${MAX_DATA_ENTRIES}).`);
+    for (const child of values) visit(child, depth + 1);
+    ancestors.delete(item);
+  };
+  visit(value, 0);
+  let serialized: string | undefined;
+  try { serialized = JSON.stringify(value); } catch { throw new Error(`${label} is not JSON-serializable.`); }
+  if (serialized === undefined) throw new Error(`${label} is not JSON-serializable.`);
+  const bytes = new TextEncoder().encode(serialized).byteLength;
+  if (bytes > maxBytes) throw new Error(`${label} exceeds the ${Math.floor(maxBytes / 1024 / 1024)} MB limit.`);
+}
 
 export interface WorkflowResult {
   results: WorkflowStepResult[];
@@ -124,6 +223,8 @@ export interface WorkflowResult {
   error?: string;
   stopReason?: string;
   waiting?: WorkflowWaitingState;
+  eventWait?: WorkflowEventWait;
+  state: Record<string, unknown>;
 }
 
 const selectDataPath = (value: unknown, path?: string): unknown => {
@@ -137,6 +238,61 @@ const selectDataPath = (value: unknown, path?: string): unknown => {
   }
   return current;
 };
+
+const assertSafePath = (path: string) => {
+  const parts = path.replace(/^\$\.?/, "").replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean);
+  if (!parts.length || parts.some((part) => ["__proto__", "prototype", "constructor"].includes(part))) throw new Error(`Unsafe workflow state path "${path}".`);
+  return parts;
+};
+const setDataPath = (target: Record<string, unknown>, path: string, value: unknown) => {
+  const parts = assertSafePath(path); let current = target;
+  for (const part of parts.slice(0, -1)) {
+    const existing = current[part];
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) current[part] = {};
+    current = current[part] as Record<string, unknown>;
+  }
+  current[parts.at(-1)!] = structuredClone(value);
+};
+const workflowStateTypeMatches = (type: string, value: unknown) => type === "any" || value === undefined
+  || (type === "string" && typeof value === "string") || (type === "number" && typeof value === "number" && Number.isFinite(value))
+  || (type === "boolean" && typeof value === "boolean") || (type === "array" && Array.isArray(value))
+  || ((type === "object" || type === "artifact") && Boolean(value) && typeof value === "object" && !Array.isArray(value));
+const reduceStateValue = (current: unknown, incoming: unknown, reducer: string, identityPath?: string): unknown => {
+  if (reducer === "first") return current === undefined ? incoming : current;
+  if (reducer === "merge") return { ...(current && typeof current === "object" && !Array.isArray(current) ? current as Record<string, unknown> : {}), ...(incoming && typeof incoming === "object" && !Array.isArray(incoming) ? incoming as Record<string, unknown> : {}) };
+  if (reducer === "append" || reducer === "append_unique") {
+    const combined = [...(Array.isArray(current) ? current : []), ...(Array.isArray(incoming) ? incoming : [incoming])];
+    if (reducer === "append") return combined;
+    const seen = new Set<string>();
+    return combined.filter((item) => { const identity = selectDataPath(item, identityPath); const key = JSON.stringify(identity); if (identity === undefined || seen.has(key)) return false; seen.add(key); return true; });
+  }
+  if (reducer === "sum") return Number(current ?? 0) + Number(incoming ?? 0);
+  if (reducer === "min") return current === undefined ? incoming : Math.min(Number(current), Number(incoming));
+  if (reducer === "max") return current === undefined ? incoming : Math.max(Number(current), Number(incoming));
+  return incoming;
+};
+const isArtifactReference = (value: unknown): value is WorkflowArtifactReference => Boolean(value && typeof value === "object" && (value as Record<string, unknown>).__workflowArtifact === true && typeof (value as Record<string, unknown>).id === "string");
+const stateProjection = async (state: Record<string, unknown>, node: WorkflowNode, definition: WorkflowStateDefinition | undefined, readArtifact: (reference: WorkflowArtifactReference) => Promise<unknown>) => {
+  const projected: Record<string, unknown> = {};
+  for (const read of node.stateReads ?? []) {
+    const field = definition?.fields.find((item) => item.key === read.key);
+    if (field?.allowedReaders?.length && !field.allowedReaders.includes(node.id)) throw new Error(`Node "${node.id}" is not allowed to read workflow state "${read.key}".`);
+    if (node.type === "agent" && field && (field.allowInAgentPrompt ?? !field.sensitive) !== true) throw new Error(`Agent node "${node.id}" cannot receive workflow state "${read.key}".`);
+    if (node.type === "api" && field && (field.allowInApiRequest ?? !field.sensitive) !== true) throw new Error(`API node "${node.id}" cannot receive workflow state "${read.key}".`);
+    let value = selectDataPath(state, read.key);
+    if (value === undefined) { if (read.required) throw new Error(`Required workflow state "${read.key}" is not available.`); continue; }
+    if (read.artifactMode === "content") {
+      if (!isArtifactReference(value)) throw new Error(`Workflow state "${read.key}" is not an artifact reference.`);
+      value = await readArtifact(value);
+    }
+    setDataPath(projected, read.alias || read.key, value);
+  }
+  return projected;
+};
+const interpolateState = (template: string, state: Record<string, unknown>) => template.replace(/\{\{\s*state\.([^}]+)\s*\}\}/g, (_match, path) => {
+  const value = selectDataPath(state, String(path).trim());
+  return value === undefined || value === null ? "" : typeof value === "string" ? value : JSON.stringify(value);
+});
 
 const parseStructuredAgentOutput = (value: string): unknown => {
   const fenced = value.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -189,6 +345,18 @@ export async function executeWorkflow(
   const includeDocument = inputSources.includes("document") || inputSources.includes("user_upload");
 
   const results: WorkflowStepResult[] = [];
+  const localArtifacts = new Map<string, unknown>();
+  const digest = async (value: string) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const createArtifact = ctx.onArtifactCreate ?? (async (_nodeId: string, _stateKey: string, value: unknown) => {
+    const serialized = JSON.stringify(value); const id = crypto.randomUUID(); localArtifacts.set(id, structuredClone(value));
+    return { __workflowArtifact: true as const, id, contentType: "application/json", size: new TextEncoder().encode(serialized).byteLength, sha256: await digest(serialized) };
+  });
+  const readArtifact = ctx.onArtifactRead ?? (async (reference: WorkflowArtifactReference) => {
+    if (!localArtifacts.has(reference.id)) throw new Error(`Workflow artifact "${reference.id}" is unavailable.`);
+    return structuredClone(localArtifacts.get(reference.id));
+  });
+  const runState: Record<string, unknown> = structuredClone(ctx.runState ?? {});
+  for (const field of ctx.stateDefinition?.fields ?? []) if (field.defaultValue !== undefined && selectDataPath(runState, field.key) === undefined) setDataPath(runState, field.key, field.defaultValue);
   const outputByNodeId = new Map<string, unknown>();
   if (ctx.initialNodeOutputs) {
     Object.entries(ctx.initialNodeOutputs).forEach(([nodeId, value]) => outputByNodeId.set(nodeId, value));
@@ -202,6 +370,9 @@ export async function executeWorkflow(
   let resolvedDocumentContext: Pick<DocumentContextNodeData, "source" | "delivery" | "reuseScope"> | null = ctx.checkpoint?.documentContext ?? ctx.documentContext ?? null;
   let stopReason: string | undefined;
   let waiting: WorkflowWaitingState | undefined;
+  let eventWait: WorkflowEventWait | undefined;
+  const changedStateKeys = new Set(ctx.checkpoint?.changedStateKeys ?? []);
+  const availableSignals = [...(ctx.signals ?? [])];
   let fatalStop = false;
   let resumeAnswerConsumed = false;
   // Track visits per node to detect infinite loops
@@ -222,6 +393,10 @@ export async function executeWorkflow(
 
     const node = nodes.find((n) => n.id === nodeId);
     if (!node) return;
+    const sideEffectClass = nodeSideEffectClass(node);
+    const operationId = `${ctx.runId ?? "local"}.${node.id}.${visits}`;
+    const execution: NodeExecutionMetadata = { visit: visits, attempt: visits, sideEffectClass, operationId };
+    const projectedState = await stateProjection(runState, node, ctx.stateDefinition, readArtifact);
 
     // When called via a specific edge (including back-edges), use that edge's source output.
     // When called as the first node (trigger), prevOutput is null.
@@ -234,11 +409,12 @@ export async function executeWorkflow(
       : ctx.resume?.waiting.nodeId === nodeId
         ? ctx.resume.waiting.input
         : null;
-    await ctx.onStepStart?.(node.id, prevOutput);
+    await ctx.onStepStart?.(node.id, prevOutput, execution);
     const startedAt = performance.now();
 
     let output: unknown = prevOutput;
     let error: string | undefined;
+    let attemptCount = 1;
 
     try {
       if (visits > MAX_NODE_VISITS) throw new Error(`Node "${nodeId}" exceeded max iterations (${MAX_NODE_VISITS})`);
@@ -292,9 +468,9 @@ export async function executeWorkflow(
             ? outputByNodeId.get(d.sourceNodeId)
             : ctx.resultData;
         const prevStr = prevOutput === null ? "" : typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput, null, 2);
-        const query = (d.query?.trim() || "{{userMessage}}")
+        const query = interpolateState((d.query?.trim() || "{{userMessage}}")
           .replace(/\{\{userMessage\}\}/g, ctx.userMessage)
-          .replace(/\{\{prevOutput\}\}/g, prevStr);
+          .replace(/\{\{prevOutput\}\}/g, prevStr), projectedState);
         output = await runRetrieval(ctx.executeJavascript, d, {
           source: d.source,
           sourceData,
@@ -304,6 +480,7 @@ export async function executeWorkflow(
           userMessage: ctx.userMessage,
           query,
           maxItems: d.maxItems || 25,
+          state: projectedState,
         });
 
       } else if (node.type === "user_input") {
@@ -312,14 +489,14 @@ export async function executeWorkflow(
         const canUseResumeAnswer = !resumeAnswerConsumed && ctx.resume?.waiting.nodeId === node.id;
         const resumeAnswer = canUseResumeAnswer ? ctx.resume!.answer.trim() : "";
         const prevStr = prevOutput === null ? "" : typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput, null, 2);
-        const question = (d.question || "Please provide the next input.")
+        const question = interpolateState((d.question || "Please provide the next input.")
           .replace(/\{\{prevOutput\}\}/g, prevStr)
           .replace(/\{\{prevOutput\.([^}]+)\}\}/g, (_m, key) => {
             const value = selectDataPath(prevOutput, String(key));
             if (Array.isArray(value)) return value.join(", ");
             if (value && typeof value === "object") return JSON.stringify(value);
             return value === undefined || value === null ? "" : String(value);
-          });
+          }), projectedState);
         const normalize = (value: string) => value.trim().toLocaleLowerCase();
         if (!resumeAnswer) {
           output = {
@@ -391,6 +568,32 @@ export async function executeWorkflow(
           };
         }
 
+      } else if (node.type === "event") {
+        const d = node.data as EventNodeData;
+        if (d.eventType === "state_changed") {
+          const key = String(d.stateKey || "");
+          if (!changedStateKeys.has(key)) throw new Error(`Workflow state event "${key}" has not occurred before node "${node.id}".`);
+          const field = ctx.stateDefinition?.fields.find((item) => item.key === key);
+          if (field?.allowedReaders?.length && !field.allowedReaders.includes(node.id)) throw new Error(`Node "${node.id}" is not allowed to observe workflow state "${key}".`);
+          // The event is metadata-only. Emitting the value here would bypass
+          // downstream state-read declarations and field reader permissions.
+          output = { eventType: "state_changed", key, previous: prevOutput };
+          changedStateKeys.delete(key);
+        } else {
+          const signalName = String(d.signalName || "");
+          const index = availableSignals.findIndex((signal) => signal.name === signalName);
+          if (index < 0) {
+            output = { waiting: true, eventType: "external_signal", signalName };
+            eventWait = { nodeId: node.id, eventType: "external_signal", signalName };
+            stopReason = `Waiting for external signal "${signalName}" at "${String(d.label || node.id)}".`;
+            fatalStop = true;
+          } else {
+            const [signal] = availableSignals.splice(index, 1);
+            await ctx.onSignalConsumed?.(signal.id, node.id);
+            output = { eventType: "external_signal", signalName, signalId: signal.id, receivedAt: signal.receivedAt, payload: signal.payload, previous: prevOutput };
+          }
+        }
+
       } else if (node.type === "agent") {
         const d = node.data as AgentNodeData;
         if (d.mode !== "inline" && !d.agentId?.trim()) {
@@ -403,7 +606,7 @@ export async function executeWorkflow(
         );
         const prevStr = prevOutput === null ? "" : typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput, null, 2);
         const rawPrompt = d.promptOverride?.trim() || ctx.userMessage;
-        const prompt = rawPrompt
+        const promptBase = interpolateState(rawPrompt
           .replace(/\{\{prevOutput\}\}/g, prevStr)
           // {{prevOutput.fieldName}} — inject a single field from the prevOutput object
           .replace(/\{\{prevOutput\.([^}]+)\}\}/g, (_m, key) => {
@@ -412,12 +615,20 @@ export async function executeWorkflow(
               return val !== undefined ? String(val) : "";
             }
             return "";
-          });
+          }), projectedState);
+        const prompt = Object.keys(projectedState).length ? `${promptBase}\n\nWorkflow execution state:\n${JSON.stringify(projectedState, null, 2)}` : promptBase;
         // A node can opt into the file the end user attaches in chat even when
         // the trigger itself is configured around result data only. Existing
         // workflows keep inheriting the trigger setting.
         const agentIncludesDocument = d.useUploadedDocument ?? includeDocument;
         const documentDelivery = resolvedDocumentContext?.delivery ?? "automatic";
+        const overrides = {
+          skillIds: d.skillIds ?? [],
+          mcpServerIds: d.mcpServerIds ?? [],
+          mcpToolFilter: d.mcpToolFilter ?? {},
+          nodeOutputType: d.nodeOutputType,
+          nodeOutputInstructions: d.nodeOutputInstructions ?? (d.nodeOutputType && d.outputSchema ? `Match this expected output schema exactly: ${d.outputSchema}` : undefined),
+        };
         const agentConfig =
           d.mode === "inline"
             ? { inline: {
@@ -427,15 +638,26 @@ export async function executeWorkflow(
                 skillIds: d.skillIds ?? [],
                 providerIds: d.providerIds ?? [],
                 agentProviders: d.agentProviders ?? [],
-              }, resultContextMode: d.resultContextMode, resultChunkSize: d.resultChunkSize, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery }
-            : { agentId: d.agentId, resultContextMode: d.resultContextMode, resultChunkSize: d.resultChunkSize, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery };
-        const agentOutput = await ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null);
+              }, overrides, timeoutSeconds: d.timeoutSeconds, sideEffectClass, operationId, resultContextMode: d.resultContextMode, resultChunkSize: d.resultChunkSize, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery }
+            : { agentId: d.agentId, overrides, timeoutSeconds: d.timeoutSeconds, sideEffectClass, operationId, resultContextMode: d.resultContextMode, resultChunkSize: d.resultChunkSize, contextMode, includeResultData: includeResultData && contextMode !== "document_only", includeDocument: agentIncludesDocument, documentDelivery };
+        const attempted = await withRetry(() => ctx.onAgentStep(node.id, agentConfig, prompt, d.passPrevOutput ? prevOutput : null), d.retryPolicy, sideEffectClass, ctx.signal);
+        attemptCount = attempted.attempts;
+        const agentOutput = attempted.value;
         // Preserve structured responses as actual objects/arrays so downstream
         // nodes and edge data paths can address fields deterministically.
-        output = parseStructuredAgentOutput(agentOutput);
+        const parsedAgentOutput = parseStructuredAgentOutput(agentOutput);
+        if (d.nodeOutputType === "json" && typeof parsedAgentOutput === "string") {
+          throw new Error(`Agent node "${d.label || node.id}" did not satisfy its required JSON output contract.`);
+        }
+        output = d.nodeOutputType === "text" || d.nodeOutputType === "html"
+          ? agentOutput
+          : parsedAgentOutput;
 
       } else if (node.type === "api") {
-        output = await ctx.onApiRequest(node.id, node.data as ApiNodeData, prevOutput);
+        const d = node.data as ApiNodeData;
+        const attempted = await withRetry(() => ctx.onApiRequest(node.id, d, prevOutput, execution, projectedState), d.retryPolicy, sideEffectClass, ctx.signal);
+        attemptCount = attempted.attempts;
+        output = attempted.value;
 
       } else if (node.type === "plugin") {
         const d = node.data as PluginNodeData;
@@ -444,6 +666,7 @@ export async function executeWorkflow(
           ...(includeRequestData ? { input: ctx.resultData } : {}),
           docText: includeDocument ? ctx.docText : null,
           prevOutput,
+          state: projectedState,
         }, Object.fromEntries(outputByNodeId));
 
       } else if (node.type === "condition") {
@@ -463,7 +686,7 @@ export async function executeWorkflow(
         } else {
           output = prevOutput;
         }
-        let result = await evalCondition(ctx.executeJavascript, d.expression, output);
+        let result = await evalCondition(ctx.executeJavascript, d.expression, output, projectedState);
         // Belt-and-suspenders: enforce loop limit via index even if items weren't re-sliced.
         // maxLoopIndex = number of iterations allowed - 1 (relative to slice start).
         if (result && d.loopEnd !== undefined && output && typeof output === "object") {
@@ -476,7 +699,7 @@ export async function executeWorkflow(
       } else if (node.type === "router") {
         const d = node.data as RouterNodeData;
         output = prevOutput;
-        const selectedInput = selectDataPath(prevOutput, d.inputPath);
+        const selectedInput = d.inputPath?.startsWith("state.") ? selectDataPath(projectedState, d.inputPath.slice(6)) : selectDataPath(prevOutput, d.inputPath);
         const matchingRuleIds: string[] = [];
         for (const rule of d.rules ?? []) {
           if (routerRuleMatches(selectedInput, rule, Boolean(d.caseSensitive))) {
@@ -489,14 +712,32 @@ export async function executeWorkflow(
       } else if (node.type === "output") {
         const d = node.data as OutputNodeData;
         if (d.renderAs === "update_result" && d.transformCode?.trim()) {
-          output = await runTransform(ctx.executeJavascript, d.transformCode, prevOutput);
+          output = await runTransform(ctx.executeJavascript, d.transformCode, prevOutput, projectedState);
         } else {
           output = prevOutput;
         }
       }
+      validateSerializableData(output, `Node "${String(node.data.label || node.id)}" output`, MAX_NODE_OUTPUT_BYTES);
+      if (!(waiting?.nodeId === node.id)) {
+        const changedKeys: string[] = [];
+        for (const write of node.stateWrites ?? []) {
+          const value = selectDataPath(output, write.sourcePath);
+          if (write.sourcePath?.trim() && value === undefined) throw new Error(`State output path "${write.sourcePath}" was not found on node "${node.id}".`);
+          const field = ctx.stateDefinition?.fields.find((item) => item.key === write.key);
+          if (field?.allowedWriters?.length && !field.allowedWriters.includes(node.id)) throw new Error(`Node "${node.id}" is not allowed to write workflow state "${write.key}".`);
+          const reducer = write.reducer ?? field?.reducer ?? "replace";
+          const storedValue = field?.type === "artifact" ? await createArtifact(node.id, write.key, value) : value;
+          const reduced = reduceStateValue(selectDataPath(runState, write.key), storedValue, reducer, field?.identityPath);
+          if (field && !workflowStateTypeMatches(field.type, reduced)) throw new Error(`State value written by node "${node.id}" does not match ${write.key} (${field.type}).`);
+          validateSerializableData(reduced, `Workflow state "${write.key}"`, field?.maxBytes ?? 512 * 1024);
+          setDataPath(runState, write.key, reduced); changedKeys.push(write.key); changedStateKeys.add(write.key);
+        }
+        if (changedKeys.length) { validateSerializableData(runState, "Workflow execution state", MAX_CHECKPOINT_BYTES); await ctx.onStateChange?.(structuredClone(runState), changedKeys, node.id); }
+      }
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") throw e;
       if (e instanceof Error && e.name === "AbortError") throw e;
+      attemptCount = Number(e && typeof e === "object" ? (e as Record<string, unknown>).workflowAttemptCount : 0) || attemptCount;
       error = e instanceof Error ? e.message : String(e);
       output = null;
     }
@@ -505,12 +746,13 @@ export async function executeWorkflow(
     const stepResult: WorkflowStepResult = {
       nodeId: node.id, nodeType: node.type, input: prevOutput, output, error,
       durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      attemptCount,
       ...(node.type === "output" ? { renderAs: (node.data as OutputNodeData).renderAs } : {}),
     };
     results.push(stepResult);
     await ctx.onStepDone(stepResult);
 
-    if (fatalStop && waiting) {
+    if (fatalStop && (waiting || eventWait)) {
       return;
     }
     if (error && ctx.stopOnError) {
@@ -571,8 +813,10 @@ export async function executeWorkflow(
       nextEdges = [];
       await processNode(current.nodeId, current.fromEdge);
       pending.unshift(...nextEdges.map((edge) => ({ nodeId: edge.target, fromEdge: edge })));
-      if (waiting) pending.unshift(current);
-      await ctx.onCheckpoint?.({ pending, selectedEdges: nextEdges, nodeOutputs: Object.fromEntries(outputByNodeId), visits: Object.fromEntries(nodeVisitCount), documentContext: resolvedDocumentContext });
+      if (waiting || eventWait) pending.unshift(current);
+      const checkpoint = { pending, selectedEdges: nextEdges, nodeOutputs: Object.fromEntries(outputByNodeId), visits: Object.fromEntries(nodeVisitCount), documentContext: resolvedDocumentContext, changedStateKeys: [...changedStateKeys] };
+      validateSerializableData(checkpoint, "Workflow checkpoint", MAX_CHECKPOINT_BYTES);
+      await ctx.onCheckpoint?.(checkpoint);
     }
     const failed = results.find((step) => step.error);
     if (failed && ctx.stopOnError) error = failed.error;
@@ -588,7 +832,7 @@ export async function executeWorkflow(
   if (aborted) stopReason = "Test run was stopped by the user.";
   if (error && !fatalStop) stopReason = `Execution failed: ${error}`;
   if (!stopReason && results.some((result) => result.nodeType === "output")) stopReason = "Workflow completed at an output node.";
-  return { results, aborted, error, stopReason, waiting };
+  return { results, aborted, error, stopReason, waiting, eventWait, state: runState };
 }
 
 export function getWorkflowFinalOutput(results: WorkflowStepResult[]): {

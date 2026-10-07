@@ -8,7 +8,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import {
-  Play, Plus, Trash2, X, Code2, GitBranch, Route,
+  Play, Plus, Trash2, X, Code2, GitBranch, Route, Radio,
   Bot, Square, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, BookOpen, RotateCcw, GripVertical, Workflow, Settings2, Link2, Maximize2, Minimize2,
   FlaskConical, Loader2, CircleStop, CheckCircle2, XCircle,
   Globe2, Send, KeyRound, FileText,
@@ -25,7 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import type {
   AgentWorkflow, WorkflowNode, WorkflowEdge,
-  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, OutputNodeData, WorkflowStepResult, WorkflowWaitingState,
+  TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, EventNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, OutputNodeData, WorkflowStepResult, WorkflowWaitingState, WorkflowRetryPolicy, WorkflowStateDefinition, WorkflowStateRead, WorkflowStateWrite, WorkflowStateReducer,
 } from "@/types/workflow";
 import { executeWorkflow } from "@/lib/workflowExecutor";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
@@ -53,6 +53,19 @@ export interface ProviderStub {
   enabled?: boolean;
 }
 
+export interface McpServerStub {
+  id: string;
+  name: string;
+  url: string;
+  apiKey: string;
+  enabled?: boolean;
+}
+
+interface McpToolStub {
+  name: string;
+  description?: string;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -69,6 +82,16 @@ const emptyInlineProvider = (): NonNullable<AgentNodeData["agentProviders"]>[num
   enabled: true,
 });
 
+const discoverMcpTools = async (server: McpServerStub, organizationId?: string): Promise<{ tools: McpToolStub[]; error?: string }> => {
+  const { data, error } = await supabase.functions.invoke("mcp-test", {
+    body: { url: server.url.trim(), apiKey: server.apiKey.trim() || undefined },
+    headers: organizationId ? { "x-organization-id": organizationId } : undefined,
+  });
+  if (error) return { tools: [], error: error.message || String(error) };
+  const result = data as { ok?: boolean; tools?: McpToolStub[]; error?: string } | null;
+  return { tools: result?.tools ?? [], error: result?.error ?? (result?.ok ? undefined : "Failed to load tools") };
+};
+
 const moveItem = <T,>(arr: T[], from: number, to: number): T[] => {
   if (to < 0 || to >= arr.length) return arr;
   const next = [...arr];
@@ -82,6 +105,7 @@ const NODE_ICONS: Record<string, React.FC<{ className?: string }>> = {
   document_context: ({ className }) => <FileText className={className} />,
   retrieval: ({ className }) => <Search className={className} />,
   user_input: ({ className }) => <Send className={className} />,
+  event:      ({ className }) => <Radio className={className} />,
   agent:     ({ className }) => <Bot className={className} />,
   api:       ({ className }) => <Globe2 className={className} />,
   plugin:    ({ className }) => <Code2 className={className} />,
@@ -95,6 +119,7 @@ const NODE_LIBRARY = [
   { type: "document_context", icon: FileText, label: "Document Context", description: "Resolves one reusable document", color: "text-indigo-600", iconBg: "bg-indigo-500/10" },
   { type: "retrieval", icon: Search, label: "Data Retrieval", description: "Query resultData outside the prompt", color: "text-lime-700", iconBg: "bg-lime-500/10" },
   { type: "user_input", icon: Send, label: "Ask User", description: "Pause and wait for a chat reply", color: "text-fuchsia-600", iconBg: "bg-fuchsia-500/10" },
+  { type: "event", icon: Radio, label: "Wait for Event", description: "Observe state or await a signal", color: "text-blue-600", iconBg: "bg-blue-500/10" },
   { type: "agent", icon: Bot, label: "AI Agent", description: "Runs an agent or skill", color: "text-sky-600", iconBg: "bg-sky-500/10" },
   { type: "api", icon: Globe2, label: "API Request", description: "Calls an HTTP API", color: "text-cyan-600", iconBg: "bg-cyan-500/10" },
   { type: "plugin", icon: Code2, label: "JavaScript", description: "Transforms data safely", color: "text-amber-600", iconBg: "bg-amber-500/10" },
@@ -108,6 +133,7 @@ const NODE_ACCENTS: Record<string, string> = {
   document_context: "border-l-indigo-500",
   retrieval: "border-l-lime-500",
   user_input: "border-l-fuchsia-500",
+  event: "border-l-blue-500",
   agent: "border-l-sky-500",
   api: "border-l-cyan-500",
   plugin: "border-l-amber-500",
@@ -377,6 +403,7 @@ const FlowNode = ({ data, type, selected }: FlowNodeProps) => {
           )}
         </div>
       )}
+      {type === "event" && <p className="text-[10px] text-muted-foreground truncate">{(data as EventNodeData).eventType === "external_signal" ? `Signal: ${(data as EventNodeData).signalName || "not configured"}` : `State changed: ${(data as EventNodeData).stateKey || "not configured"}`}</p>}
       {isOutput && <p className="text-[10px] text-muted-foreground">Final workflow response</p>}
       </div>
 
@@ -411,6 +438,7 @@ const nodeTypes = {
   document_context: (p: FlowNodeProps) => <FlowNode {...p} type="document_context" />,
   retrieval: (p: FlowNodeProps) => <FlowNode {...p} type="retrieval" />,
   user_input: (p: FlowNodeProps) => <FlowNode {...p} type="user_input" />,
+  event:      (p: FlowNodeProps) => <FlowNode {...p} type="event" />,
   agent:     (p: FlowNodeProps) => <FlowNode {...p} type="agent" />,
   api:       (p: FlowNodeProps) => <FlowNode {...p} type="api" />,
   plugin:    (p: FlowNodeProps) => <FlowNode {...p} type="plugin" />,
@@ -613,6 +641,16 @@ const UserInputPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (d: 
   );
 };
 
+const EventPanel = ({ node, state, onChange }: { node: WorkflowNode; state?: WorkflowStateDefinition; onChange: (d: EventNodeData) => void }) => {
+  const d = node.data as EventNodeData;
+  return <div className="space-y-3">
+    <div className="space-y-1"><Label className="text-xs">Label</Label><Input className="h-7 text-xs" value={d.label} onChange={(event) => onChange({ ...d, label: event.target.value })} /></div>
+    <div className="space-y-1"><Label className="text-xs">Event type</Label><Select value={d.eventType} onValueChange={(eventType: EventNodeData["eventType"]) => onChange({ ...d, eventType, stateKey: eventType === "state_changed" ? d.stateKey : undefined, signalName: eventType === "external_signal" ? d.signalName || "continue" : undefined })}><SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="external_signal">External signal — pause durably</SelectItem><SelectItem value="state_changed">State changed — upstream event</SelectItem></SelectContent></Select></div>
+    {d.eventType === "external_signal" ? <div className="space-y-1"><Label className="text-xs">Signal name</Label><Input className="h-7 font-mono text-xs" value={d.signalName ?? ""} placeholder="approval.received" onChange={(event) => onChange({ ...d, signalName: event.target.value })} /><p className="text-[10px] text-muted-foreground">The backend run pauses here. An authorized admin or workflow API key can deliver one encrypted JSON payload.</p></div> : <div className="space-y-1"><Label className="text-xs">State key</Label><Select value={d.stateKey ?? ""} onValueChange={(stateKey) => onChange({ ...d, stateKey })}><SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Select state field" /></SelectTrigger><SelectContent>{(state?.fields ?? []).map((field) => <SelectItem key={field.key} value={field.key}>{field.key}</SelectItem>)}</SelectContent></Select><p className="text-[10px] text-muted-foreground">This deterministic gate requires an upstream node to write the selected key during this run.</p></div>}
+    <SchemaRow inputSchema={d.inputSchema} outputSchema={d.outputSchema} onInputChange={(inputSchema) => onChange({ ...d, inputSchema: inputSchema || undefined })} onOutputChange={(outputSchema) => onChange({ ...d, outputSchema: outputSchema || undefined })} />
+  </div>;
+};
+
 const OUTPUT_TYPE_OPTIONS = [
   { value: "auto", label: "Auto / Skill-controlled" },
   { value: "text", label: "Text" },
@@ -620,6 +658,41 @@ const OUTPUT_TYPE_OPTIONS = [
   { value: "html", label: "HTML" },
   { value: "mixed", label: "Mixed" },
 ] as const;
+
+const RetryPolicyPanel = ({ value, disabled, onChange }: { value?: WorkflowRetryPolicy; disabled: boolean; onChange: (value: WorkflowRetryPolicy | undefined) => void }) => {
+  const policy = value ?? {};
+  return <div className="space-y-2 rounded-md border p-2">
+    <div className="flex items-center justify-between"><div><Label className="text-xs">Transient retries</Label><p className="text-[10px] text-muted-foreground">Available only for read-only or idempotent nodes.</p></div><Switch checked={Boolean(value)} disabled={disabled} onCheckedChange={(checked) => onChange(checked ? { maxAttempts: 3, initialDelayMs: 1000, maxDelayMs: 30000, backoff: "exponential" } : undefined)} /></div>
+    {value && <div className="grid grid-cols-2 gap-2">
+      <label className="space-y-1 text-[10px]">Maximum attempts<Input type="number" min={1} max={10} className="h-7 text-xs" value={policy.maxAttempts ?? 3} onChange={(event) => onChange({ ...policy, maxAttempts: Math.max(1, Math.min(10, Number(event.target.value) || 1)) })} /></label>
+      <label className="space-y-1 text-[10px]">Backoff<Select value={policy.backoff ?? "exponential"} onValueChange={(backoff) => onChange({ ...policy, backoff: backoff as WorkflowRetryPolicy["backoff"] })}><SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="exponential">Exponential</SelectItem><SelectItem value="fixed">Fixed</SelectItem></SelectContent></Select></label>
+      <label className="space-y-1 text-[10px]">Initial delay (ms)<Input type="number" min={0} max={60000} className="h-7 text-xs" value={policy.initialDelayMs ?? 1000} onChange={(event) => onChange({ ...policy, initialDelayMs: Math.max(0, Math.min(60000, Number(event.target.value) || 0)) })} /></label>
+      <label className="space-y-1 text-[10px]">Maximum delay (ms)<Input type="number" min={0} max={300000} className="h-7 text-xs" value={policy.maxDelayMs ?? 30000} onChange={(event) => onChange({ ...policy, maxDelayMs: Math.max(0, Math.min(300000, Number(event.target.value) || 0)) })} /></label>
+    </div>}
+  </div>;
+};
+
+const NodeStateMappingPanel = ({ node, state, onChange }: { node: Node; state?: WorkflowStateDefinition; onChange: (patch: { stateReads?: WorkflowStateRead[]; stateWrites?: WorkflowStateWrite[] }) => void }) => {
+  const reads = (node as WorkflowNode).stateReads ?? [];
+  const writes = (node as WorkflowNode).stateWrites ?? [];
+  const keys = state?.fields.map((field) => field.key) ?? [];
+  const keyInput = (value: string, change: (value: string) => void) => <><Input list={`state-keys-${node.id}`} className="h-7 font-mono text-[10px]" value={value} placeholder="customer.profile" onChange={(event) => change(event.target.value)} /><datalist id={`state-keys-${node.id}`}>{keys.map((key) => <option key={key} value={key} />)}</datalist></>;
+  return <details className="mt-4 rounded-lg border p-2 text-xs">
+    <summary className="cursor-pointer font-medium">Execution state mappings</summary>
+    <p className="my-2 text-[10px] text-muted-foreground">Reads are projected into this node. Writes are committed only after successful completion.</p>
+    <Label className="text-[10px]">Reads</Label>
+    <div className="space-y-1">{reads.map((read, index) => <div key={index} className="grid grid-cols-[1fr_90px_auto] gap-1">
+      {keyInput(read.key, (key) => onChange({ stateReads: reads.map((item, current) => current === index ? { ...item, key } : item) }))}
+      <Input className="h-7 text-[10px]" value={read.alias ?? ""} placeholder="alias" onChange={(event) => onChange({ stateReads: reads.map((item, current) => current === index ? { ...item, alias: event.target.value || undefined } : item) })} />
+      <Button type="button" size="sm" variant="ghost" onClick={() => onChange({ stateReads: reads.filter((_, current) => current !== index) })}>×</Button>
+      {state?.fields.find((field) => field.key === read.key)?.type === "artifact" && <select className="col-span-2 rounded-md border bg-background px-1 text-[10px]" value={read.artifactMode ?? "reference"} onChange={(event) => onChange({ stateReads: reads.map((item, current) => current === index ? { ...item, artifactMode: event.target.value as WorkflowStateRead["artifactMode"] } : item) })}><option value="reference">Artifact reference</option><option value="content">Load artifact content</option></select>}
+    </div>)}</div>
+    <Button type="button" size="sm" variant="outline" className="mt-1" onClick={() => onChange({ stateReads: [...reads, { key: keys[0] ?? "" }] })}>Add read</Button>
+    <Label className="mt-3 block text-[10px]">Writes</Label>
+    <div className="space-y-1">{writes.map((write, index) => <div key={index} className="grid grid-cols-[1fr_90px_90px_auto] gap-1">{keyInput(write.key, (key) => onChange({ stateWrites: writes.map((item, current) => current === index ? { ...item, key } : item) }))}<Input className="h-7 text-[10px]" value={write.sourcePath ?? ""} placeholder="output path" onChange={(event) => onChange({ stateWrites: writes.map((item, current) => current === index ? { ...item, sourcePath: event.target.value || undefined } : item) })} /><select className="rounded-md border bg-background px-1 text-[10px]" value={write.reducer ?? ""} onChange={(event) => onChange({ stateWrites: writes.map((item, current) => current === index ? { ...item, reducer: (event.target.value || undefined) as WorkflowStateReducer | undefined } : item) })}><option value="">schema</option>{["replace","merge","append","append_unique","sum","min","max","first"].map((value) => <option key={value}>{value}</option>)}</select><Button type="button" size="sm" variant="ghost" onClick={() => onChange({ stateWrites: writes.filter((_, current) => current !== index) })}>×</Button></div>)}</div>
+    <Button type="button" size="sm" variant="outline" className="mt-1" onClick={() => onChange({ stateWrites: [...writes, { key: keys[0] ?? "" }] })}>Add write</Button>
+  </details>;
+};
 
 const InlineProviderPanel = ({ data, globalProviders, onChange }: { data: AgentNodeData; globalProviders: ProviderStub[]; onChange: (d: AgentNodeData) => void }) => {
   const providerIds = data.providerIds ?? [];
@@ -634,7 +707,14 @@ const InlineProviderPanel = ({ data, globalProviders, onChange }: { data: AgentN
     onChange({ ...data, agentProviders: agentProviders.map((item, j) => (j === i ? provider : item)) });
 
   return (
-    <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
+    <details className="rounded-lg border bg-muted/20">
+      <summary className="cursor-pointer select-none px-2.5 py-2 text-xs font-medium">
+        LLM provider details
+        <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+          {agentProviders.length + providerIds.length === 0 ? "Live global defaults" : `${agentProviders.length + providerIds.length} override(s)`}
+        </span>
+      </summary>
+      <div className="space-y-2 border-t p-2.5">
       <div className="flex items-center justify-between">
         <Label className="text-xs">LLM provider priority</Label>
         <span className="text-[10px] text-muted-foreground">
@@ -704,11 +784,60 @@ const InlineProviderPanel = ({ data, globalProviders, onChange }: { data: AgentN
         onClick={() => onChange({ ...data, agentProviders: [...agentProviders, emptyInlineProvider()] })}>
         <Plus className="h-3 w-3" /> Add provider for this node
       </Button>
-    </div>
+      <p className="text-[10px] text-muted-foreground">Leave both lists empty to stay synchronized with the Providers &amp; MCP tab. Selected global providers also use their latest saved URL, model, key, enabled state, and priority.</p>
+      </div>
+    </details>
   );
 };
 
-const AgentPanel = ({ node, agents, skills, globalProviders, defaultUseUploadedDocument, onChange }: { node: WorkflowNode; agents: AgentStub[]; skills: SkillStub[]; globalProviders: ProviderStub[]; defaultUseUploadedDocument: boolean; onChange: (d: AgentNodeData) => void }) => {
+const NodeMcpPanel = ({ data, mcpServers, organizationId, onChange }: { data: AgentNodeData; mcpServers: McpServerStub[]; organizationId?: string; onChange: (d: AgentNodeData) => void }) => {
+  const [serverTools, setServerTools] = useState<Record<string, { loading: boolean; tools: McpToolStub[]; error?: string }>>({});
+  const selectedIds = data.mcpServerIds ?? [];
+  const filters = data.mcpToolFilter ?? {};
+  const toggleServer = (id: string) => {
+    const selected = selectedIds.includes(id);
+    const nextFilters = { ...filters };
+    if (selected) delete nextFilters[id];
+    onChange({ ...data, mcpServerIds: selected ? selectedIds.filter((item) => item !== id) : [...selectedIds, id], mcpToolFilter: nextFilters });
+  };
+  const loadTools = async (server: McpServerStub) => {
+    setServerTools((current) => ({ ...current, [server.id]: { loading: true, tools: [] } }));
+    const result = await discoverMcpTools(server, organizationId);
+    setServerTools((current) => ({ ...current, [server.id]: { loading: false, ...result } }));
+  };
+  const toggleTool = (serverId: string, toolName: string, allTools: McpToolStub[]) => {
+    const current = filters[serverId] ?? [];
+    // An absent filter means all tools. The first click creates an explicit
+    // allow-list containing every tool except the one the user disabled.
+    const next = current.length === 0
+      ? allTools.map((tool) => tool.name).filter((name) => name !== toolName)
+      : current.includes(toolName) ? current.filter((name) => name !== toolName) : [...current, toolName];
+    onChange({ ...data, mcpToolFilter: { ...filters, [serverId]: next } });
+  };
+  return <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
+    <div className="flex items-center justify-between gap-2"><Label className="text-xs">MCP servers for this node</Label><span className="text-[10px] text-muted-foreground">Synced from Providers &amp; MCP</span></div>
+    {mcpServers.length === 0 ? <p className="text-[10px] text-muted-foreground">No enabled MCP servers are configured.</p> : <div className="flex flex-wrap gap-1.5">
+      {mcpServers.map((server) => <button key={server.id} type="button" onClick={() => toggleServer(server.id)} className={`rounded-full border px-2.5 py-1 text-[10px] transition-colors ${selectedIds.includes(server.id) ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground hover:border-primary"}`}>{server.name || server.url}</button>)}
+    </div>}
+    {selectedIds.map((id) => {
+      const server = mcpServers.find((item) => item.id === id);
+      if (!server) return null;
+      const state = serverTools[id];
+      const selectedTools = filters[id] ?? [];
+      return <div key={id} className="rounded-md border bg-background p-2">
+        <div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate text-[10px] font-medium">{server.name || server.url}</span><Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={state?.loading} onClick={() => loadTools(server)}>{state?.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Load tools"}</Button></div>
+        {state?.error && <p className="mt-1 text-[10px] text-destructive">{state.error}</p>}
+        {state?.tools?.length > 0 && <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">{state.tools.map((tool) => {
+          const checked = selectedTools.length === 0 || selectedTools.includes(tool.name);
+          return <label key={tool.name} className="flex cursor-pointer items-start gap-2 rounded p-1 hover:bg-muted"><input type="checkbox" className="mt-0.5" checked={checked} onChange={() => toggleTool(id, tool.name, state.tools)} /><span><span className="block font-mono text-[10px]">{tool.name}</span>{tool.description && <span className="block text-[9px] text-muted-foreground">{tool.description}</span>}</span></label>;
+        })}<button type="button" className="text-[10px] text-primary hover:underline" onClick={() => { const next = { ...filters }; delete next[id]; onChange({ ...data, mcpToolFilter: next }); }}>Allow all tools</button></div>}
+      </div>;
+    })}
+    <p className="text-[10px] text-muted-foreground">Saved agents retain their own MCP access; selections here add node-specific servers. Changes to the server URL, key, or enabled state are read live from the Providers &amp; MCP tab.</p>
+  </div>;
+};
+
+const AgentPanel = ({ node, agents, skills, globalProviders, mcpServers, organizationId, defaultUseUploadedDocument, onChange }: { node: WorkflowNode; agents: AgentStub[]; skills: SkillStub[]; globalProviders: ProviderStub[]; mcpServers: McpServerStub[]; organizationId?: string; defaultUseUploadedDocument: boolean; onChange: (d: AgentNodeData) => void }) => {
   const d = node.data as AgentNodeData;
   const mode = d.mode ?? "existing";
   const contextMode = d.contextMode ?? (
@@ -722,6 +851,19 @@ const AgentPanel = ({ node, agents, skills, globalProviders, defaultUseUploadedD
         <Label className="text-xs">Label</Label>
         <Input className="h-7 text-xs" value={d.label} onChange={(e) => onChange({ ...d, label: e.target.value })} />
       </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Backend timeout (seconds)</Label>
+        <Input type="number" min={1} max={600} className="h-7 text-xs" value={d.timeoutSeconds ?? 120} onChange={(event) => onChange({ ...d, timeoutSeconds: Math.max(1, Math.min(600, Number(event.target.value) || 120)) })} />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Crash-recovery safety</Label>
+        <Select value={d.sideEffectClass ?? "non_idempotent"} onValueChange={(sideEffectClass) => onChange({ ...d, sideEffectClass: sideEffectClass as AgentNodeData["sideEffectClass"], ...(sideEffectClass === "non_idempotent" ? { retryPolicy: undefined } : {}) })}>
+          <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="read_only">Read-only</SelectItem><SelectItem value="idempotent">Idempotent tools</SelectItem><SelectItem value="non_idempotent">May cause side effects</SelectItem></SelectContent>
+        </Select>
+        <p className="text-[10px] text-muted-foreground">Only mark an agent idempotent when every assigned write tool safely deduplicates repeated operation IDs.</p>
+      </div>
+      <RetryPolicyPanel value={d.retryPolicy} disabled={(d.sideEffectClass ?? "non_idempotent") === "non_idempotent"} onChange={(retryPolicy) => onChange({ ...d, retryPolicy })} />
 
       {/* Mode toggle */}
       <div className="flex rounded-lg border overflow-hidden text-[11px] font-medium">
@@ -765,15 +907,10 @@ const AgentPanel = ({ node, agents, skills, globalProviders, defaultUseUploadedD
               onChange={(e) => onChange({ ...d, inlineName: e.target.value || undefined })} />
           </div>
           <div className="space-y-1">
-            <Label className="text-xs">Output type</Label>
-            {(d.skillIds ?? []).length > 0 && (
-              <p className="rounded-md border bg-muted px-2 py-1.5 text-[10px] text-muted-foreground">
-                Skill-controlled; the most recently activated skill overrides the <strong>{d.inlineFallbackOutputType ?? "text"}</strong> fallback.
-              </p>
-            )}
-            <div className={`flex gap-1 flex-wrap ${(d.skillIds ?? []).length > 0 ? "opacity-55" : ""}`}>
+            <Label className="text-xs">Inline agent base output</Label>
+            <div className="flex flex-wrap gap-1">
               {OUTPUT_TYPE_OPTIONS.map(({ value, label }) => (
-                <button key={value} disabled={(d.skillIds ?? []).length > 0 || value === "auto"}
+                <button key={value} disabled={value === "auto"}
                   onClick={() => onChange({ ...d, inlineOutputType: value, inlineFallbackOutputType: value === "auto" ? d.inlineFallbackOutputType : value })}
                   className={`px-2.5 py-1 rounded-full border text-[11px] font-medium transition-colors
                     ${(d.inlineOutputType ?? "text") === value
@@ -791,35 +928,31 @@ const AgentPanel = ({ node, agents, skills, globalProviders, defaultUseUploadedD
               placeholder="You are an expert at… Respond with a JSON array of…"
               onChange={(e) => onChange({ ...d, inlineSystemPrompt: e.target.value || undefined })} />
           </div>
-          <div className="space-y-2">
-            <Label className="text-xs">Agent skills</Label>
-            {skills.length === 0 ? (
-              <p className="text-[10px] text-muted-foreground">No enabled skills are available.</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {skills.map((skill) => {
-                  const selected = (d.skillIds ?? []).includes(skill.id);
-                  return <button key={skill.id} type="button" title={skill.description}
-                    onClick={() => {
-                      const skillIds = selected ? (d.skillIds ?? []).filter((id) => id !== skill.id) : [...(d.skillIds ?? []), skill.id];
-                      if (skillIds.length > 0) {
-                        const fallback = d.inlineOutputType === "auto" ? (d.inlineFallbackOutputType ?? "text") : (d.inlineOutputType ?? "text");
-                        onChange({ ...d, skillIds, inlineOutputType: "auto", inlineFallbackOutputType: fallback });
-                      } else {
-                        onChange({ ...d, skillIds, inlineOutputType: d.inlineFallbackOutputType ?? "text" });
-                      }
-                    }}
-                    className={`rounded-full border px-2.5 py-1 text-[10px] transition-colors ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground hover:border-primary"}`}>
-                    {skill.name}
-                  </button>;
-                })}
-              </div>
-            )}
-            <p className="text-[10px] text-muted-foreground">Selected playbooks are injected into this inline agent when the node runs.</p>
-          </div>
           <InlineProviderPanel data={d} globalProviders={globalProviders} onChange={onChange} />
         </>
       )}
+
+      <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
+        <div className="flex items-center justify-between gap-2"><Label className="text-xs">Predefined skills for this node</Label><span className="text-[10px] text-muted-foreground">Synced from Agent Skills</span></div>
+        {skills.length === 0 ? <p className="text-[10px] text-muted-foreground">No enabled skills are available.</p> : <div className="flex flex-wrap gap-1.5">
+          {skills.map((skill) => {
+            const selected = (d.skillIds ?? []).includes(skill.id);
+            return <button key={skill.id} type="button" title={skill.description} onClick={() => onChange({ ...d, skillIds: selected ? (d.skillIds ?? []).filter((id) => id !== skill.id) : [...(d.skillIds ?? []), skill.id] })} className={`rounded-full border px-2.5 py-1 text-[10px] transition-colors ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground hover:border-primary"}`}>{skill.name}</button>;
+          })}
+        </div>}
+        <p className="text-[10px] text-muted-foreground">For a saved agent, these playbooks are added to its own assigned skills. The node output contract below always wins over a skill’s preferred format.</p>
+      </div>
+
+      <NodeMcpPanel data={d} mcpServers={mcpServers} organizationId={organizationId} onChange={onChange} />
+
+      <div className="space-y-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-2.5">
+        <div><Label className="text-xs">Node output contract</Label><p className="text-[10px] text-muted-foreground">Force the response format expected by downstream nodes, regardless of the saved agent or activated skill.</p></div>
+        <div className="flex flex-wrap gap-1">
+          <button type="button" onClick={() => onChange({ ...d, nodeOutputType: undefined, nodeOutputInstructions: undefined })} className={`rounded-full border px-2.5 py-1 text-[10px] ${!d.nodeOutputType ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Inherit agent</button>
+          {OUTPUT_TYPE_OPTIONS.filter((option) => option.value !== "auto").map((option) => <button key={option.value} type="button" onClick={() => onChange({ ...d, nodeOutputType: option.value })} className={`rounded-full border px-2.5 py-1 text-[10px] ${d.nodeOutputType === option.value ? "border-primary bg-primary text-primary-foreground" : "text-muted-foreground"}`}>{option.label}</button>)}
+        </div>
+        {d.nodeOutputType && <Textarea className="min-h-[70px] font-mono text-[10px]" value={d.nodeOutputInstructions ?? ""} placeholder={d.nodeOutputType === "json" ? 'Custom contract, e.g. Return exactly { "score": number, "reason": string }' : "Describe the exact node-specific output shape or rules…"} onChange={(event) => onChange({ ...d, nodeOutputInstructions: event.target.value || undefined })} />}
+      </div>
 
       <div className="space-y-2 rounded-lg border bg-muted/20 p-2.5">
         <Label className="text-xs">Data / document context</Label>
@@ -980,7 +1113,20 @@ const ApiPanel = ({ node, organizationId, onChange }: { node: WorkflowNode; orga
         </div>
         <div className="space-y-1"><Label className="text-xs">API URL</Label><Input className="h-8 font-mono text-xs" value={d.url} placeholder="https://api.example.com/items/{{prevOutput.id}}" onChange={(event) => onChange({ ...d, url: event.target.value })} /></div>
       </div>
-      <p className="text-[10px] leading-relaxed text-muted-foreground">Dynamic values support <code className="rounded bg-muted px-1">{"{{prevOutput.path}}"}</code>, <code className="rounded bg-muted px-1">{"{{result.path}}"}</code>, and <code className="rounded bg-muted px-1">{"{{userMessage}}"}</code>.</p>
+      <div className="space-y-1">
+        <Label className="text-xs">Backend timeout (seconds)</Label>
+        <Input type="number" min={1} max={600} className="h-8 text-xs" value={d.timeoutSeconds ?? 20}
+          onChange={(event) => onChange({ ...d, timeoutSeconds: Math.max(1, Math.min(600, Number(event.target.value) || 20)) })} />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Crash-recovery safety</Label>
+        <Select value={d.sideEffectClass ?? (d.method === "GET" ? "read_only" : "non_idempotent")} onValueChange={(sideEffectClass) => onChange({ ...d, sideEffectClass: sideEffectClass as ApiNodeData["sideEffectClass"], ...(sideEffectClass === "non_idempotent" ? { retryPolicy: undefined } : {}) })}>
+          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="read_only">Read-only</SelectItem><SelectItem value="idempotent">Idempotent action</SelectItem><SelectItem value="non_idempotent">Non-idempotent action</SelectItem></SelectContent>
+        </Select>
+      </div>
+      <RetryPolicyPanel value={d.retryPolicy} disabled={(d.sideEffectClass ?? (d.method === "GET" ? "read_only" : "non_idempotent")) === "non_idempotent"} onChange={(retryPolicy) => onChange({ ...d, retryPolicy })} />
+      <p className="text-[10px] leading-relaxed text-muted-foreground">Dynamic values support <code className="rounded bg-muted px-1">{"{{prevOutput.path}}"}</code>, <code className="rounded bg-muted px-1">{"{{result.path}}"}</code>, <code className="rounded bg-muted px-1">{"{{userMessage}}"}</code>, and <code className="rounded bg-muted px-1">{"{{execution.operationId}}"}</code>. Idempotent actions receive this value as an Idempotency-Key header unless one is configured.</p>
 
       <KeyValueEditor label="Query parameters" rows={d.queryParams ?? []} onChange={(queryParams) => onChange({ ...d, queryParams })} />
       <KeyValueEditor label="Headers" rows={d.headers ?? []} onChange={(headers) => onChange({ ...d, headers })} secret />
@@ -1323,7 +1469,7 @@ trigger(result) -> retrieval(list result skills without sending full JSON) -> us
 `.trim();
 
 const WORKFLOW_GENERATION_SYSTEM_PROMPT = `You design executable agentic workflows. Return JSON only with {"nodes":[],"edges":[]}.
-Allowed node types: trigger, document_context, retrieval, user_input, agent, api, plugin, condition, router, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision before continuing.
+Allowed node types: trigger, document_context, retrieval, user_input, event, agent, api, plugin, condition, router, output. Include exactly one trigger and at least one output. Use document_context after a trigger when the workflow needs a stable reusable document input. Use retrieval before an agent when resultData may be large and the agent only needs selected nodes/items. Use user_input whenever the chat workflow must pause for a user's decision. Use event with eventType external_signal when an authenticated external system must resume the backend run.
 Prefer deterministic plugin nodes for parsing, validation, looping, accumulation, formatting, evidence verification, and resultData updates. Use LLM agents only for semantic interpretation or generation.
 Each node: {"id":"short-unique-id","type":"allowed type","data":{...}}. Do not include positions.
 All inputSchema and outputSchema values must be concise human-readable strings. Do not return schema objects in these fields.
@@ -1331,7 +1477,7 @@ Trigger data: {label,triggerType:"manual",inputSources:["input","result","docume
 Document Context data: {label,source:"trigger_document|chat_upload_or_trigger",delivery:"automatic|text|native_file",reuseScope:"workflow_run",inputSchema,outputSchema}.
 Retrieval data: {label,source:"result|prev_output|node_output",sourceNodeId optional,query,maxItems,description,code,inputSchema,outputSchema}. Code is a sandbox body receiving input and tools. tools has manifest(), listNodes({start,limit}), findNodes(query,{limit}), getNode(idOrExactLabelOrIndex), exactLabel(label), sliceNodes(start,end). It must return compact context for downstream agents and cannot use network, DOM, storage, imports, eval, Function, or timers.
 User Input data: {label,question,answerKey,inputType:"text|yes_no|select",options,responseTimeoutHours:48,reminderIntervalHours:12,maxReminders:3,inputSchema,outputSchema}. This pauses the workflow until an answer is submitted through chat, API, or the standalone response page. Backend deadlines stop unanswered runs; reminder limits only control notifications. options is newline-separated and only used for select inputs.
-Agent data: prefer an available saved agent with {label,mode:"existing",agentId,promptOverride,passPrevOutput:true,inputSchema,outputSchema}; otherwise use {label,mode:"inline",inlineName,inlineSystemPrompt,inlineOutputType:"text|json|html|mixed",inlineFallbackOutputType:"text|json|html|mixed",skillIds:[],promptOverride,passPrevOutput:true,inputSchema,outputSchema}. Preserve resultContextMode:"full|chunked" and resultChunkSize (2000–50000 characters) when relevant; omitted delivery settings inherit the saved agent, or full for inline agents. Chunked delivery sends all data with a manifest in one request. Preserve contextMode:"combined|document_only", requiresDocument, useUploadedDocument, providerIds, and agentProviders when relevant.
+Agent data: prefer an available saved agent with {label,mode:"existing",agentId,skillIds,mcpServerIds,mcpToolFilter,nodeOutputType,nodeOutputInstructions,promptOverride,passPrevOutput:true,inputSchema,outputSchema}; otherwise use {label,mode:"inline",inlineName,inlineSystemPrompt,inlineOutputType:"text|json|html|mixed",inlineFallbackOutputType:"text|json|html|mixed",skillIds,mcpServerIds,mcpToolFilter,nodeOutputType,nodeOutputInstructions,promptOverride,passPrevOutput:true,inputSchema,outputSchema}. A nodeOutputType forces the downstream contract even when a saved agent or skill prefers another format. Preserve resultContextMode:"full|chunked" and resultChunkSize (2000–50000 characters) when relevant; omitted delivery settings inherit the saved agent, or full for inline agents. Chunked delivery sends all data with a manifest in one request. Preserve contextMode:"combined|document_only", requiresDocument, useUploadedDocument, providerIds, and agentProviders when relevant.
 API data: {label,url,method,queryParams:[],headers:[],authType:"none|bearer|basic|api_key",bodyType:"none|json|text|form_urlencoded",body,responseType:"auto|json|text",outputPath,inputSchema,outputSchema}. Never invent credential values; leave auth values empty.
 Plugin data: {label,description,code,inputSchema,outputSchema}. Code is a sandbox function body receiving input.prevOutput, input.result, input.docText and input.getNodeOutput(id); it must return a value and cannot use network, DOM, storage, imports, eval, Function, or timers.
 Condition data: {label,expression,inputSchema,loopStart optional,loopEnd optional}. Expression reads prevOutput and returns truthy/falsy.
@@ -2142,7 +2288,7 @@ const normalizedDescription = hasProgrammingEvidence
   : String(r?.description || descriptionStage?.description || 'Verified document evidence was found.');
 const levelRank = { not_demonstrated: 0, beginner: 1, intermediate: 2, advanced: 3, expert: 4 };
 const returnedLevel = String(r?.expected_level?.level || 'not_demonstrated').toLowerCase();
-const hasExplicitStrongCapability = sentenceSources.some(source => /\b(strong|advanced|expert|proficient|extensive)\b[^.!;]{0,60}\b(programming|coding|development|software|technical)?\s*(skills?|experience|knowledge|proficiency)\b/i.test(source));
+const hasExplicitStrongCapability = sentenceSources.some(source => /\\b(strong|advanced|expert|proficient|extensive)\\b[^.!;]{0,60}\\b(programming|coding|development|software|technical)?\\s*(skills?|experience|knowledge|proficiency)\\b/i.test(source));
 const expectedLevel = hasEvidence
   ? (hasExplicitStrongCapability && (levelRank[returnedLevel] ?? 0) < levelRank.advanced
       ? { level: 'advanced', reason: 'The exact source explicitly states strong or advanced capability that includes this skill.' }
@@ -3999,9 +4145,11 @@ interface WorkflowBuilderProps {
   traceNodeId?: string | null;
   workflowId: string;
   workflow: AgentWorkflow;
+  state?: WorkflowStateDefinition;
   agents: AgentStub[];
   skills: SkillStub[];
   globalProviders: ProviderStub[];
+  mcpServers: McpServerStub[];
   organizationId?: string;
   onChange: (w: AgentWorkflow) => void;
 }
@@ -4033,7 +4181,7 @@ const WORKFLOW_TEST_EXAMPLES = [
   },
 ] as const;
 
-export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, skills, globalProviders, organizationId, onChange }: WorkflowBuilderProps) => {
+export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, state, agents, skills, globalProviders, mcpServers, organizationId, onChange }: WorkflowBuilderProps) => {
   const wf = workflow.nodes.length === 0 ? defaultWorkflow() : workflow;
 
   const [nodes, setNodes] = useState<Node[]>(wf.nodes as Node[]);
@@ -4431,7 +4579,8 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
       document_context: { label: "Document Context", source: "chat_upload_or_trigger", delivery: "automatic", reuseScope: "workflow_run", inputSchema: "Trigger document or chat upload", outputSchema: "{ contextType, available, textAvailable, text? }" } satisfies DocumentContextNodeData,
       retrieval: { label: "Data Retrieval", source: "result", query: "{{userMessage}}", maxItems: 25, code: DEFAULT_RETRIEVAL_CODE, description: "Retrieve selected result nodes outside the prompt", inputSchema: "resultData or previous node output", outputSchema: "{ manifest, query, items[] }" } satisfies RetrievalNodeData,
       user_input: { label: "Ask User", question: "Please provide the next input.", answerKey: "answer", inputType: "text", inputSchema: "Previous node output", outputSchema: "{ previous, answer, userAnswer }" } satisfies UserInputNodeData,
-      agent:     { label: "Agent", mode: "existing", agentId: agents[0]?.id ?? "", passPrevOutput: true } satisfies AgentNodeData,
+      event: { label: "Wait for Event", eventType: "external_signal", signalName: "continue", inputSchema: "Previous node output", outputSchema: "{ eventType, signalName, payload, previous }" } satisfies EventNodeData,
+      agent:     { label: "Agent", mode: "existing", agentId: agents[0]?.id ?? "", nodeOutputType: "text", passPrevOutput: true } satisfies AgentNodeData,
       api:       { label: "API Request", url: "", method: "GET", queryParams: [], headers: [], authType: "none", bodyType: "none", responseType: "auto" } satisfies ApiNodeData,
       plugin:    { label: "Plugin", code: "return input.prevOutput;", description: "" } satisfies PluginNodeData,
       condition: { label: "Condition", expression: "prevOutput?.length > 0" } satisfies ConditionNodeData,
@@ -4689,6 +4838,7 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
       const exampleWorkflowId = `${workflowId}:node-example:${nodeExample.id}`;
       const run = await executeWorkflow({ nodes: nodeExample.workflow.nodes, edges: normalizeEdgeHandles(nodeExample.workflow.nodes as Node[], nodeExample.workflow.edges as Edge[]) as WorkflowEdge[] }, {
         workflowId: exampleWorkflowId,
+        stateDefinition: state,
         resultData,
         docText: documentText,
         hasDocument: Boolean(documentText),
@@ -4759,9 +4909,13 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
               systemPrompt: agentConfig.inline?.systemPrompt,
               outputType: agentConfig.inline?.outputType,
               fallbackOutputType: agentConfig.inline?.fallbackOutputType,
-              skillIds: agentConfig.inline?.skillIds,
+              skillIds: agentConfig.overrides?.skillIds ?? agentConfig.inline?.skillIds,
               providerIds: agentConfig.inline?.providerIds,
               agentProviders: agentConfig.inline?.agentProviders,
+              mcpServerIds: agentConfig.overrides?.mcpServerIds,
+              mcpToolFilter: agentConfig.overrides?.mcpToolFilter,
+              nodeOutputType: agentConfig.overrides?.nodeOutputType,
+              nodeOutputInstructions: agentConfig.overrides?.nodeOutputInstructions,
             }),
           });
           if (!response.ok || !response.body) throw new Error(`Agent request failed (${response.status}): ${await response.text()}`);
@@ -4947,6 +5101,10 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
     const next = nodes.map((n) => n.id === selectedNodeId ? { ...n, data: { ...n.data, ...data } } : n);
     setNodes(next);
     commit(next, edges);
+  };
+  const updateSelectedNodeState = (patch: { stateReads?: WorkflowStateRead[]; stateWrites?: WorkflowStateWrite[] }) => {
+    const next = nodes.map((node) => node.id === selectedNodeId ? { ...node, ...patch } : node);
+    setNodes(next); commit(next, edges);
   };
 
   const updateSelectedRouterData = (data: RouterNodeData) => {
@@ -5186,6 +5344,7 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
       const token = sessionData.session?.access_token;
       const run = await executeWorkflow({ nodes: nodes as WorkflowNode[], edges: edges as WorkflowEdge[] }, {
         workflowId,
+        stateDefinition: state,
         resultData,
         docText: documentText,
         hasDocument: Boolean(documentText),
@@ -5260,9 +5419,13 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
               systemPrompt: agentConfig.inline?.systemPrompt,
               outputType: agentConfig.inline?.outputType,
               fallbackOutputType: agentConfig.inline?.fallbackOutputType,
-              skillIds: agentConfig.inline?.skillIds,
+              skillIds: agentConfig.overrides?.skillIds ?? agentConfig.inline?.skillIds,
               providerIds: agentConfig.inline?.providerIds,
               agentProviders: agentConfig.inline?.agentProviders,
+              mcpServerIds: agentConfig.overrides?.mcpServerIds,
+              mcpToolFilter: agentConfig.overrides?.mcpToolFilter,
+              nodeOutputType: agentConfig.overrides?.nodeOutputType,
+              nodeOutputInstructions: agentConfig.overrides?.nodeOutputInstructions,
             }),
           });
           if (!response.ok || !response.body) throw new Error(`Agent request failed (${response.status}): ${await response.text()}`);
@@ -5331,6 +5494,7 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
             : "6-8";
       const safeAgents = agents.map(({ id, name, description, expectedOutput }) => ({ id, name, description, expectedOutput }));
       const safeSkills = skills.map(({ id, name, description }) => ({ id, name, description }));
+      const safeMcpServers = mcpServers.map(({ id, name, url }) => ({ id, name, url }));
       const activePatternLibrary = workflowPatternLibrary.trim() || WORKFLOW_GENERATION_PATTERN_LIBRARY;
       const activeExampleSummary = workflowExampleSummary.trim() || WORKFLOW_GENERATION_EXAMPLE_SUMMARY;
       const activeSystemPrompt = workflowSystemPrompt.trim() || WORKFLOW_GENERATION_SYSTEM_PROMPT;
@@ -5397,6 +5561,7 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, agents, ski
         useAdvancedPatterns: workflowUseAdvancedPatterns,
         agents: safeAgents,
         skills: safeSkills,
+        mcpServers: safeMcpServers,
       };
       const planPrompt = `Plan an executable agentic workflow for this goal, but do not generate nodes yet.
 
@@ -5414,6 +5579,9 @@ ${JSON.stringify(safeAgents, null, 2)}
 
 Available agent skills:
 ${JSON.stringify(safeSkills, null, 2)}
+
+Available MCP servers:
+${JSON.stringify(safeMcpServers, null, 2)}
 
 Return JSON only with {"intent":"","inputSources":[],"patterns":[],"dataContracts":[],"nodePlan":[],"validationChecklist":[]}.`;
       const plan = await callWorkflowGenerator(
@@ -5440,6 +5608,9 @@ ${JSON.stringify(safeAgents, null, 2)}
 
 Available agent skills:
 ${JSON.stringify(safeSkills, null, 2)}
+
+Available MCP servers:
+${JSON.stringify(safeMcpServers, null, 2)}
 
 ${workflowUseAdvancedPatterns ? `Use these proven patterns when relevant:\n${activePatternLibrary}\n\nTemplate benchmarks:\n${activeExampleSummary}` : ""}
 
@@ -5495,12 +5666,13 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
         generated = await callWorkflowGenerator(repairPrompt, activeSystemPrompt, { ...generationContextPayload, plan, validationIssues, graph: parsed });
         parsed = parseGeneratedWorkflowResponse(generated);
       }
-      const allowedTypes = new Set(["trigger", "document_context", "retrieval", "user_input", "agent", "api", "plugin", "condition", "router", "output"]);
+      const allowedTypes = new Set(["trigger", "document_context", "retrieval", "user_input", "event", "agent", "api", "plugin", "condition", "router", "output"]);
       const typeAliases: Record<string, WorkflowNode["type"]> = {
         start: "trigger", input: "trigger", user_input: "trigger",
         document: "document_context", document_context: "document_context", file_context: "document_context",
         rag: "retrieval", retrieval: "retrieval", search: "retrieval", browser: "retrieval", data_lookup: "retrieval", data_retrieval: "retrieval", tool: "retrieval",
         ask: "user_input", question: "user_input", user_input: "user_input", wait: "user_input", pause: "user_input", human_input: "user_input",
+        event: "event", signal: "event", external_signal: "event", wait_for_event: "event",
         ai: "agent", llm: "agent", ai_agent: "agent",
         http: "api", request: "api", api_request: "api",
         router: "router", route: "router", switch: "router", multi_condition: "router",
@@ -5582,9 +5754,30 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
             outputSchema: normalizeGeneratedSchema(rawData.outputSchema) || "{ previous, answer, userAnswer }",
           };
         }
+        else if (type === "event") {
+          data = {
+            label,
+            eventType: "external_signal",
+            signalName: /^[A-Za-z][A-Za-z0-9_.:-]{0,99}$/.test(String(rawData.signalName || "")) ? String(rawData.signalName) : "continue",
+            description: String(rawData.description || "Pause until an authorized external system sends this signal.").slice(0, 500),
+            inputSchema: normalizeGeneratedSchema(rawData.inputSchema) || "Previous node output",
+            outputSchema: normalizeGeneratedSchema(rawData.outputSchema) || "{ eventType, signalName, payload, previous }",
+          };
+        }
         else if (type === "agent") {
           const requestedAgent = safeAgents.find((agent) => agent.id === rawData.agentId);
+          const selectedMcpIds = Array.isArray(rawData.mcpServerIds)
+            ? rawData.mcpServerIds.map(String).filter((id) => safeMcpServers.some((server) => server.id === id))
+            : [];
+          const rawMcpFilter = rawData.mcpToolFilter && typeof rawData.mcpToolFilter === "object"
+            ? rawData.mcpToolFilter as Record<string, unknown> : {};
           const sharedAgentData = {
+            skillIds: Array.isArray(rawData.skillIds) ? rawData.skillIds.map(String).filter((id) => safeSkills.some((skill) => skill.id === id)) : [],
+            mcpServerIds: selectedMcpIds,
+            mcpToolFilter: Object.fromEntries(selectedMcpIds.flatMap((serverId) => Array.isArray(rawMcpFilter[serverId])
+              ? [[serverId, (rawMcpFilter[serverId] as unknown[]).map(String).filter(Boolean).slice(0, 128)]] : [])),
+            nodeOutputType: ["text", "json", "html", "mixed"].includes(String(rawData.nodeOutputType)) ? rawData.nodeOutputType : undefined,
+            nodeOutputInstructions: String(rawData.nodeOutputInstructions || "").slice(0, 8000) || undefined,
             promptOverride: String(rawData.promptOverride || "").slice(0, 8000) || undefined,
             passPrevOutput: rawData.passPrevOutput !== false,
             resultContextMode: rawData.resultContextMode === "chunked" ? "chunked" : rawData.resultContextMode === "full" ? "full" : undefined,
@@ -5604,7 +5797,6 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 inlineSystemPrompt: String(rawData.inlineSystemPrompt || "Process the supplied input accurately.").slice(0, 12_000),
                 inlineOutputType: ["auto", "text", "json", "html", "mixed"].includes(String(rawData.inlineOutputType)) ? rawData.inlineOutputType : "text",
                 inlineFallbackOutputType: ["text", "json", "html", "mixed"].includes(String(rawData.inlineFallbackOutputType)) ? rawData.inlineFallbackOutputType : undefined,
-                skillIds: Array.isArray(rawData.skillIds) ? rawData.skillIds.map(String).filter((id) => safeSkills.some((skill) => skill.id === id)) : [],
                 providerIds: Array.isArray(rawData.providerIds) ? rawData.providerIds.map(String).slice(0, 10) : [],
                 agentProviders: Array.isArray(rawData.agentProviders) ? rawData.agentProviders.slice(0, 5).map((provider) => {
                   const rawProvider = provider && typeof provider === "object" ? provider as Record<string, unknown> : {};
@@ -6095,7 +6287,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 <Background gap={20} size={1} color="hsl(var(--border))" />
                 <Controls showInteractive={false} className="!m-3 !overflow-hidden !rounded-lg !border !border-border !bg-background/90 !shadow-sm" />
                 <MiniMap
-                  nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+                  nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", event: "#2563eb", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
                   maskColor="hsl(var(--background) / 0.65)"
                   className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
                 />
@@ -6136,6 +6328,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                       {exampleSelectedNode.type === "trigger" && <TriggerPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
                       {exampleSelectedNode.type === "document_context" && <DocumentContextPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
                       {exampleSelectedNode.type === "user_input" && <UserInputPanel node={exampleSelectedNode} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
+                      {exampleSelectedNode.type === "event" && <EventPanel node={exampleSelectedNode} state={state} onChange={(data) => updateExampleSelectedNodeData(data as never)} />}
                       {exampleSelectedNode.type === "retrieval" && <RetrievalPanel
                         node={exampleSelectedNode}
                         nodes={exampleNodes}
@@ -6148,6 +6341,8 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                         agents={agents}
                         skills={skills}
                         globalProviders={globalProviders}
+                        mcpServers={mcpServers}
+                        organizationId={organizationId}
                         defaultUseUploadedDocument={exampleNeedsDocument}
                         onChange={(data) => updateExampleSelectedNodeData(data as never)}
                       />}
@@ -6648,7 +6843,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
               className="!m-3 !overflow-hidden !rounded-lg !border-2 !border-foreground/70 !bg-transparent !shadow-none [&_button]:!border-border [&_button]:!bg-transparent [&_button]:!text-foreground [&_button]:hover:!bg-muted/50 [&_svg]:!fill-current [&_svg]:!stroke-current"
             />
             <MiniMap
-              nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
+              nodeColor={(node) => ({ trigger: "#7c3aed", document_context: "#4f46e5", retrieval: "#65a30d", user_input: "#c026d3", event: "#2563eb", agent: "#0ea5e9", api: "#0891b2", plugin: "#f59e0b", condition: "#f43f5e", router: "#ea580c", output: "#10b981" }[node.type ?? "agent"] ?? "#64748b")}
               maskColor="hsl(var(--background) / 0.65)"
               className="!bottom-3 !right-3 !rounded-lg !border !border-border !bg-background/90 !shadow-sm"
             />
@@ -6737,6 +6932,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                 {selectedNode.type === "trigger" && <TriggerPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "document_context" && <DocumentContextPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "user_input" && <UserInputPanel node={selectedNode} onChange={(data) => updateSelectedNodeData(data as never)} />}
+                {selectedNode.type === "event" && <EventPanel node={selectedNode} state={state} onChange={(data) => updateSelectedNodeData(data as never)} />}
                 {selectedNode.type === "retrieval" && <RetrievalPanel
                   node={selectedNode}
                   nodes={nodes}
@@ -6749,6 +6945,8 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                   agents={agents}
                   skills={skills}
                   globalProviders={globalProviders}
+                  mcpServers={mcpServers}
+                  organizationId={organizationId}
                   defaultUseUploadedDocument={(() => {
                     const sources = (nodes.find((node) => node.type === "trigger")?.data as TriggerNodeData | undefined)?.inputSources;
                     return sources ? sources.includes("document") || sources.includes("user_upload") : true;
@@ -6767,6 +6965,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                   onUpdateEdge={updateEdgeDataPath}
                   onChange={(data) => updateSelectedNodeData(data as never)}
                 />}
+                <NodeStateMappingPanel node={selectedNode} state={state} onChange={updateSelectedNodeState} />
                 {testRuns[selectedNode.id] && (
                   <div className="mt-4 space-y-2 border-t pt-4">
                     <div className="flex items-center justify-between">

@@ -16,15 +16,17 @@ export const WORKFLOW_SANDBOX_PROGRAM = `  "use strict";
       if (request.operation === "condition") {
         const evaluate = new Function(
           "prevOutput",
+          "state",
           '"use strict"; return !!(' + request.code + ');',
         );
-        value = evaluate(request.input);
+        value = evaluate(request.input, request.state || {});
       } else if (request.operation === "transform") {
         const transform = new Function(
           "prevOutput",
+          "state",
           '"use strict";\\n' + request.code,
         );
-        value = transform(request.input);
+        value = transform(request.input, request.state || {});
       } else if (request.operation === "retrieval") {
         const input = request.input || {};
         const normalize = (value) => String(value ?? "").replace(/_/g, " ").replace(/\\s+/g, " ").trim().toLowerCase();

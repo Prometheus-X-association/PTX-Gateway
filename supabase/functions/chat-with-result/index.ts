@@ -54,6 +54,7 @@ interface LlmProvider {
   apiKey?: string;
   model?: string;
   enabled?: boolean;
+  deletedAt?: string;
   providerType?: "openai" | "anthropic" | "gemini" | "openai_compatible";
 }
 
@@ -70,6 +71,7 @@ interface McpServerConfig {
   url?: string;
   apiKey?: string;
   enabled?: boolean;
+  deletedAt?: string;
 }
 
 interface McpSession {
@@ -109,6 +111,7 @@ interface LlmAgent {
   defaultPrompts?: string[];
   skillIds?: string[];
   enabled?: boolean;
+  deletedAt?: string;
   resultContextMode?: "full" | "chunked";
   resultChunkSize?: number;
 }
@@ -139,6 +142,7 @@ interface AgentSkill {
   outputType?: "text" | "json" | "html" | "mixed";
   references?: AgentSkillReference[];
   enabled?: boolean;
+  deletedAt?: string;
   version?: number;
 }
 
@@ -176,8 +180,14 @@ interface ChatRequest {
   outputType?: "auto" | "text" | "json" | "html" | "mixed";
   /** Inline agent: format used when no assigned skill activates. */
   fallbackOutputType?: "text" | "json" | "html" | "mixed";
-  /** Skills attached to an inline workflow agent. Saved agents use their configured skillIds. */
+  /** Skills attached to a workflow node. Existing agents combine these with their configured skills. */
   skillIds?: string[];
+  /** MCP servers and tool filters attached to a workflow node. */
+  mcpServerIds?: string[];
+  mcpToolFilter?: Record<string, string[]>;
+  /** A workflow node output contract overrides agent/skill output preferences. */
+  nodeOutputType?: "text" | "json" | "html" | "mixed";
+  nodeOutputInstructions?: string;
   /** Inline agent: global provider IDs in priority order. */
   providerIds?: string[];
   /** Inline agent: node-specific providers tried before selected global providers. */
@@ -1076,7 +1086,7 @@ serve(async (req: Request) => {
     for (const rawWorkflow of (llmConfig as { workflows?: unknown[] }).workflows ?? []) {
       const workflow = toObject(rawWorkflow);
       if (String(workflow.id || "") !== body.workflowId) continue;
-      if (body.mode === "run" && workflow.enabled === false) return null;
+      if (body.mode === "run" && (workflow.enabled === false || workflow.deletedAt)) return null;
       const graph = toObject(workflow.graph);
       const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
       const node = nodes.map(toObject).find((item) => String(item.id || "") === body.nodeId);
@@ -1102,7 +1112,7 @@ serve(async (req: Request) => {
 
   // Resolve active agent first (provider resolution depends on it)
   const activeAgent = body.agentId && Array.isArray(llmConfig.agents)
-    ? llmConfig.agents.find((a) => a.id === body.agentId && a.enabled !== false) ?? null
+    ? llmConfig.agents.find((a) => a.id === body.agentId && a.enabled !== false && !a.deletedAt) ?? null
     : null;
   if (body.agentId && !activeAgent) {
     return sendError("Requested LLM agent was not found or is disabled", 400);
@@ -1115,10 +1125,13 @@ serve(async (req: Request) => {
     llmConfig.chatSystemPrompt?.trim() ||
     defaultChatPrompt;
 
-  const selectedSkillIds = (activeAgent ? activeAgent.skillIds : body.skillIds) ?? [];
+  const selectedSkillIds = [...new Set([
+    ...(activeAgent?.skillIds ?? []),
+    ...(body.skillIds ?? []),
+  ])];
   const selectedSkills = Array.isArray(llmConfig.skills)
     ? llmConfig.skills.filter((skill) =>
-        skill.enabled !== false && skill.id && selectedSkillIds.includes(skill.id)
+        skill.enabled !== false && !skill.deletedAt && skill.id && selectedSkillIds.includes(skill.id)
       )
     : [];
   const skillBlock = selectedSkills.length > 0
@@ -1214,11 +1227,14 @@ serve(async (req: Request) => {
   }
 
   // Append output instructions as a dedicated section
-  const outputInstructions = activeAgent?.outputInstructions?.trim();
-  const configuredOutputType = (activeAgent ? activeAgent.expectedOutput : body.outputType) ?? "text";
+  const forcedNodeOutputType = body.nodeOutputType;
+  const outputInstructions = body.nodeOutputInstructions?.trim() || activeAgent?.outputInstructions?.trim();
+  const configuredOutputType = forcedNodeOutputType ?? (activeAgent ? activeAgent.expectedOutput : body.outputType) ?? "text";
   const fallbackOutputType = (activeAgent ? activeAgent.fallbackOutput : body.fallbackOutputType) ??
     (configuredOutputType === "auto" ? "text" : configuredOutputType);
-  const outputBlock = configuredOutputType === "auto"
+  const outputBlock = forcedNodeOutputType
+    ? `\n## Required Node Output Contract\nThis workflow node requires ${forcedNodeOutputType}. This contract overrides any saved-agent or activated-skill output type/template.${outputInstructions ? `\n\n${outputInstructions}` : ""}`
+    : configuredOutputType === "auto"
     ? `\n## Output Format\nUse ${fallbackOutputType} when no skill is activated. When a skill is activated, its declared output type and output template override this fallback. If multiple skills activate, the most recently activated skill wins.${outputInstructions ? `\n\nFallback instructions only:\n${outputInstructions}` : ""}`
     : (outputInstructions ? `\n## Output Format\n${outputInstructions}` : `\n## Output Format\nReturn ${configuredOutputType}.`);
   const systemContent = [
@@ -1258,12 +1274,16 @@ serve(async (req: Request) => {
   if (providers.length === 0) return sendError("No LLM providers configured", 400);
 
   // Discover MCP tools — filter to agent's assigned servers if agent specifies them
-  const agentMcpIds = activeAgent?.mcpServerIds;
-  // Generic/Free Chat intentionally has no tools. MCP access is only granted
-  // through a configured agent so its server and tool restrictions apply.
-  const mcpServers = activeAgent ? (llmConfig.mcpServers || []).filter((s) => {
-    if (!s.enabled || !s.url?.trim()) return false;
-    return Boolean(agentMcpIds?.includes(s.id || ""));
+  const agentMcpIds = [...new Set([
+    ...(activeAgent?.mcpServerIds ?? []),
+    ...(body.mcpServerIds ?? []),
+  ])];
+  // Generic/Free Chat intentionally has no tools. Workflow nodes and configured
+  // agents can grant explicit MCP access with server/tool restrictions.
+  const hasExplicitMcpAccess = Boolean(activeAgent) || Boolean(body.workflowId && body.nodeId);
+  const mcpServers = hasExplicitMcpAccess ? (llmConfig.mcpServers || []).filter((s) => {
+    if (!s.enabled || s.deletedAt || !s.url?.trim()) return false;
+    return Boolean(agentMcpIds.includes(s.id || ""));
   }) : [];
   const allTools: OpenAITool[] = [];
   const mcpToolBindings = new Map<string, McpToolBinding>();
@@ -1295,7 +1315,10 @@ serve(async (req: Request) => {
     const discovery = await discoverMcpTools(server);
     if (discovery.error) mcpDiscoveryErrors.push(`${server.name || server.url}: ${discovery.error}`);
     if (!discovery.error && discovery.tools.length === 0) mcpDiscoveryErrors.push(`${server.name || server.url}: server advertised no tools`);
-    const allowedNames = activeAgent?.mcpToolFilter?.[server.id ?? ""];
+    const nodeAllowedNames = body.mcpToolFilter?.[server.id ?? ""];
+    const allowedNames = nodeAllowedNames && nodeAllowedNames.length > 0
+      ? nodeAllowedNames
+      : activeAgent?.mcpToolFilter?.[server.id ?? ""];
     const filtered = allowedNames && allowedNames.length > 0
       ? discovery.tools.filter((tool) => allowedNames.includes(tool.rawName))
       : discovery.tools;
@@ -1317,7 +1340,7 @@ serve(async (req: Request) => {
       });
     }
   }
-  if (activeAgent && mcpServers.length > 0 && mcpToolBindings.size === 0 && mcpDiscoveryErrors.length > 0) {
+  if (hasExplicitMcpAccess && mcpServers.length > 0 && mcpToolBindings.size === 0 && mcpDiscoveryErrors.length > 0) {
     return sendError(`Assigned MCP tools are unavailable. ${mcpDiscoveryErrors.join("; ")}`, 502);
   }
 
@@ -1405,7 +1428,7 @@ serve(async (req: Request) => {
             const result = toolName === "activate_agent_skill"
               ? (() => {
                   if (requestedSkill) {
-                    activeOutputType = requestedSkill.outputType || "text";
+                    activeOutputType = forcedNodeOutputType || requestedSkill.outputType || "text";
                     send({ type: "output_type", outputType: activeOutputType });
                   }
                   return requestedSkill

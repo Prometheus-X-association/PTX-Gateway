@@ -6,18 +6,19 @@ import { once } from "node:events";
 import { test } from "node:test";
 
 const encryptionKey = Buffer.alloc(32, 97);
-function snapshot(workflow) {
+function encrypted(value) {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey, iv);
-  const body = Buffer.concat([cipher.update(JSON.stringify({ workflow, llm: { enabled: false, workflows: [workflow] } })), cipher.final(), cipher.getAuthTag()]);
-  return { ciphertext: `${iv.toString("base64")}.${body.toString("base64")}` };
+  const body = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final(), cipher.getAuthTag()]);
+  return `${iv.toString("base64")}.${body.toString("base64")}`;
 }
+function snapshot(workflow) { return { ciphertext: encrypted({ workflow, llm: { enabled: false, workflows: [workflow] } }) }; }
 const node = (id, type, data = {}) => ({ id, type, data: { label: id, ...data } });
 const edges = (...ids) => ids.slice(1).map((target, index) => ({ id: `${ids[index]}-${target}`, source: ids[index], target }));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("worker persists concurrent runs, agent results, failures and paused continuations", { timeout: 40_000 }, async () => {
-  const runs = []; const steps = []; let claimed = 0; let maximumActive = 0; let maintenanceCalls = 0;
+  const runs = []; const steps = []; const heartbeats = []; let claimed = 0; let maximumActive = 0; let maintenanceCalls = 0;
   const org = randomUUID();
   const graph = { nodes: [node("start", "trigger", { inputSources: ["input"] }), node("plugin", "plugin", { code: "return { id: input.input.id };" }), node("agent", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true }), node("end", "output", { renderAs: "json" })], edges: edges("start", "plugin", "agent", "end") };
   function addRun(graph, id) {
@@ -28,6 +29,7 @@ test("worker persists concurrent runs, agent results, failures and paused contin
   }
   const concurrent = Array.from({ length: 4 }, (_, id) => addRun(graph, id));
   const waiting = addRun({ nodes: [node("start", "trigger", { inputSources: ["result"] }), node("ask", "user_input", { question: "Approve?", inputType: "yes_no", answerKey: "approved" }), node("end", "output", { renderAs: "json" })], edges: edges("start", "ask", "end") }, 9);
+  const signalWaiting = addRun({ nodes: [node("start", "trigger"), node("signal", "event", { eventType: "external_signal", signalName: "approval.received" }), node("end", "output", { renderAs: "json" })], edges: edges("start", "signal", "end") }, 11);
   const failed = addRun({ nodes: [node("start", "trigger"), node("fail", "plugin", { code: 'throw new Error("Expected node failure");' }), node("end", "output")], edges: edges("start", "fail", "end") }, 10);
   const server = createServer(async (request, response) => {
     try {
@@ -36,6 +38,18 @@ test("worker persists concurrent runs, agent results, failures and paused contin
       const body = raw ? JSON.parse(raw) : {};
       response.setHeader("Content-Type", "application/json");
       if (url.pathname === "/rest/v1/rpc/maintain_workflow_interactions") { maintenanceCalls++; response.end("null"); return; }
+      if (url.pathname === "/rest/v1/rpc/cleanup_workflow_runs") { response.end("0"); return; }
+      if (url.pathname === "/rest/v1/rpc/cleanup_workflow_worker_heartbeats") { response.end("0"); return; }
+      if (url.pathname === "/rest/v1/rpc/commit_workflow_run_node") {
+        const run = runs.find((item) => item.id === body.p_run_id && item.lease_token === body.p_lease_token && Number(item.state_version || 0) === Number(body.p_expected_state_version));
+        const step = steps.find((item) => item.id === body.p_step_id && item.status === "running");
+        assert.ok(run && step, "Atomic commit must use the active lease, state version and step");
+        Object.assign(run, { checkpoint: body.p_checkpoint, current_node_id: null, current_operation_id: null, current_side_effect_class: null, last_node_id: step.node_id });
+        run.pending_signals = body.p_pending_signals;
+        Object.assign(step, { status: body.p_step_status, output_summary: body.p_step_output, error: body.p_step_error, duration_ms: body.p_step_duration_ms, attempt_count: body.p_step_attempt_count, selected_routes: body.p_selected_routes });
+        if (body.p_state_ciphertext) { run.run_state_ciphertext = body.p_state_ciphertext; run.state_version = Number(run.state_version || 0) + 1; }
+        response.end(JSON.stringify(run.state_version || 0)); return;
+      }
       if (url.pathname === "/rest/v1/rpc/claim_workflow_notification") { response.end("[]"); return; }
       if (url.pathname === "/rest/v1/rpc/claim_workflow_run") {
         assert.deepEqual(body, {}, "Claims must not impose an organization or workflow cap");
@@ -52,7 +66,7 @@ test("worker persists concurrent runs, agent results, failures and paused contin
         response.setHeader("Content-Type", "text/event-stream");
         response.end(`data: ${JSON.stringify({ type: "token", content: JSON.stringify(body.inputData) })}\n\ndata: {"type":"done"}\n\n`); return;
       }
-      const table = url.pathname.endsWith("workflow_runs") ? runs : url.pathname.endsWith("workflow_run_steps") ? steps : null;
+      const table = url.pathname.endsWith("workflow_runs") ? runs : url.pathname.endsWith("workflow_run_steps") ? steps : url.pathname.endsWith("workflow_worker_heartbeats") ? heartbeats : null;
       assert.ok(table, `Unexpected route ${url.pathname}`);
       let rows = table.filter((row) => Array.from(url.searchParams).every(([key, value]) => {
         if (["select", "order", "limit"].includes(key)) return true;
@@ -90,16 +104,22 @@ test("worker persists concurrent runs, agent results, failures and paused contin
     }
   }
   try {
-    await until(() => concurrent.every((run) => run.status === "succeeded") && waiting.status === "waiting_for_input" && failed.status === "failed");
+    await until(() => concurrent.every((run) => run.status === "succeeded") && waiting.status === "waiting_for_input" && signalWaiting.status === "waiting_for_event" && failed.status === "failed");
     concurrent.forEach((run, id) => assert.deepEqual(run.output, { id }));
     assert.ok(maximumActive > 1); assert.equal(failed.failed_node_id, "fail"); assert.match(failed.stop_reason, /Expected node failure/);
     assert.equal(steps.filter((step) => step.run_id === failed.id).at(-1).status, "failed");
     assert.equal(waiting.checkpoint.pending[0].nodeId, "ask");
     assert.deepEqual(waiting.waiting.policy, { responseTimeoutSeconds: 172800, reminderIntervalSeconds: 43200, maxReminders: 3 });
     assert.ok(maintenanceCalls > 0, "Background waiting maintenance must execute independently");
+    assert.equal(signalWaiting.event_wait.signalName, "approval.received");
+    const signalId = randomUUID();
+    Object.assign(signalWaiting, { status: "queued", event_wait: null, pending_signals: [{ id: signalId, name: "approval.received", receivedAt: new Date().toISOString(), ciphertext: encrypted({ approved: true }) }] });
+    await until(() => signalWaiting.status === "succeeded");
+    assert.equal(signalWaiting.output.payload.approved, true);
+    assert.deepEqual(signalWaiting.pending_signals, []);
     Object.assign(waiting, { status: "queued", resume_answer: "yes" });
     await until(() => waiting.status === "succeeded");
-    assert.equal(waiting.output.approved, true); assert.equal(claimed, 7);
+    assert.equal(waiting.output.approved, true); assert.equal(claimed, 9);
     assert.deepEqual(steps.filter((step) => step.run_id === waiting.id).map((step) => [step.node_id, step.status]), [["start", "succeeded"], ["ask", "waiting"], ["ask", "succeeded"], ["end", "succeeded"]]);
   } finally {
     child.kill("SIGTERM");

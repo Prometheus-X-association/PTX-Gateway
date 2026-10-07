@@ -40,7 +40,8 @@ export async function verifyInteractionToken(token: unknown, admin: any) {
   return run;
 }
 export async function resumeRun(admin: any, run: any, body: Record<string, any>) {
-  if (run.status !== "waiting_for_input" || body.nodeId !== run.waiting?.nodeId || (body.waitingVersion && body.waitingVersion !== run.waiting_version)) throw new HttpError(409, "This question is no longer waiting for an answer.");
+  if (typeof body.waitingVersion !== "string" || !body.waitingVersion) throw new HttpError(400, "The question version is required.");
+  if (run.status !== "waiting_for_input" || body.nodeId !== run.waiting?.nodeId || body.waitingVersion !== run.waiting_version) throw new HttpError(409, "This question is no longer waiting for an answer.");
   validateAnswer(run.waiting, body.answer);
   const { data, error } = await admin.rpc("resume_workflow_run", { p_run_id: run.id, p_organization_id: run.organization_id, p_node_id: body.nodeId, p_waiting_version: run.waiting_version, p_answer: body.answer });
   if (error) throw error;

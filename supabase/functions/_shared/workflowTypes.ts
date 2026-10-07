@@ -1,6 +1,6 @@
 // Agentic workflow graph — persisted inside llmInsights.workflows[] in global_configs.
 
-export type NodeType = "trigger" | "document_context" | "retrieval" | "user_input" | "agent" | "api" | "plugin" | "condition" | "router" | "output";
+export type NodeType = "trigger" | "document_context" | "retrieval" | "user_input" | "event" | "agent" | "api" | "plugin" | "condition" | "router" | "output";
 
 // ─── Node data payloads ───────────────────────────────────────────────────────
 
@@ -66,8 +66,32 @@ export interface UserInputNodeData {
   outputSchema?: string;
 }
 
+export interface EventNodeData {
+  label: string;
+  /** State events are satisfied by an upstream write; external signals durably pause the run. */
+  eventType: "state_changed" | "external_signal";
+  stateKey?: string;
+  signalName?: string;
+  description?: string;
+  inputSchema?: string;
+  outputSchema?: string;
+}
+
+export interface WorkflowRetryPolicy {
+  maxAttempts?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  backoff?: "fixed" | "exponential";
+  retryOn?: Array<"timeout" | "network" | "429" | "5xx">;
+}
+
 export interface AgentNodeData {
   label: string;
+  /** Backend execution deadline for this node in seconds (1-600). */
+  timeoutSeconds?: number;
+  /** Agents default to non-idempotent because assigned tools may have side effects. */
+  sideEffectClass?: "read_only" | "idempotent" | "non_idempotent";
+  retryPolicy?: WorkflowRetryPolicy;
   /** "existing" = pick from saved agents; "inline" = define agent here */
   mode: "existing" | "inline";
   // ── existing mode ──
@@ -77,7 +101,7 @@ export interface AgentNodeData {
   inlineSystemPrompt?: string;
   inlineOutputType?: "auto" | "text" | "json" | "html" | "mixed";
   inlineFallbackOutputType?: "text" | "json" | "html" | "mixed";
-  /** Global LLM provider IDs selected for this inline agent, in priority order. */
+  /** Global LLM provider IDs selected for this node, in priority order. Empty/undefined follows the live global provider list. */
   providerIds?: string[];
   /** Providers defined directly on this inline agent node, tried before selected global providers. */
   agentProviders?: Array<{
@@ -89,8 +113,16 @@ export interface AgentNodeData {
     model: string;
     enabled: boolean;
   }>;
-  /** Skills attached directly to an inline workflow agent. Existing agents inherit their saved skills. */
+  /** Skills attached to this node. Existing agents combine these with their saved skills. */
   skillIds?: string[];
+  /** MCP servers granted directly to this node. Existing agents combine these with their saved MCP servers. */
+  mcpServerIds?: string[];
+  /** Optional per-server MCP tool allow-list. Missing/empty entries allow every tool on the selected server. */
+  mcpToolFilter?: Record<string, string[]>;
+  /** When set, the node output contract wins over saved-agent and skill output preferences. */
+  nodeOutputType?: "text" | "json" | "html" | "mixed";
+  /** Node-specific output contract/instructions, including custom formats. */
+  nodeOutputInstructions?: string;
   /** Whether the chat must have an uploaded document before this node can run. */
   requiresDocument?: boolean;
   /**
@@ -131,6 +163,11 @@ export interface ApiKeyValue {
 
 export interface ApiNodeData {
   label: string;
+  /** Backend execution deadline for this node in seconds (1-600). */
+  timeoutSeconds?: number;
+  /** GET defaults to read-only; all other methods default to non-idempotent. */
+  sideEffectClass?: "read_only" | "idempotent" | "non_idempotent";
+  retryPolicy?: WorkflowRetryPolicy;
   url: string;
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   queryParams: ApiKeyValue[];
@@ -212,6 +249,7 @@ export type AnyNodeData =
   | DocumentContextNodeData
   | RetrievalNodeData
   | UserInputNodeData
+  | EventNodeData
   | AgentNodeData
   | ApiNodeData
   | PluginNodeData
@@ -226,6 +264,30 @@ export interface WorkflowNode {
   type: NodeType;
   position: { x: number; y: number };
   data: AnyNodeData;
+  stateReads?: WorkflowStateRead[];
+  stateWrites?: WorkflowStateWrite[];
+}
+
+export interface WorkflowStateRead {
+  key: string;
+  /** Optional name used in projected agent/API/plugin context. */
+  alias?: string;
+  required?: boolean;
+  artifactMode?: "reference" | "content";
+}
+export interface WorkflowArtifactReference {
+  __workflowArtifact: true;
+  id: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+}
+export interface WorkflowStateWrite {
+  key: string;
+  /** Safe path inside the node output; empty selects the complete output. */
+  sourcePath?: string;
+  /** Optional node-level override; otherwise the field reducer is used. */
+  reducer?: WorkflowStateReducer;
 }
 
 export interface WorkflowEdge {
@@ -245,6 +307,30 @@ export interface AgentWorkflow {
   edges: WorkflowEdge[];
 }
 
+export type WorkflowStateValueType = "string" | "number" | "boolean" | "object" | "array" | "any" | "artifact";
+export type WorkflowStateReducer = "replace" | "merge" | "append" | "append_unique" | "sum" | "min" | "max" | "first";
+export interface WorkflowStateField {
+  /** Safe dotted path, for example customer.profile or research.results. */
+  key: string;
+  type: WorkflowStateValueType;
+  required?: boolean;
+  defaultValue?: unknown;
+  sensitive?: boolean;
+  allowedReaders?: string[];
+  allowedWriters?: string[];
+  allowInAgentPrompt?: boolean;
+  allowInApiRequest?: boolean;
+  maxBytes?: number;
+  reducer?: WorkflowStateReducer;
+  /** Required by append_unique and evaluated inside array entries. */
+  identityPath?: string;
+}
+export interface WorkflowStateDefinition {
+  fields: WorkflowStateField[];
+  /** Dynamic values are restricted to state.scratch.* and remain size bounded. */
+  allowDynamicScratch?: boolean;
+}
+
 // ─── Named workflow record ────────────────────────────────────────────────────
 
 export interface WorkflowConfig {
@@ -255,8 +341,35 @@ export interface WorkflowConfig {
   /** Result-page services/service chains where this workflow is offered. Empty means hidden everywhere. */
   targetResources?: string[];
   graph: AgentWorkflow;
+  /** Typed, execution-scoped shared state. */
+  state?: WorkflowStateDefinition;
   createdAt?: string;
-  execution?: { apiEnabled?: boolean; webhookEnabled?: boolean; backendEnabled?: boolean; notifications?: { url?: string; secret?: string; returnUrl?: string; interactionTtlHours?: number; maxAttempts?: number } };
+  /** Soft-delete timestamp. Recycled workflows are purged after 30 days. */
+  deletedAt?: string;
+  /** Remembers whether a recycled workflow was active so restore can reinstate it. */
+  deletedPreviousEnabled?: boolean;
+  /** Monotonic saved revision number. */
+  revision?: number;
+  /** Immutable saved snapshots used for audit and read-only historical viewing. */
+  revisionHistory?: WorkflowRevision[];
+  lastSavedAt?: string;
+  lastSavedBy?: WorkflowRevisionActor;
+  execution?: { apiEnabled?: boolean; webhookEnabled?: boolean; backendEnabled?: boolean; allowedOutboundHosts?: string[]; notifications?: { url?: string; secret?: string; returnUrl?: string; interactionTtlHours?: number; maxAttempts?: number } };
+}
+
+export interface WorkflowRevisionActor {
+  userId?: string;
+  email?: string;
+  name?: string;
+}
+
+export interface WorkflowRevision {
+  id: string;
+  version: number;
+  savedAt: string;
+  savedBy: WorkflowRevisionActor;
+  changes: string[];
+  snapshot: Omit<WorkflowConfig, "revisionHistory">;
 }
 
 // ─── Runtime types ────────────────────────────────────────────────────────────
@@ -268,12 +381,15 @@ export interface WorkflowStepResult {
   input?: unknown;
   error?: string;
   durationMs?: number;
+  attemptCount?: number;
   /** Only set for output nodes — carries the renderAs setting for final display routing */
   renderAs?: OutputNodeData["renderAs"];
 }
 
 export interface WorkflowWaitingState {
   workflowId?: string;
+  /** Unique version for this occurrence of a waiting node. Required by backend resumes. */
+  waitingVersion?: string;
   nodeId: string;
   question: string;
   answerKey: string;
@@ -281,4 +397,17 @@ export interface WorkflowWaitingState {
   options?: string[];
   input: unknown;
   nodeOutputs: Record<string, unknown>;
+}
+
+export interface WorkflowSignal {
+  id: string;
+  name: string;
+  payload: unknown;
+  receivedAt: string;
+}
+
+export interface WorkflowEventWait {
+  nodeId: string;
+  eventType: "external_signal";
+  signalName: string;
 }

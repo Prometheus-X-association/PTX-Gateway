@@ -1,9 +1,9 @@
 import { adminClient } from "../../supabase/functions/_shared/workflowAccess.ts";
-import { collectSecrets, decrypt, hmac, redact, sanitizeOutput } from "../../supabase/functions/_shared/workflowSecurity.ts";
+import { collectSecrets, decrypt, encrypt, hash, hmac, redact, sanitizeOutput } from "../../supabase/functions/_shared/workflowSecurity.ts";
 import { executeWorkflow } from "../../supabase/functions/_shared/workflowExecutor.ts";
 import { runRequest } from "../../supabase/functions/_shared/workflowHttp.ts";
 import { waitPolicy } from "../../supabase/functions/_shared/workflowInteraction.ts";
-import { maintainInteractions } from "./interactions.ts";
+import { maintainInteractions, maintainRetention } from "./interactions.ts";
 import { executeJavascript } from "./sandbox.ts";
 
 const admin = adminClient();
@@ -13,6 +13,8 @@ const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
 if (!internalSecret || !anonKey || !Deno.env.get("WORKFLOW_SECRETS_KEY")) throw new Error("Configure WORKFLOW_INTERNAL_SECRET, WORKFLOW_SECRETS_KEY and SUPABASE_ANON_KEY.");
 const slots = Math.max(1, Math.min(32, Math.floor(Number(Deno.env.get("WORKFLOW_WORKER_CONCURRENCY")) || 4)));
 const active = new Set<Promise<void>>();
+const workerId = crypto.randomUUID();
+const workerStartedAt = new Date().toISOString();
 let stopping = false;
 Deno.addSignalListener("SIGTERM", () => { stopping = true; });
 Deno.addSignalListener("SIGINT", () => { stopping = true; });
@@ -26,7 +28,14 @@ async function executeRun(run: any) {
   let secrets: string[] = [];
   let sequence = 0;
   let stepId: string | null = null;
+  let pendingStep: { status: string; output: unknown; error: unknown; durationMs: number; attemptCount: number } | null = null;
+  let latestRunState: Record<string, unknown> = {};
+  let stateDirty = false;
+  let pendingChangedKeys: string[] = [];
+  let stateVersion = Number(run.state_version ?? 0);
   let currentNode: string | null = null;
+  let pendingSignals: Array<{ id: string; name: string; ciphertext: string; receivedAt: string }> = Array.isArray(run.pending_signals) ? structuredClone(run.pending_signals) : [];
+  let consumedSignalIds: string[] = [];
   const segmentStarted = Date.now();
   const elapsed = () => Number(run.execution_ms ?? 0) + Date.now() - segmentStarted;
   const leaseQuery = () => admin.from("workflow_runs").update({ updated_at: new Date().toISOString() }).eq("id", run.id).eq("organization_id", run.organization_id).eq("lease_token", run.lease_token).eq("status", "running").gt("lease_expires_at", new Date().toISOString());
@@ -53,6 +62,19 @@ async function executeRun(run: any) {
     Math.max(1, run.timeout_seconds * 1000 - Number(run.execution_ms ?? 0)));
   try {
     const { workflow, llm } = await decrypt(run.snapshot.ciphertext);
+    const initialRunState = run.run_state_ciphertext ? await decrypt(run.run_state_ciphertext) : {};
+    if (!initialRunState || typeof initialRunState !== "object" || Array.isArray(initialRunState)) throw new Error("Encrypted workflow run state is invalid.");
+    latestRunState = initialRunState as Record<string, unknown>;
+    const signals = await Promise.all(pendingSignals.map(async (signal) => ({
+      id: String(signal.id), name: String(signal.name), receivedAt: String(signal.receivedAt), payload: await decrypt(String(signal.ciphertext)),
+    })));
+    const sensitiveStatePaths: string[] = (workflow.state?.fields ?? []).filter((field: any) => field.sensitive).map((field: any) => String(field.key));
+    const sensitiveStateStrings = () => sensitiveStatePaths.flatMap((path) => {
+      let value: unknown = latestRunState;
+      for (const part of path.split(".")) value = value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined;
+      if (typeof value === "string") return [value];
+      return value === undefined ? [] : [JSON.stringify(value)];
+    }).filter((value) => value.length >= 6);
     secrets = collectSecrets(llm);
     const { data: last, error: stepError } = await admin.from("workflow_run_steps").select("sequence").eq("organization_id", run.organization_id).eq("run_id", run.id).order("sequence", { ascending: false }).limit(1).maybeSingle();
     if (stepError) throw stepError;
@@ -64,32 +86,62 @@ async function executeRun(run: any) {
       hasDocument: Boolean(input.docText || input.attachments?.length), conversationHistory: input.conversationHistory,
       organizationId: run.organization_id, orgExecutionToken: null, supabaseUrl: Deno.env.get("SUPABASE_URL")!, signal: abort.signal,
       checkpoint: run.checkpoint ?? undefined, resume: run.waiting && run.resume_answer ? { waiting: run.waiting, answer: run.resume_answer } : undefined,
+      stateDefinition: workflow.state, runState: initialRunState as Record<string, unknown>,
+      signals,
       stopOnError: true, executeJavascript: (request) => executeJavascript(request, abort.signal),
-      onStepStart: async (nodeId, value) => {
+      onStepStart: async (nodeId, value, execution) => {
         if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
         currentNode = nodeId;
-        await patch({ current_node_id: nodeId });
+        await patch({ current_node_id: nodeId, current_operation_id: execution.operationId, current_side_effect_class: execution.sideEffectClass });
         const node = workflow.graph.nodes.find((item: any) => item.id === nodeId);
         const { data, error } = await admin.from("workflow_run_steps").insert({ organization_id: run.organization_id, run_id: run.id, sequence: ++sequence,
-          node_id: nodeId, node_name: node.data.label || node.type, node_type: node.type, status: "running", input_summary: redact(value, secrets) }).select("id").single();
+          node_id: nodeId, node_name: node.data.label || node.type, node_type: node.type, status: "running", input_summary: redact(value, secrets),
+          state_read_keys: [...new Set([...(node.stateReads ?? []).map((read: any) => read.key), ...(node.type === "event" && node.data.eventType === "state_changed" ? [node.data.stateKey] : [])])], attempt: execution.attempt, operation_id: execution.operationId, side_effect_class: execution.sideEffectClass }).select("id").single();
         if (error) throw error;
         stepId = data.id;
       },
       onStepDone: async (step) => {
-        await patch({ last_node_id: step.nodeId, ...(step.error ? { failed_node_id: step.nodeId } : {}) });
-        const waiting = step.nodeType === "user_input" && step.output && typeof step.output === "object" && (step.output as any).waiting;
-        const { error } = await admin.from("workflow_run_steps").update({ status: step.error ? "failed" : waiting ? "waiting" : "succeeded", output_summary: redact(step.output, secrets),
-          error: step.error ? redact(step.error, secrets) : null, duration_ms: step.durationMs, finished_at: new Date().toISOString() }).eq("id", stepId).eq("organization_id", run.organization_id);
+        const waiting = ["user_input", "event"].includes(step.nodeType) && step.output && typeof step.output === "object" && (step.output as any).waiting;
+        const redactionSecrets = [...secrets, ...sensitiveStateStrings()];
+        pendingStep = { status: step.error ? "failed" : waiting ? "waiting" : "succeeded", output: redact(step.output, redactionSecrets),
+          error: step.error ? redact(step.error, redactionSecrets) : null, durationMs: Math.max(0, Math.round(step.durationMs ?? 0)), attemptCount: step.attemptCount ?? 1 };
+      },
+      onArtifactCreate: async (nodeId, stateKey, value) => {
+        const serialized = JSON.stringify(value); const size = new TextEncoder().encode(serialized).byteLength;
+        if (size > 25 * 1024 * 1024) throw new Error("Workflow artifact exceeds the 25 MB limit.");
+        const sha256 = await hash(serialized);
+        const { data, error } = await admin.from("workflow_run_artifacts").insert({ organization_id: run.organization_id, run_id: run.id, node_id: nodeId, state_key: stateKey,
+          content_type: "application/json", size_bytes: size, sha256, ciphertext: await encrypt(value) }).select("id").single();
         if (error) throw error;
+        return { __workflowArtifact: true, id: data.id, contentType: "application/json", size, sha256 };
+      },
+      onArtifactRead: async (reference) => {
+        const { data, error } = await admin.from("workflow_run_artifacts").select("ciphertext,sha256,size_bytes").eq("organization_id", run.organization_id).eq("run_id", run.id).eq("id", reference.id).maybeSingle();
+        if (error) throw error;
+        if (!data || data.sha256 !== reference.sha256 || data.size_bytes !== reference.size) throw new Error("Workflow artifact is missing or its metadata does not match state.");
+        return await decrypt(data.ciphertext);
+      },
+      onStateChange: async (state, changedKeys) => { latestRunState = state; stateDirty = true; pendingChangedKeys = [...new Set([...pendingChangedKeys, ...changedKeys])]; },
+      onSignalConsumed: async (signalId) => {
+        pendingSignals = pendingSignals.filter((signal) => signal.id !== signalId);
+        consumedSignalIds.push(signalId);
       },
       onCheckpoint: async (checkpoint) => {
-        await patch({ checkpoint });
-        const { error } = await admin.from("workflow_run_steps").update({ selected_routes: (checkpoint.selectedEdges ?? []).map((edge) => ({ nodeId: edge.target, edgeId: edge.id, branch: edge.sourceHandle })) }).eq("id", stepId).eq("organization_id", run.organization_id);
+        if (!stepId || !pendingStep) throw new Error("Workflow checkpoint has no completed step to commit.");
+        const { data, error } = await admin.rpc("commit_workflow_run_node", { p_run_id: run.id, p_organization_id: run.organization_id, p_lease_token: run.lease_token,
+          p_expected_state_version: stateVersion, p_checkpoint: checkpoint, p_step_id: stepId, p_step_status: pendingStep.status,
+          p_step_output: pendingStep.output, p_step_error: pendingStep.error, p_step_duration_ms: pendingStep.durationMs, p_step_attempt_count: pendingStep.attemptCount,
+          p_selected_routes: (checkpoint.selectedEdges ?? []).map((edge) => ({ nodeId: edge.target, edgeId: edge.id, branch: edge.sourceHandle })),
+          p_changed_keys: pendingChangedKeys,
+          p_pending_signals: pendingSignals,
+          p_consumed_signal_ids: consumedSignalIds,
+          p_state_ciphertext: stateDirty ? await encrypt(latestRunState) : null });
         if (error) throw error;
+        stateVersion = Number(data); stateDirty = false; pendingChangedKeys = []; consumedSignalIds = []; pendingStep = null;
       },
-      onApiRequest: async (_nodeId, config, value) => {
-        const response = await runRequest(config, value, input.resultData, input.userMessage, abort.signal);
-        if (!response.ok) throw new Error(response.error || "API node failed.");
+      onApiRequest: async (_nodeId, config, value, execution, state) => {
+        const response = await runRequest(config, value, input.resultData, input.userMessage, abort.signal, execution as unknown as Record<string, unknown>, workflow.execution?.allowedOutboundHosts, state);
+        if (!response.ok) throw Object.assign(new Error(response.error || "API node failed."), { status: response.status, retryAfterMs: response.retryAfterMs });
         return response.output;
       },
       onAgentStep: async (nodeId, config, prompt, previous) => {
@@ -98,14 +150,21 @@ async function executeRun(run: any) {
           : config.includeResultData ? input.resultData : undefined;
         const { _acc: ignored, ...rest } = previous && typeof previous === "object" && !Array.isArray(previous) ? previous as Record<string, unknown> : {};
         void ignored;
-        const response = await fetch(`${functionsUrl}/chat-with-result`, { method: "POST", signal: abort.signal,
+        const timeoutSeconds = Math.max(1, Math.min(600, Number(config.timeoutSeconds) || 120));
+        let response: Response;
+        try {
+          response = await fetch(`${functionsUrl}/chat-with-result`, { method: "POST", signal: AbortSignal.any([abort.signal, AbortSignal.timeout(timeoutSeconds * 1000)]),
           headers: { "Content-Type": "application/json", apikey: anonKey!, "x-organization-id": run.organization_id,
             "x-workflow-run-id": run.id, "x-workflow-lease": run.lease_token, "x-workflow-signature": await hmac(internalSecret!, `${run.id}.${run.lease_token}`) },
           body: JSON.stringify({ messages: [{ role: "user", content: prompt }], workflowId: run.workflow_id, nodeId, mode: "run", result: context,
             inputData: previous && typeof previous === "object" && !Array.isArray(previous) ? rest : previous,
             attachments: config.includeDocument && config.documentDelivery !== "text" ? input.attachments : [],
             resultContextMode: config.resultContextMode, resultChunkSize: config.resultChunkSize }) });
-        if (!response.ok || !response.body) throw new Error((await response.json().catch(() => ({}))).error || `Agent returned HTTP ${response.status}`);
+        } catch (error) {
+          if (!abort.signal.aborted && error instanceof DOMException && error.name === "TimeoutError") throw new Error(`Agent node execution exceeded ${timeoutSeconds} seconds.`);
+          throw error;
+        }
+        if (!response.ok || !response.body) throw Object.assign(new Error((await response.json().catch(() => ({}))).error || `Agent returned HTTP ${response.status}`), { status: response.status });
         const reader = response.body.getReader(); const decoder = new TextDecoder();
         let buffer = ""; let text = ""; let completed = false;
         function consume(line: string) {
@@ -137,11 +196,15 @@ async function executeRun(run: any) {
       await patch({ status: "waiting_for_input", execution_ms: elapsed(), waiting: { ...result.waiting, policy: waitPolicy(workflow.graph.nodes.find((node: any) => node.id === result.waiting!.nodeId).data), question: sanitizeOutput(result.waiting.question, secrets), options: sanitizeOutput(result.waiting.options, secrets) }, resume_answer: null, stop_reason: redact(result.stopReason, secrets), lease_token: null, lease_expires_at: null });
       return;
     }
+    if (result.eventWait) {
+      await patch({ status: "waiting_for_event", execution_ms: elapsed(), event_wait: result.eventWait, stop_reason: redact(result.stopReason, secrets), lease_token: null, lease_expires_at: null });
+      return;
+    }
     const output = [...result.results].reverse().find((step) => step.nodeType === "output");
     const endedAtOutput = result.results.at(-1)?.nodeType === "output";
     // Final output is private run data; the API applies redaction before returning it.
     await patch({ status: endedAtOutput ? "succeeded" : "incomplete", output: sanitizeOutput(output?.output ?? null, secrets), render_as: output?.renderAs ?? "auto",
-      stop_reason: redact(result.stopReason, secrets), current_node_id: null, waiting: null, resume_answer: null,
+      stop_reason: redact(result.stopReason, secrets), current_node_id: null, waiting: null, event_wait: null, resume_answer: null,
       execution_ms: elapsed(), finished_at: new Date().toISOString(), lease_token: null, lease_expires_at: null });
   } catch (error) {
     if (leaseLost) return;
@@ -150,7 +213,7 @@ async function executeRun(run: any) {
     try {
       if (stepId) await admin.from("workflow_run_steps").update({ status: status === "failed" ? "failed" : status, error: redact(reason, secrets), finished_at: new Date().toISOString() }).eq("id", stepId).eq("organization_id", run.organization_id).eq("status", "running");
       await patch({ status, execution_ms: elapsed(), failed_node_id: status === "cancelled" ? null : currentNode, stop_reason: redact(reason, secrets), finished_at: new Date().toISOString(), lease_token: null, lease_expires_at: null });
-    } catch (persistError) { console.error("Could not finalize workflow run", run.id, String(persistError)); }
+    } catch (persistError) { console.error(JSON.stringify({ event: "workflow_finalize_failed", runId: run.id, organizationId: run.organization_id, error: String(persistError) })); }
   } finally { clearInterval(heartbeat); clearTimeout(deadline); }
 }
 
@@ -159,22 +222,34 @@ let maintenanceBusy = false;
 async function maintenance() {
   if (maintenanceBusy || stopping) return;
   maintenanceBusy = true;
-  try { await maintainInteractions(admin); }
-  catch (error) { console.error("Workflow interaction maintenance failed", String(error)); }
+  try { await maintainInteractions(admin); await maintainRetention(admin); }
+  catch (error) { console.error(JSON.stringify({ event: "workflow_maintenance_failed", workerId, error: String(error) })); }
   finally { maintenanceBusy = false; }
 }
 const maintenanceTimer = setInterval(() => { void maintenance(); }, 1000);
 void maintenance();
-console.info(`Workflow worker ready (${slots} concurrent runs).`);
+let heartbeatBusyGlobal = false;
+async function workerHeartbeat() {
+  if (heartbeatBusyGlobal) return;
+  heartbeatBusyGlobal = true;
+  try { await admin.from("workflow_worker_heartbeats").upsert({ worker_id: workerId, active_runs: active.size, capacity: slots, version: "1", started_at: workerStartedAt, last_seen_at: new Date().toISOString() }); }
+  catch (error) { console.error(JSON.stringify({ event: "workflow_worker_heartbeat_failed", workerId, error: String(error) })); }
+  finally { heartbeatBusyGlobal = false; }
+}
+const workerHeartbeatTimer = setInterval(() => { void workerHeartbeat(); }, 5000);
+void workerHeartbeat();
+console.info(JSON.stringify({ event: "workflow_worker_ready", workerId, capacity: slots }));
 while (!stopping) {
   if (active.size >= slots) { await Promise.race(active); continue; }
   const { data, error } = await admin.rpc("claim_workflow_run", {});
-  if (error) { console.error("Workflow claim failed", error.message); await sleep(2000); continue; }
+  if (error) { console.error(JSON.stringify({ event: "workflow_claim_failed", workerId, error: error.message })); await sleep(2000); continue; }
   const run = data?.[0];
   if (!run) { await sleep(1000); continue; }
-  const task = executeRun(run).catch((error) => console.error("Workflow worker error", run.id, String(error))).finally(() => active.delete(task));
+  const task = executeRun(run).catch((error) => console.error(JSON.stringify({ event: "workflow_worker_error", workerId, runId: run.id, organizationId: run.organization_id, error: String(error) }))).finally(() => active.delete(task));
   active.add(task);
 }
 clearInterval(maintenanceTimer);
+clearInterval(workerHeartbeatTimer);
 await Promise.allSettled(active);
 while (maintenanceBusy) await sleep(100);
+try { await admin.from("workflow_worker_heartbeats").delete().eq("worker_id", workerId); } catch { /* stale heartbeats expire from health views */ }

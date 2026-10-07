@@ -34,6 +34,7 @@ interface LlmProvider {
   apiKey?: string;
   model?: string;
   enabled?: boolean;
+  deletedAt?: string;
   providerType?: "openai" | "anthropic" | "gemini" | "openai_compatible";
 }
 
@@ -49,6 +50,7 @@ interface LlmAgent {
   targetResources?: string[];
   inputSources?: Array<"result" | "document" | "user_upload">;
   enabled?: boolean;
+  deletedAt?: string;
   agentProviders?: LlmProvider[];
   ragSources?: "all" | "result" | "document" | "none";
   ragMode?: "auto" | "chunks" | "none";
@@ -76,7 +78,7 @@ interface LlmInsightsConfig {
 
 const resolveProviders = (cfg: LlmInsightsConfig): LlmProvider[] => {
   if (Array.isArray(cfg.providers) && cfg.providers.length > 0) {
-    return cfg.providers.filter((p) => p.enabled !== false);
+    return cfg.providers.filter((p) => p.enabled !== false && !p.deletedAt);
   }
   // migrate old flat format
   if (cfg.apiKey?.trim()) {
@@ -275,6 +277,10 @@ const toObject = (value: unknown): Record<string, unknown> =>
 
 const publicSafeWorkflows = (workflows: unknown[]): unknown[] => workflows.map((workflow) => {
   const copy = structuredClone(workflow) as Record<string, unknown>;
+  // Revision snapshots are admin-only audit data and may contain historical
+  // node credentials. Never expose them to result-page clients.
+  delete copy.revisionHistory;
+  delete copy.lastSavedBy;
   const graph = toObject(copy.graph);
   if (!Array.isArray(graph.nodes)) return copy;
   graph.nodes = graph.nodes.map((rawNode) => {
@@ -536,7 +542,7 @@ serve(async (req) => {
       // Build safe agent list (no systemPrompt / mcpServerIds exposed to client)
       const agentList = Array.isArray(llmConfig.agents)
         ? llmConfig.agents
-            .filter((a) => a.enabled !== false && Boolean(requestedTargetId) && Array.isArray(a.targetResources) && a.targetResources.includes(requestedTargetId))
+            .filter((a) => a.enabled !== false && !a.deletedAt && Boolean(requestedTargetId) && Array.isArray(a.targetResources) && a.targetResources.includes(requestedTargetId))
             .map((a) => ({
               id: String(a.id || ""),
               name: String(a.name || "Agent"),
@@ -575,7 +581,7 @@ serve(async (req) => {
       const freeChatConfigured = providers.some(providerConfigured);
       const configured = freeChatConfigured ||
         (Array.isArray(llmConfig.agents) && llmConfig.agents.some((agent) =>
-          agent.enabled !== false &&
+          agent.enabled !== false && !agent.deletedAt &&
           Array.isArray(agent.agentProviders) &&
           agent.agentProviders.some((p) => p.enabled !== false && providerConfigured(p))
         ));
@@ -593,7 +599,7 @@ serve(async (req) => {
           workflows: Array.isArray(llmConfig.workflows)
             ? publicSafeWorkflows(llmConfig.workflows.filter((workflow) => {
                 const item = toObject(workflow);
-                return item.enabled !== false && Boolean(requestedTargetId) && Array.isArray(item.targetResources) && item.targetResources.map(String).includes(requestedTargetId);
+                return item.enabled !== false && !item.deletedAt && Boolean(requestedTargetId) && Array.isArray(item.targetResources) && item.targetResources.map(String).includes(requestedTargetId);
               }))
             : [],
         }),

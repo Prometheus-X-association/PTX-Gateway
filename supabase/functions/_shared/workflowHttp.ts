@@ -1,6 +1,8 @@
 type KeyValue = { key?: string; value?: string; enabled?: boolean };
 type ApiConfig = {
   url?: string;
+  timeoutSeconds?: number;
+  sideEffectClass?: "read_only" | "idempotent" | "non_idempotent";
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   queryParams?: KeyValue[];
   headers?: KeyValue[];
@@ -36,9 +38,9 @@ const printable = (value: unknown): string => {
   return typeof value === "string" ? value : JSON.stringify(value);
 };
 
-const interpolate = (template: string, context: { input: unknown; result: unknown; userMessage: string }): string =>
-  template.replace(/\{\{\s*(prevOutput|input|result|userMessage)(?:\.([^}]+))?\s*\}\}/g, (_match, root: string, path?: string) => {
-    const source = root === "result" ? context.result : root === "userMessage" ? context.userMessage : context.input;
+const interpolate = (template: string, context: { input: unknown; result: unknown; userMessage: string; execution?: Record<string, unknown>; state?: Record<string, unknown> }): string =>
+  template.replace(/\{\{\s*(prevOutput|input|result|userMessage|execution|state)(?:\.([^}]+))?\s*\}\}/g, (_match, root: string, path?: string) => {
+    const source = root === "result" ? context.result : root === "userMessage" ? context.userMessage : root === "execution" ? context.execution : root === "state" ? context.state : context.input;
     return printable(path ? readPath(source, path.trim()) : source);
   });
 
@@ -65,15 +67,26 @@ export const assertPublicUrl = async (url: URL): Promise<void> => {
   if (addresses.some(blockedHostname)) throw new Error("API URLs resolving to a private or local network are not allowed.");
 };
 
-const forbiddenHeader = (name: string): boolean =>
-  ["host", "content-length", "connection", "transfer-encoding", "upgrade", "proxy-authorization", "proxy-authenticate"].includes(name.toLowerCase());
+export const assertAllowedOutboundUrl = async (url: URL, allowedHosts?: string[]): Promise<void> => {
+  await assertPublicUrl(url);
+  if (!allowedHosts?.length) return;
+  const hostname = url.hostname.toLocaleLowerCase().replace(/^\[|\]$/g, "");
+  const permitted = allowedHosts.some((entry) => {
+    const rule = entry.trim().toLocaleLowerCase().replace(/^\[|\]$/g, "");
+    return rule.startsWith("*.") ? hostname.endsWith(rule.slice(1)) && hostname !== rule.slice(2) : hostname === rule;
+  });
+  if (!permitted) throw new Error(`Outbound hostname "${hostname}" is not allowed for this workflow.`);
+};
 
-export const runRequest = async (config: ApiConfig, input: unknown, result: unknown, userMessage: string, signal?: AbortSignal) => {
-  const context = { input, result, userMessage };
+const forbiddenHeader = (name: string): boolean =>
+  ["host", "content-length", "connection", "transfer-encoding", "upgrade", "proxy-authorization", "proxy-authenticate", "forwarded", "via", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "cf-connecting-ip", "true-client-ip"].includes(name.toLowerCase());
+
+export const runRequest = async (config: ApiConfig, input: unknown, result: unknown, userMessage: string, signal?: AbortSignal, execution?: Record<string, unknown>, allowedHosts?: string[], state?: Record<string, unknown>) => {
+  const context = { input, result, userMessage, execution, state };
   const rawUrl = interpolate(config.url?.trim() || "", context);
   let url: URL;
   try { url = new URL(rawUrl); } catch { throw new Error("API URL is invalid after resolving dynamic values."); }
-  await assertPublicUrl(url);
+  await assertAllowedOutboundUrl(url, allowedHosts);
 
   for (const row of config.queryParams ?? []) {
     if (row.enabled === false || !row.key?.trim()) continue;
@@ -94,6 +107,7 @@ export const runRequest = async (config: ApiConfig, input: unknown, result: unkn
     if (config.apiKeyLocation === "query") url.searchParams.set(config.apiKeyName, config.apiKeyValue);
     else headers.set(config.apiKeyName, config.apiKeyValue);
   }
+  if (config.sideEffectClass === "idempotent" && execution?.operationId && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", String(execution.operationId));
 
   const method = config.method ?? "GET";
   let requestBody: string | undefined;
@@ -108,8 +122,16 @@ export const runRequest = async (config: ApiConfig, input: unknown, result: unkn
   }
 
   const started = performance.now();
-  const response = await fetch(url, { method, headers, body: requestBody, redirect: "manual", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) });
+  const timeoutMs = Math.round(Math.max(1, Math.min(600, Number(config.timeoutSeconds) || 20)) * 1000);
+  let response: Response;
+  try {
+    response = await fetch(url, { method, headers, body: requestBody, redirect: "manual", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    if (!signal?.aborted && error instanceof DOMException && error.name === "TimeoutError") throw new Error(`API node execution exceeded ${timeoutMs / 1000} seconds.`);
+    throw error;
+  }
   const raw = await response.text();
+  console.info(JSON.stringify({ event: "workflow_http", hostname: url.hostname, method, status: response.status, durationMs: Math.round(performance.now() - started) }));
   if (raw.length > 2_000_000) throw new Error("API response exceeds the 2 MB workflow limit.");
   let data: unknown = raw;
   const responseType = config.responseType ?? "auto";
@@ -122,5 +144,7 @@ export const runRequest = async (config: ApiConfig, input: unknown, result: unkn
   }
   const output = readPath(data, config.outputPath ?? "");
   if (config.outputPath?.trim() && output === undefined) throw new Error(`Output data path "${config.outputPath}" was not found in the API response.`);
-  return { ok: response.ok, status: response.status, statusText: response.statusText, durationMs: Math.round(performance.now() - started), headers: safeHeaders, data, output, error: response.ok ? undefined : `API returned HTTP ${response.status} ${response.statusText}` };
+  const retryAfter = response.headers.get("retry-after");
+  const retryAfterMs = retryAfter ? (/^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now())) : undefined;
+  return { ok: response.ok, status: response.status, statusText: response.statusText, durationMs: Math.round(performance.now() - started), headers: safeHeaders, data, output, retryAfterMs, error: response.ok ? undefined : `API returned HTTP ${response.status} ${response.statusText}` };
 };

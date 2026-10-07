@@ -95,6 +95,7 @@ serve(async (request) => {
     if (!orgId) return json({ ok: false, error: "Unauthorized workflow API request." }, 401);
 
     let config: ApiConfig | undefined;
+    let allowedOutboundHosts: string[] | undefined;
     if (body.mode === "test") {
       if (!signedIn || !requestedOrgId || requestedOrgId !== orgId) return json({ ok: false, error: "An authenticated organization admin is required to test API nodes." }, 403);
       const { data: role } = await signedIn.client.from("user_roles").select("role").eq("organization_id", orgId).eq("user_id", signedIn.user.id).in("role", ["admin", "super_admin"]).maybeSingle();
@@ -105,13 +106,15 @@ serve(async (request) => {
       const { data: row, error } = await admin.from("global_configs").select("features").eq("organization_id", orgId).maybeSingle();
       if (error || !row) return json({ ok: false, error: "Organization workflow configuration was not found." }, 404);
       const llm = object(object(row.features).llmInsights);
-      const workflow = (Array.isArray(llm.workflows) ? llm.workflows : []).map(object).find((item) => item.id === body.workflowId && item.enabled !== false);
+      const workflow = (Array.isArray(llm.workflows) ? llm.workflows : []).map(object).find((item) => item.id === body.workflowId && item.enabled !== false && !item.deletedAt);
+      const execution = object(workflow?.execution);
+      allowedOutboundHosts = Array.isArray(execution.allowedOutboundHosts) ? execution.allowedOutboundHosts.map(String) : undefined;
       const graph = object(workflow?.graph);
       const node = (Array.isArray(graph.nodes) ? graph.nodes : []).map(object).find((item) => item.id === body.nodeId && item.type === "api");
       config = node ? object(node.data) as ApiConfig : undefined;
     }
     if (!config?.url?.trim()) return json({ ok: false, error: "API node configuration was not found or has no URL." }, 400);
-    return json(await runRequest(config, body.input, body.result, body.userMessage ?? ""));
+    return json(await runRequest(config, body.input, body.result, body.userMessage ?? "", undefined, undefined, allowedOutboundHosts));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return json({ ok: false, error: message }, 200);

@@ -21,6 +21,7 @@ function loadTypescript(path) {
 
 const { resolveSavedWorkflowAgent, resolveWorkflowResultContext } = loadTypescript("../supabase/functions/chat-with-result/workflowAgent.ts");
 const { executeWorkflow } = loadTypescript("../src/lib/workflowExecutor.ts");
+const { validateSerializableData, MAX_NODE_OUTPUT_BYTES, MAX_CHECKPOINT_BYTES, nodeSideEffectClass } = loadTypescript("../supabase/functions/_shared/workflowExecutor.ts");
 const { loadWorkflowForNewRun } = loadTypescript("../src/lib/workflowRun.ts");
 
 const savedWorkflow = (agentId) => ({
@@ -32,6 +33,59 @@ const savedWorkflow = (agentId) => ({
     ],
     edges: [{ id: "edge", source: "start", target: "agent" }],
   },
+});
+
+test("workflow persistence rejects oversized, circular and deeply nested values", () => {
+  assert.doesNotThrow(() => validateSerializableData({ ok: true }, "Output", MAX_NODE_OUTPUT_BYTES));
+  assert.throws(() => validateSerializableData("x".repeat(MAX_NODE_OUTPUT_BYTES + 1), "Output", MAX_NODE_OUTPUT_BYTES), /5 MB limit/);
+  const circular = {}; circular.self = circular;
+  assert.throws(() => validateSerializableData(circular, "Output", MAX_NODE_OUTPUT_BYTES), /circular reference/);
+  let deep = {}; let current = deep;
+  for (let index = 0; index < 52; index++) current = current.next = {};
+  assert.throws(() => validateSerializableData(deep, "Output", MAX_CHECKPOINT_BYTES), /nesting depth/);
+});
+
+test("node side-effect defaults are conservative and operation IDs are stable", async () => {
+  const graph = {
+    nodes: [
+      { id: "start", type: "trigger", data: { inputSources: ["result"] } },
+      { id: "get", type: "api", data: { method: "GET" } },
+      { id: "post", type: "api", data: { method: "POST" } },
+      { id: "agent", type: "agent", data: { mode: "existing", agentId: "saved" } },
+    ], edges: [],
+  };
+  assert.equal(nodeSideEffectClass(graph.nodes[0]), "pure");
+  assert.equal(nodeSideEffectClass(graph.nodes[1]), "read_only");
+  assert.equal(nodeSideEffectClass(graph.nodes[2]), "non_idempotent");
+  assert.equal(nodeSideEffectClass(graph.nodes[3]), "non_idempotent");
+  const starts = [];
+  await executeWorkflow({ nodes: [graph.nodes[0]], edges: [] }, {
+    runId: "run-a", resultData: {}, docText: null, userMessage: "Run",
+    onAgentStep: async () => "", onApiRequest: async () => ({}), onStepDone: () => {},
+    onStepStart: (_id, _input, execution) => starts.push(execution),
+  });
+  assert.equal(starts[0].operationId, "run-a.start.1");
+  assert.equal(starts[0].sideEffectClass, "pure");
+});
+
+test("transient retries are bounded and never replay non-idempotent nodes", async () => {
+  const run = async (data) => {
+    let calls = 0;
+    const result = await executeWorkflow({ nodes: [
+      { id: "start", type: "trigger", data: { inputSources: ["result"] } },
+      { id: "api", type: "api", data },
+      { id: "end", type: "output", data: {} },
+    ], edges: [{ id: "a", source: "start", target: "api" }, { id: "b", source: "api", target: "end" }] }, {
+      resultData: {}, docText: null, userMessage: "Run", stopOnError: true,
+      onAgentStep: async () => "", onStepDone: () => {},
+      onApiRequest: async () => { calls++; if (calls < 3) throw Object.assign(new Error("HTTP 503"), { status: 503 }); return { ok: true }; },
+    });
+    return { calls, result };
+  };
+  const safe = await run({ method: "GET", retryPolicy: { maxAttempts: 3, initialDelayMs: 0, maxDelayMs: 0 } });
+  assert.equal(safe.calls, 3); assert.equal(safe.result.results[1].attemptCount, 3); assert.equal(safe.result.error, undefined);
+  const unsafe = await run({ method: "POST", retryPolicy: { maxAttempts: 3, initialDelayMs: 0, maxDelayMs: 0 } });
+  assert.equal(unsafe.calls, 1); assert.match(unsafe.result.error, /503/);
 });
 
 test("each new run fetches and executes the latest saved graph", async () => {
@@ -78,17 +132,26 @@ test("deleted, disabled, mismatched and empty saved workflows cannot start", asy
   }
 });
 
-test("switching to an existing agent clears every stale inline override", () => {
+test("switching to an existing agent clears inline provider overrides but keeps node capabilities", () => {
   const staleRequest = {
     systemPrompt: "Old inline prompt", outputType: "html", fallbackOutputType: "html",
-    skillIds: ["old-skill"], providerIds: ["old-provider"], agentProviders: [{ id: "old" }],
+    skillIds: ["node-skill"], providerIds: ["old-provider"], agentProviders: [{ id: "old" }],
   };
   const resolved = { ...staleRequest, ...resolveSavedWorkflowAgent({
     mode: "existing", agentId: "updated-agent", inlineSystemPrompt: "Old inline prompt",
-    skillIds: ["old-skill"], providerIds: ["old-provider"],
+    skillIds: ["node-skill"], mcpServerIds: ["node-mcp"], providerIds: ["old-provider"],
+    nodeOutputType: "json", nodeOutputInstructions: "Return { ok: boolean }",
   }) };
   assert.equal(resolved.agentId, "updated-agent");
-  for (const key of Object.keys(staleRequest)) assert.equal(resolved[key], undefined, key);
+  assert.equal(resolved.systemPrompt, undefined);
+  assert.equal(resolved.outputType, undefined);
+  assert.equal(resolved.fallbackOutputType, undefined);
+  assert.equal(resolved.providerIds, undefined);
+  assert.equal(resolved.agentProviders, undefined);
+  assert.deepEqual(resolved.skillIds, ["node-skill"]);
+  assert.deepEqual(resolved.mcpServerIds, ["node-mcp"]);
+  assert.equal(resolved.nodeOutputType, "json");
+  assert.equal(resolved.nodeOutputInstructions, "Return { ok: boolean }");
 });
 
 test("inline nodes use current saved skills, prompts and providers", () => {
@@ -97,7 +160,8 @@ test("inline nodes use current saved skills, prompts and providers", () => {
     skillIds: ["new-skill"], providerIds: ["new-provider"], agentProviders: [{ id: "new" }],
   });
   assert.deepEqual(resolved, { agentId: undefined, systemPrompt: "Updated prompt", outputType: "auto",
-    fallbackOutputType: "json", skillIds: ["new-skill"], providerIds: ["new-provider"], agentProviders: [{ id: "new" }],
+    fallbackOutputType: "json", skillIds: ["new-skill"], mcpServerIds: [], mcpToolFilter: {},
+    providerIds: ["new-provider"], agentProviders: [{ id: "new" }], nodeOutputType: undefined, nodeOutputInstructions: undefined,
   });
 });
 
@@ -105,7 +169,7 @@ test("unconfigured existing nodes fail instead of using generic chat", () => {
   assert.throws(() => resolveSavedWorkflowAgent({ mode: "existing", agentId: " " }), /Select an existing agent/);
 });
 
-async function runAgent(data) {
+async function runAgent(data, response = "Updated response") {
   const calls = [];
   const result = await executeWorkflow({
     nodes: [
@@ -114,7 +178,7 @@ async function runAgent(data) {
     ], edges: [{ id: "edge", source: "start", target: "agent" }],
   }, {
     resultData: { current: true }, userMessage: "Run", docText: null, stopOnError: true,
-    onAgentStep: async (...args) => { calls.push(args); return "Updated response"; },
+    onAgentStep: async (...args) => { calls.push(args); return response; },
     onStepDone: () => {},
   });
   return { result, calls };
@@ -128,7 +192,27 @@ test("executor ignores retained inline settings after switching to an existing a
   assert.equal(calls.length, 1);
   assert.equal(calls[0][1].agentId, "updated-agent");
   assert.equal(calls[0][1].inline, undefined);
+  assert.deepEqual(calls[0][1].overrides.skillIds, ["old-skill"]);
   assert.equal(calls[0][1].includeResultData, true);
+});
+
+test("node skills, MCP restrictions, and forced output reach both agent modes", async () => {
+  for (const mode of ["existing", "inline"]) {
+    const { calls } = await runAgent({ mode, agentId: "saved-agent", inlineSystemPrompt: "Do the work",
+      skillIds: ["node-skill"], mcpServerIds: ["reports"], mcpToolFilter: { reports: ["generate"] },
+      nodeOutputType: "json", nodeOutputInstructions: "Return exactly { ok: boolean }" });
+    assert.deepEqual(calls[0][1].overrides, {
+      skillIds: ["node-skill"], mcpServerIds: ["reports"], mcpToolFilter: { reports: ["generate"] },
+      nodeOutputType: "json", nodeOutputInstructions: "Return exactly { ok: boolean }",
+    });
+  }
+});
+
+test("forced JSON node contracts preserve structured values and reject invalid output", async () => {
+  const valid = await runAgent({ mode: "existing", agentId: "saved", nodeOutputType: "json" }, '{"ok":true}');
+  assert.deepEqual(valid.result.results.find((step) => step.nodeId === "agent").output, { ok: true });
+  const invalid = await runAgent({ mode: "existing", agentId: "saved", nodeOutputType: "json" }, "not json");
+  assert.match(invalid.result.results.find((step) => step.nodeId === "agent").error, /required JSON output contract/);
 });
 
 test("executor stops before calling a provider when no existing agent is selected", async () => {

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Plus, Pencil, Trash2, Play, Square, ChevronDown, ChevronUp,
-  GitBranch, Code2, Bot, Globe2, Route, X, Copy,
+  Plus, Pencil, Play, Square, ChevronDown, ChevronUp,
+  GitBranch, Code2, Bot, Globe2, Route, X, Copy, History, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { ConfirmRecycleButton, RecycleBinPanel } from "@/components/admin/RecycleBinControls";
+import { recycleExpiry } from "@/components/admin/recycleBin";
 import { WorkflowOperationsPanel } from "@/components/admin/WorkflowOperationsPanel";
 import { WorkflowBuilder } from "@/components/admin/WorkflowBuilder";
 import {
@@ -16,11 +20,16 @@ import {
   type ChatAvailabilityTarget,
 } from "@/components/admin/ChatAvailabilitySelector";
 import type { WorkflowConfig, AgentWorkflow } from "@/types/workflow";
-import type { AgentStub, ProviderStub, SkillStub } from "@/components/admin/WorkflowBuilder";
+import type { AgentStub, McpServerStub, ProviderStub, SkillStub } from "@/components/admin/WorkflowBuilder";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+const cloneWorkflow = (workflow: WorkflowConfig): WorkflowConfig =>
+  typeof structuredClone === "function"
+    ? structuredClone(workflow)
+    : JSON.parse(JSON.stringify(workflow)) as WorkflowConfig;
 
 const NODE_TYPE_COLORS: Record<string, string> = {
   trigger:   "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30",
@@ -75,60 +84,76 @@ interface EditPanelProps {
   agents: AgentStub[];
   skills: SkillStub[];
   globalProviders: ProviderStub[];
+  mcpServers: McpServerStub[];
   organizationId?: string;
   onChange: (updated: WorkflowConfig) => void;
   onClose: () => void;
 }
 
-const EditPanel = ({ config, availabilityTargets, agents, skills, globalProviders, organizationId, onChange, onClose }: EditPanelProps) => {
+const EditPanel = ({ config, availabilityTargets, agents, skills, globalProviders, mcpServers, organizationId, onChange, onClose }: EditPanelProps) => {
   const [traceNodeId, setTraceNodeId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [viewedRevisionId, setViewedRevisionId] = useState<string | null>(null);
+  const viewedRevision = config.revisionHistory?.find((revision) => revision.id === viewedRevisionId);
+  const displayConfig = viewedRevision ? { ...viewedRevision.snapshot, revisionHistory: config.revisionHistory } as WorkflowConfig : config;
+  const isHistorical = Boolean(viewedRevision);
+  const change = (updated: WorkflowConfig) => { if (!isHistorical) onChange(updated); };
+  const revisions = [...(config.revisionHistory ?? [])].sort((left, right) => right.version - left.version);
   return (
   <div className="border-t bg-muted/20 p-4 space-y-4">
     <div className="flex items-center justify-between">
-      <h4 className="text-sm font-semibold">Edit: {config.name}</h4>
-      <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
-        <X className="h-4 w-4" />
-      </button>
+      <div><h4 className="text-sm font-semibold">{isHistorical ? "View" : "Edit"}: {displayConfig.name}</h4><p className="text-[10px] text-muted-foreground">{isHistorical ? `Saved version ${viewedRevision?.version}` : config.revision ? `Current editable draft · latest saved version ${config.revision}` : "Not saved with version tracking yet"}</p></div>
+      <div className="flex items-center gap-1"><Button type="button" variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setShowHistory(true)}><History className="h-3.5 w-3.5" />Version history</Button><button onClick={onClose} className="p-1 text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button></div>
     </div>
 
-    <div className="grid grid-cols-2 gap-3">
+    {isHistorical && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2"><div><p className="text-xs font-semibold">Read-only saved version {viewedRevision?.version}</p><p className="text-[10px] text-muted-foreground">Loading history never replaces the latest saved workflow or the current draft.</p></div><div className="flex gap-1">{revisions[0] && viewedRevisionId !== revisions[0].id && <Button type="button" size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={() => setViewedRevisionId(revisions[0].id)}><History className="h-3.5 w-3.5" />Latest saved</Button>}<Button type="button" size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={() => setViewedRevisionId(null)}><RotateCcw className="h-3.5 w-3.5" />Current draft</Button></div></div>}
+
+    <Dialog open={showHistory} onOpenChange={setShowHistory}><DialogContent className="flex max-h-[85vh] max-w-2xl flex-col overflow-hidden"><DialogHeader><DialogTitle>Workflow version history</DialogTitle><DialogDescription>Every saved workflow change records when it was saved, what changed, and who made it.</DialogDescription></DialogHeader><div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">{revisions.length === 0 ? <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No saved versions yet. Save Agent Operations to create the first tracked version.</p> : revisions.map((revision, index) => {
+      const actor = revision.savedBy.name || revision.savedBy.email || revision.savedBy.userId || "Unknown user";
+      return <div key={revision.id} className="rounded-lg border p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-semibold">Version {revision.version} {index === 0 && <Badge variant="secondary" className="ml-1 text-[9px]">Latest saved</Badge>}</p><p className="text-[10px] text-muted-foreground">{new Date(revision.savedAt).toLocaleString()} · {actor}</p></div><AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="outline" className="h-7 text-xs" disabled={viewedRevisionId === revision.id}>Load version</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Load version {revision.version}?</AlertDialogTitle><AlertDialogDescription>This opens the saved version in read-only mode. Your latest workflow remains unchanged and you can return to it at any time.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => { setViewedRevisionId(revision.id); setShowHistory(false); }}>Load read-only version</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div><ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] text-muted-foreground">{revision.changes.map((item, changeIndex) => <li key={`${revision.id}-${changeIndex}`}>{item}</li>)}</ul></div>;
+    })}</div></DialogContent></Dialog>
+
+    <fieldset disabled={isHistorical} className="space-y-4 disabled:opacity-75"><div className="grid grid-cols-2 gap-3">
       <div className="space-y-1">
         <Label className="text-xs">Name</Label>
         <Input
           className="h-7 text-xs"
-          value={config.name}
-          onChange={(e) => onChange({ ...config, name: e.target.value })}
+          value={displayConfig.name}
+          onChange={(e) => change({ ...displayConfig, name: e.target.value })}
         />
       </div>
       <div className="space-y-1">
         <Label className="text-xs">Description</Label>
         <Input
           className="h-7 text-xs"
-          value={config.description}
+          value={displayConfig.description}
           placeholder="What does this workflow do?"
-          onChange={(e) => onChange({ ...config, description: e.target.value })}
+          onChange={(e) => change({ ...displayConfig, description: e.target.value })}
         />
       </div>
     </div>
 
     <ChatAvailabilitySelector
-      targetIds={config.targetResources || []}
+      targetIds={displayConfig.targetResources || []}
       targets={availabilityTargets}
-      onChange={(targetResources) => onChange({ ...config, targetResources })}
+      onChange={(targetResources) => change({ ...displayConfig, targetResources })}
     />
 
-    <WorkflowOperationsPanel config={config} organizationId={organizationId} onChange={onChange} onFocusNode={setTraceNodeId} />
+    <WorkflowOperationsPanel config={displayConfig} organizationId={organizationId} onChange={change} onFocusNode={setTraceNodeId} />
 
     <WorkflowBuilder
-      workflowId={config.id}
+      workflowId={displayConfig.id}
       traceNodeId={traceNodeId}
-      workflow={config.graph}
+      workflow={displayConfig.graph}
+      state={displayConfig.state}
       agents={agents}
       skills={skills}
       globalProviders={globalProviders}
+      mcpServers={mcpServers}
       organizationId={organizationId}
-      onChange={(graph: AgentWorkflow) => onChange({ ...config, graph })}
+      onChange={(graph: AgentWorkflow) => change({ ...displayConfig, graph })}
     />
+    </fieldset>
   </div>
 );
 };
@@ -144,6 +169,7 @@ interface RowProps {
   agents: AgentStub[];
   skills: SkillStub[];
   globalProviders: ProviderStub[];
+  mcpServers: McpServerStub[];
   organizationId?: string;
   onToggleEdit: () => void;
   onChange: (updated: WorkflowConfig) => void;
@@ -153,7 +179,7 @@ interface RowProps {
 }
 
 const WorkflowRow = ({
-  config, index, total, isEditing, availabilityTargets, agents, skills, globalProviders, organizationId,
+  config, index, total, isEditing, availabilityTargets, agents, skills, globalProviders, mcpServers, organizationId,
   onToggleEdit, onChange, onDuplicate, onRemove, onMove,
 }: RowProps) => {
   const nodeCount = config.graph.nodes.length;
@@ -244,13 +270,7 @@ const WorkflowRow = ({
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
-          <button
-            title="Delete"
-            onClick={onRemove}
-            className="h-7 w-7 flex items-center justify-center rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <ConfirmRecycleButton name={config.name} itemLabel="workflow" onConfirm={onRemove} />
         </div>
       </div>
 
@@ -262,6 +282,7 @@ const WorkflowRow = ({
           agents={agents}
           skills={skills}
           globalProviders={globalProviders}
+          mcpServers={mcpServers}
           organizationId={organizationId}
           onChange={onChange}
           onClose={onToggleEdit}
@@ -279,44 +300,91 @@ interface WorkflowsManagementProps {
   agents: AgentStub[];
   skills: SkillStub[];
   globalProviders: ProviderStub[];
+  mcpServers: McpServerStub[];
   organizationId?: string;
   onChange: (workflows: WorkflowConfig[]) => void;
 }
 
-export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, skills, globalProviders, organizationId, onChange }: WorkflowsManagementProps) => {
+export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, skills, globalProviders, mcpServers, organizationId, onChange }: WorkflowsManagementProps) => {
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showRecycleBin, setShowRecycleBin] = useState(false);
+  const activeWorkflows = workflows.filter((workflow) => !workflow.deletedAt);
+  const recycledWorkflows = workflows.filter((workflow) => Boolean(workflow.deletedAt));
 
-  const update = (index: number, updated: WorkflowConfig) => {
-    onChange(workflows.map((w, i) => (i === index ? updated : w)));
+  useEffect(() => {
+    let timer: number | undefined;
+    const cleanAndSchedule = () => {
+      const now = Date.now();
+      const retained = workflows.filter((workflow) => !workflow.deletedAt || recycleExpiry(workflow) > now);
+      if (retained.length !== workflows.length) {
+        onChange(retained);
+        return;
+      }
+      const nextExpiry = Math.min(...workflows.filter((workflow) => workflow.deletedAt).map(recycleExpiry));
+      if (Number.isFinite(nextExpiry)) {
+        // Browser timers cap near 24.8 days, so long retention windows are
+        // rechecked until the exact expiry is reached.
+        timer = window.setTimeout(cleanAndSchedule, Math.max(1_000, Math.min(nextExpiry - now, 2_000_000_000)));
+      }
+    };
+    cleanAndSchedule();
+    return () => { if (timer !== undefined) window.clearTimeout(timer); };
+  }, [workflows, onChange]);
+
+  const update = (id: string, updated: WorkflowConfig) => {
+    onChange(workflows.map((workflow) => workflow.id === id ? updated : workflow));
   };
 
-  const remove = (index: number) => {
-    const next = workflows.filter((_, i) => i !== index);
-    onChange(next);
-    if (editingId === workflows[index].id) setEditingId(null);
+  const recycle = (id: string) => {
+    const deletedAt = new Date().toISOString();
+    onChange(workflows.map((workflow) => workflow.id === id ? {
+      ...workflow,
+      enabled: false,
+      deletedAt,
+      deletedPreviousEnabled: workflow.enabled,
+    } : workflow));
+    if (editingId === id) setEditingId(null);
   };
 
-  const duplicate = (index: number) => {
-    const src = workflows[index];
+  const duplicate = (id: string) => {
+    const sourceIndex = workflows.findIndex((workflow) => workflow.id === id);
+    const src = workflows[sourceIndex];
+    if (!src || src.deletedAt) return;
+    const cloned = cloneWorkflow(src);
     const copy: WorkflowConfig = {
-      ...src,
+      ...cloned,
       id: uid(),
       name: `${src.name} (copy)`,
       enabled: false,
       execution: { ...src.execution, apiEnabled: false, webhookEnabled: false },
       createdAt: new Date().toISOString(),
+      deletedAt: undefined,
+      deletedPreviousEnabled: undefined,
+      revision: undefined,
+      revisionHistory: [],
+      lastSavedAt: undefined,
+      lastSavedBy: undefined,
     };
     const next = [...workflows];
-    next.splice(index + 1, 0, copy);
+    next.splice(sourceIndex + 1, 0, copy);
     onChange(next);
   };
 
   const move = (from: number, to: number) => {
-    const next = [...workflows];
+    const next = [...activeWorkflows];
     const [item] = next.splice(from, 1);
     next.splice(to, 0, item);
-    onChange(next);
+    onChange([...next, ...recycledWorkflows]);
   };
+
+  const restore = (id: string) => onChange(workflows.map((workflow) => workflow.id === id ? {
+    ...workflow,
+    enabled: workflow.deletedPreviousEnabled === true,
+    deletedAt: undefined,
+    deletedPreviousEnabled: undefined,
+  } : workflow));
+
+  const permanentlyDelete = (id: string) => onChange(workflows.filter((workflow) => workflow.id !== id));
 
   const addNew = () => {
     const w = emptyWorkflow();
@@ -324,21 +392,22 @@ export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, sk
     setEditingId(w.id);
   };
 
-  const activeCount = workflows.filter((w) => w.enabled).length;
+  const activeCount = activeWorkflows.filter((w) => w.enabled).length;
 
   return (
     <div className="space-y-3">
       {/* Summary badges */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span>{workflows.length} workflow{workflows.length !== 1 ? "s" : ""}</span>
+        <span>{activeWorkflows.length} workflow{activeWorkflows.length !== 1 ? "s" : ""}</span>
         {activeCount > 0 && (
           <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-400/40 bg-emerald-500/10">
             {activeCount} active
           </Badge>
         )}
+        <div className="ml-auto"><RecycleBinPanel title="Workflow recycle bin" itemLabel="workflow" items={recycledWorkflows} open={showRecycleBin} onToggle={() => setShowRecycleBin((value) => !value)} onRestore={restore} onDelete={permanentlyDelete} /></div>
       </div>
 
-      {workflows.length === 0 ? (
+      {activeWorkflows.length === 0 ? (
         <div className="border border-dashed rounded-lg p-6 text-center space-y-2">
           <p className="text-sm text-muted-foreground">No workflows yet.</p>
           <p className="text-xs text-muted-foreground">Add one below, or load a built-in example from the canvas toolbar.</p>
@@ -356,22 +425,23 @@ export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, sk
           </div>
 
           {/* Rows */}
-          {workflows.map((wf, i) => (
+          {activeWorkflows.map((wf, i) => (
             <WorkflowRow
               key={wf.id}
               config={wf}
               index={i}
-              total={workflows.length}
+              total={activeWorkflows.length}
               isEditing={editingId === wf.id}
               availabilityTargets={availabilityTargets}
               agents={agents}
               skills={skills}
               globalProviders={globalProviders}
+              mcpServers={mcpServers}
               organizationId={organizationId}
               onToggleEdit={() => setEditingId(editingId === wf.id ? null : wf.id)}
-              onChange={(updated) => update(i, updated)}
-              onDuplicate={() => duplicate(i)}
-              onRemove={() => remove(i)}
+              onChange={(updated) => update(wf.id, updated)}
+              onDuplicate={() => duplicate(wf.id)}
+              onRemove={() => recycle(wf.id)}
               onMove={move}
             />
           ))}

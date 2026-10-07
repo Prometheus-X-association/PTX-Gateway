@@ -54,7 +54,7 @@ export async function loadWorkflow(admin: ReturnType<typeof adminClient>, orgId:
   const { data, error } = await admin.from("global_configs").select("features").eq("organization_id", orgId).maybeSingle();
   if (error) throw error;
   const llm = object(object(data?.features).llmInsights);
-  const workflow = (Array.isArray(llm.workflows) ? llm.workflows : []).find((item: any) => item.id === workflowId && item.enabled !== false);
+  const workflow = (Array.isArray(llm.workflows) ? llm.workflows : []).find((item: any) => item.id === workflowId && item.enabled !== false && !item.deletedAt);
   if (!workflow) throw new HttpError(404, "Enabled workflow was not found in this organization.");
   return { workflow, llm };
 }

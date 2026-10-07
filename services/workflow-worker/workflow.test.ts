@@ -84,6 +84,15 @@ Deno.test("snapshots are encrypted, tampering is rejected, signatures bind deliv
   await rejects(() => decrypt(ciphertext.slice(0, -4) + "AAAA"), /OperationError|decrypt/i);
   const first = await hmac("secret", "100.delivery-a.{}"); const second = await hmac("secret", "100.delivery-b.{}"); assert(!equal(first, second)); assert(equal(first, first));
 });
+Deno.test("execution state ciphertext is private, isolated and detects tampering", async () => {
+  Deno.env.set("WORKFLOW_SECRETS_KEY", btoa("a".repeat(32)));
+  const first = await encrypt({ customer: { id: 7 }, version: 0 });
+  const second = await encrypt({ customer: { id: 8 }, version: 0 });
+  assert(first !== second && !first.includes("customer"));
+  same(await decrypt(first), { customer: { id: 7 }, version: 0 });
+  same(await decrypt(second), { customer: { id: 8 }, version: 0 });
+  await rejects(() => decrypt(first.slice(0, -2) + "AA"), /OperationError|decrypt/i);
+});
 Deno.test("logs redact secrets while final output retains complete arrays", () => {
   same(redact({ apiKey: "private", text: "Uses private-value" }, ["private-value"]), { apiKey: "[redacted]", text: "Uses [redacted]" });
   const values = Array.from({ length: 100 }, (_, id) => ({ id, message: "x".repeat(5000) }));
@@ -93,6 +102,93 @@ Deno.test("graph validation rejects dangling edges and unsupported nodes", () =>
   const valid = { graph: { nodes: [node("start", "trigger"), node("end", "output")], edges: [edge("start", "end")] } };
   validateGraph(valid);
   let failed = false; try { validateGraph({ graph: { ...valid.graph, edges: [edge("start", "missing")] } }); } catch { failed = true; } assert(failed);
+});
+Deno.test("workflow state schemas are typed, bounded and reducer-compatible", () => {
+  const base = { graph: { nodes: [node("start", "trigger"), node("end", "output")], edges: [edge("start", "end")] } };
+  validateGraph({ ...base, state: { fields: [{ key: "customer.profile", type: "object", reducer: "merge", defaultValue: {} }, { key: "research.items", type: "array", reducer: "append_unique", identityPath: "id" }] } });
+  for (const field of [{ key: "__proto__.value", type: "any" }, { key: "scratch.value", type: "any" }, { key: "items", type: "string", reducer: "append" }, { key: "count", type: "number", defaultValue: "zero" }]) {
+    let failed = false; try { validateGraph({ ...base, state: { fields: [field] } }); } catch { failed = true; } assert(failed, `Expected invalid state field ${JSON.stringify(field)}`);
+  }
+});
+Deno.test("node state mappings reference declared or permitted scratch keys", () => {
+  const mappedStart = { ...node("start", "trigger"), stateWrites: [{ key: "customer", sourcePath: "data.customer" }] };
+  const mappedEnd = { ...node("end", "output"), stateReads: [{ key: "customer", alias: "account", required: true }] };
+  const configured = { state: { fields: [{ key: "customer", type: "object" }], allowDynamicScratch: true }, graph: { nodes: [mappedStart, mappedEnd], edges: [edge("start", "end")] } };
+  validateGraph(configured);
+  validateGraph({ ...configured, graph: { ...configured.graph, nodes: [{ ...mappedStart, stateWrites: [{ key: "scratch.note" }] }, mappedEnd] } });
+  let failed = false; try { validateGraph({ ...configured, graph: { ...configured.graph, nodes: [{ ...mappedStart, stateWrites: [{ key: "undeclared" }] }, mappedEnd] } }); } catch { failed = true; } assert(failed);
+});
+Deno.test("mapped execution state is shared across plugins, APIs, conditions and agents", async () => {
+  const start = { ...node("start", "trigger", { inputSources: ["result"] }), stateWrites: [{ key: "customer", sourcePath: "data.customer" }] };
+  const plugin = { ...node("plugin", "plugin", { code: "return { summary: input.state.account.name + '-ready' };" }), stateReads: [{ key: "customer", alias: "account", required: true }], stateWrites: [{ key: "summary", sourcePath: "summary" }] };
+  const api = { ...node("api", "api", { method: "GET" }), stateReads: [{ key: "summary" }], stateWrites: [{ key: "approval", sourcePath: "approved" }] };
+  const condition = { ...node("condition", "condition", { expression: "state.approval === true" }), stateReads: [{ key: "approval", required: true }] };
+  const agent = { ...node("agent", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true, promptOverride: "Summarize {{state.summary}}" }), stateReads: [{ key: "summary" }] };
+  const graph: AgentWorkflow = { nodes: [start, plugin, api, condition, agent, node("end", "output")], edges: [edge("start", "plugin"), edge("plugin", "api"), edge("api", "condition"), edge("condition", "agent", "true"), edge("agent", "end")] };
+  let apiState: unknown; let agentPrompt = "";
+  const result = await executeWorkflow(graph, { ...context({ customer: { name: "Ada" } }), stateDefinition: { fields: [{ key: "customer", type: "object" }, { key: "summary", type: "string" }, { key: "approval", type: "boolean" }] },
+    onApiRequest: async (_id, _config, _previous, _execution, state) => { apiState = state; return { approved: true }; },
+    onAgentStep: async (_id, _config, prompt) => { agentPrompt = prompt; return "done"; } });
+  assert(!result.error); same(apiState, { summary: "Ada-ready" }); assert(agentPrompt.includes("Ada-ready"));
+  same(result.state, { customer: { name: "Ada" }, summary: "Ada-ready", approval: true });
+  same(result.results.at(-1)?.nodeId, "end");
+});
+Deno.test("state reducers combine branch writes and unsafe parallel replacement is rejected", async () => {
+  const start = node("start", "trigger");
+  const left = { ...node("left", "plugin", { code: "return [{ id: 'left', value: 1 }];" }), stateWrites: [{ key: "items" }] };
+  const right = { ...node("right", "plugin", { code: "return [{ id: 'right', value: 2 }, { id: 'left', value: 9 }];" }), stateWrites: [{ key: "items" }] };
+  const graph: AgentWorkflow = { nodes: [start, left, right, node("end-left", "output"), node("end-right", "output")], edges: [edge("start", "left"), edge("start", "right"), edge("left", "end-left"), edge("right", "end-right")] };
+  const definition = { fields: [{ key: "items", type: "array" as const, reducer: "append_unique" as const, identityPath: "id" }] };
+  validateGraph({ state: definition, graph });
+  const result = await executeWorkflow(graph, { ...context(), stateDefinition: definition });
+  same(result.state.items, [{ id: "left", value: 1 }, { id: "right", value: 2 }]);
+  const unsafe = { ...graph, nodes: graph.nodes.map((item) => ["left", "right"].includes(item.id) ? { ...item, stateWrites: [{ key: "shared" }] } : item) };
+  let failed = false; try { validateGraph({ state: { fields: [{ key: "shared", type: "object" }] }, graph: unsafe }); } catch { failed = true; } assert(failed);
+});
+Deno.test("artifact state stores references and loads content only when requested", async () => {
+  const start = { ...node("start", "trigger", { inputSources: ["result"] }), stateWrites: [{ key: "report", sourcePath: "data.report" }] };
+  const plugin = { ...node("plugin", "plugin", { code: "return input.state.loaded.title;" }), stateReads: [{ key: "report", alias: "loaded", artifactMode: "content" as const }] };
+  const graph: AgentWorkflow = { nodes: [start, plugin, node("end", "output")], edges: [edge("start", "plugin"), edge("plugin", "end")] };
+  const result = await executeWorkflow(graph, { ...context({ report: { title: "Private report", rows: [1, 2] } }), stateDefinition: { fields: [{ key: "report", type: "artifact" }] } });
+  const reference = result.state.report as Record<string, unknown>;
+  assert(reference.__workflowArtifact === true && typeof reference.id === "string");
+  same(result.results.at(-1)?.output, "Private report");
+});
+Deno.test("state permissions block undeclared readers, writers and sensitive agent exposure", async () => {
+  const start = { ...node("start", "trigger"), stateWrites: [{ key: "secret" }] };
+  const agent = { ...node("agent", "agent", { mode: "existing", agentId: "saved", passPrevOutput: true }), stateReads: [{ key: "secret" }] };
+  const graph: AgentWorkflow = { nodes: [start, agent, node("end", "output")], edges: [edge("start", "agent"), edge("agent", "end")] };
+  let failed = false; try { validateGraph({ state: { fields: [{ key: "secret", type: "any", sensitive: true, allowedWriters: ["start"] }] }, graph }); } catch { failed = true; } assert(failed);
+  validateGraph({ state: { fields: [{ key: "secret", type: "any", sensitive: true, allowedWriters: ["start"], allowedReaders: ["agent"], allowInAgentPrompt: true }] }, graph });
+  const runtime = await executeWorkflow(graph, { ...context(), stateDefinition: { fields: [{ key: "secret", type: "any", sensitive: true, allowedReaders: ["other"] }] } });
+  assert(runtime.error?.includes("not allowed to read"));
+});
+
+Deno.test("state-change events observe a durable upstream write exactly once", async () => {
+  const start = { ...node("start", "trigger", { inputSources: ["result"] }), stateWrites: [{ key: "order.status", sourcePath: "data.status" }] };
+  const changed = node("changed", "event", { eventType: "state_changed", stateKey: "order.status" });
+  const graph: AgentWorkflow = { nodes: [start, changed, node("end", "output")], edges: [edge("start", "changed"), edge("changed", "end")] };
+  const definition = { fields: [{ key: "order.status", type: "string" as const }] };
+  validateGraph({ state: definition, graph });
+  const result = await executeWorkflow(graph, { ...context({ status: "approved" }), stateDefinition: definition });
+  same(result.state.order, { status: "approved" });
+  const eventOutput = result.results.find((step) => step.nodeId === "changed")?.output as Record<string, unknown>;
+  same(eventOutput.key, "order.status"); assert(!Object.hasOwn(eventOutput, "value"), "State event output must not bypass read permissions.");
+  same(result.results.at(-1)?.nodeId, "end");
+});
+
+Deno.test("external signal events durably pause and resume with one consumed payload", async () => {
+  const graph: AgentWorkflow = { nodes: [node("start", "trigger"), node("wait", "event", { eventType: "external_signal", signalName: "approval.received" }), node("end", "output")], edges: [edge("start", "wait"), edge("wait", "end")] };
+  validateGraph({ graph });
+  let checkpoint: WorkflowCheckpoint | undefined;
+  const waiting = await executeWorkflow(graph, { ...context(), onCheckpoint: async (value) => { checkpoint = structuredClone(value); } });
+  same(waiting.eventWait, { nodeId: "wait", eventType: "external_signal", signalName: "approval.received" });
+  assert(checkpoint?.pending[0]?.nodeId === "wait");
+  const consumed: string[] = [];
+  const resumed = await executeWorkflow(graph, { ...context(), checkpoint, signals: [{ id: "signal-1", name: "approval.received", payload: { approved: true }, receivedAt: "2026-10-07T12:00:00Z" }], onSignalConsumed: async (id) => { consumed.push(id); } });
+  same(consumed, ["signal-1"]);
+  same((resumed.results.find((step) => step.nodeId === "wait")?.output as Record<string, unknown>).payload, { approved: true });
+  same(resumed.results.at(-1)?.nodeId, "end");
 });
 
 Deno.test("notification deliveries are signed, retry bounded, and stale questions are skipped", async () => {
