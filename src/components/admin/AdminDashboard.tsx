@@ -60,10 +60,13 @@ const AdminDashboard = () => {
     pdc: true,
     resources: true,
     serviceChains: true,
-    globalConfig: false,
+    globalConfig: true,
     resultPageSettings: true,
     dataSelectionSettings: true,
     processingPageSettings: true,
+    agentOperations: true,
+    placeholders: true,
+    oidcProviderSettings: false,
     organizationSettings: false,
     embedSettings: false,
   });
@@ -113,6 +116,7 @@ const AdminDashboard = () => {
     if (summary.resultPageSettingsImported) parts.push("result page settings updated");
     if (summary.dataSelectionSettingsImported) parts.push("data selection settings updated");
     if (summary.processingPageSettingsImported) parts.push("processing page settings updated");
+    if (summary.agentOperationsImported) parts.push("agent operations updated");
     if (summary.embedSettingsImported) parts.push("embed settings updated");
     if (summary.pdcConfigsCreated) parts.push(`${summary.pdcConfigsCreated} PDC config created`);
     if (summary.pdcConfigsUpdated) parts.push(`${summary.pdcConfigsUpdated} PDC config updated`);
@@ -122,6 +126,11 @@ const AdminDashboard = () => {
     if (summary.serviceChainsCreated) parts.push(`${summary.serviceChainsCreated} service chain created`);
     if (summary.serviceChainsUpdated) parts.push(`${summary.serviceChainsUpdated} service chain updated`);
     if (summary.embeddedResourcesRemapped) parts.push(`${summary.embeddedResourcesRemapped} embedded resource remapped`);
+    if (summary.placeholdersCreated) parts.push(`${summary.placeholdersCreated} placeholder created`);
+    if (summary.placeholdersUpdated) parts.push(`${summary.placeholdersUpdated} placeholder updated`);
+    if (summary.oidcProviderClientsCreated) parts.push(`${summary.oidcProviderClientsCreated} OIDC client created`);
+    if (summary.oidcProviderClientsUpdated) parts.push(`${summary.oidcProviderClientsUpdated} OIDC client updated`);
+    if (summary.referencesRemapped) parts.push("resource references remapped");
 
     return parts.join(", ");
   };
@@ -331,7 +340,7 @@ const AdminDashboard = () => {
             is applied to the currently active organization.
           </p>
           <p className="text-xs text-muted-foreground ml-14 mt-1">
-            Export schema: <code>v6</code>. Backups using this schema include current dashboard settings such as result/data/processing page mappings and software-scoped resource visibility.
+            Export schema: <code>v7</code>. Backups include agent operations, placeholders, result/data/processing mappings, OIDC client configuration, and software-scoped resource visibility.
           </p>
           {sourceOrganizations.length === 0 && (
             <p className="text-sm text-muted-foreground ml-14 mt-1">
@@ -603,6 +612,16 @@ const AdminDashboard = () => {
                 </label>
                 <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
                   <Checkbox
+                    checked={importSections.agentOperations}
+                    onCheckedChange={(checked) => handleToggleImportSection("agentOperations", checked === true)}
+                  />
+                  <div>
+                    <p className="font-medium">Agent Operations</p>
+                    <p className="text-sm text-muted-foreground">Providers, agents, MCP servers, skills, prompts, workflows, and assignments.</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+                  <Checkbox
                     checked={importSections.resultPageSettings}
                     onCheckedChange={(checked) => handleToggleImportSection("resultPageSettings", checked === true)}
                   />
@@ -639,6 +658,26 @@ const AdminDashboard = () => {
                   <div>
                     <p className="font-medium">Embed Settings</p>
                     <p className="text-sm text-muted-foreground">Embed enabled state and allowed origins. Tokens are excluded.</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+                  <Checkbox
+                    checked={importSections.placeholders}
+                    onCheckedChange={(checked) => handleToggleImportSection("placeholders", checked === true)}
+                  />
+                  <div>
+                    <p className="font-medium">Placeholders</p>
+                    <p className="text-sm text-muted-foreground">Static and dynamic parameter placeholder definitions.</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer">
+                  <Checkbox
+                    checked={importSections.oidcProviderSettings}
+                    onCheckedChange={(checked) => handleToggleImportSection("oidcProviderSettings", checked === true)}
+                  />
+                  <div>
+                    <p className="font-medium">OIDC Provider Clients</p>
+                    <p className="text-sm text-muted-foreground">Client configuration and secrets. Signing keys and shared-issuer memberships are excluded.</p>
                   </div>
                 </label>
                 <label className="flex items-start gap-3 rounded-lg border p-3 cursor-pointer sm:col-span-2">

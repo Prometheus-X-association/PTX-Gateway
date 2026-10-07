@@ -187,9 +187,12 @@ export interface SettingsBackupData {
   service_chains: Array<Record<string, unknown>>;
   global_config: Record<string, unknown> | null;
   llm_settings?: Record<string, unknown> | null;
+  agent_operations?: Record<string, unknown> | null;
   result_page_settings?: ResultPageSettingsBackup | null;
   data_selection_settings?: Record<string, unknown> | null;
   processing_page_settings?: ProcessingPageSettings | null;
+  placeholders?: Array<Record<string, unknown>>;
+  oidc_provider_clients?: Array<Record<string, unknown>>;
 }
 
 export const exportSettingsBackup = (organizationId?: string) =>
@@ -213,6 +216,9 @@ export interface CrossOrgImportOptions {
     resultPageSettings?: boolean;
     dataSelectionSettings?: boolean;
     processingPageSettings?: boolean;
+    agentOperations?: boolean;
+    placeholders?: boolean;
+    oidcProviderSettings?: boolean;
     organizationSettings?: boolean;
     embedSettings?: boolean;
   };
@@ -224,6 +230,11 @@ export interface ImportSettingsSummary {
   resultPageSettingsImported?: boolean;
   dataSelectionSettingsImported?: boolean;
   processingPageSettingsImported?: boolean;
+  agentOperationsImported?: boolean;
+  placeholdersCreated?: number;
+  placeholdersUpdated?: number;
+  oidcProviderClientsCreated?: number;
+  oidcProviderClientsUpdated?: number;
   embedSettingsImported?: boolean;
   pdcConfigsCreated?: number;
   pdcConfigsUpdated?: number;
@@ -233,6 +244,7 @@ export interface ImportSettingsSummary {
   serviceChainsCreated?: number;
   serviceChainsUpdated?: number;
   embeddedResourcesRemapped?: number;
+  referencesRemapped?: number;
 }
 
 export const importSettingsFromOrganization = (

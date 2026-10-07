@@ -893,12 +893,8 @@ const ChatDrawer = ({
   const selectedWorkflow: WorkflowConfig | null =
     activeWorkflowId ? (activeWorkflows.find((w) => w.id === activeWorkflowId) ?? null) : null;
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Suppresses the onFocus prompt-show when focus is triggered programmatically (e.g. after agent switch)
-  const suppressPromptsOnFocusRef = useRef(false);
-
   const isFreeChatMode = activeAgentId === "__free__";
   const activeAgent = isFreeChatMode ? null : (agents.find((a) => a.id === activeAgentId) ?? agents[0] ?? null);
 
@@ -1521,16 +1517,15 @@ const ChatDrawer = ({
   }, [isDraggingChatPanel, chatPanelSize.width, chatPanelSize.height, onLauncherAnchorChange]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
-    if (isOpen) {
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
-        inputRef.current?.focus();
-      }, 80);
-    }
+    if (!isOpen) return;
+    const container = messagesContainerRef.current;
+    if (container) container.scrollTop = container.scrollHeight;
   }, [isOpen]);
 
   // Reconnect to a backend run after a refresh, including paused runs.
@@ -1833,8 +1828,6 @@ const ChatDrawer = ({
     setShowHeaderAgentPicker(false);
     setInput("");
     setShowPrompts(false);
-    suppressPromptsOnFocusRef.current = true;
-    setTimeout(() => inputRef.current?.focus(), 50);
   };
 
   const handleStop = () => abortRef.current?.abort();
@@ -1890,7 +1883,7 @@ const ChatDrawer = ({
   };
 
   const panel = (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       {/* Header */}
       <div
         className="flex shrink-0 items-center justify-between border-b border-border bg-muted/30 px-4 py-3 lg:cursor-move lg:touch-none"
@@ -1970,7 +1963,10 @@ const ChatDrawer = ({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-3">
+      <div
+        ref={messagesContainerRef}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3"
+      >
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3 text-muted-foreground">
             <MessageSquareDot className="h-10 w-10 opacity-30" />
@@ -1987,7 +1983,6 @@ const ChatDrawer = ({
             outputFormat={msg.streaming ? (activeAgent?.expectedOutput ?? "text") : undefined}
           />
         ))}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Input bar */}
@@ -2232,11 +2227,9 @@ const ChatDrawer = ({
               )}
             </div>
             <Textarea
-              ref={inputRef}
               value={input}
               onChange={handleInputChange}
               onFocus={() => {
-                if (suppressPromptsOnFocusRef.current) { suppressPromptsOnFocusRef.current = false; return; }
                 if (!input.trim() && messages.length === 0) setShowPrompts(true);
               }}
               onBlur={() => setTimeout(() => { setShowPrompts(false); setShowAgentPicker(false); setShowHeaderAgentPicker(false); setShowDocPopover(false); }, 150)}
