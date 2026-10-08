@@ -30,7 +30,7 @@ The key is provisioned automatically in the same database transaction that creat
 
 Rotation makes the new version active for subsequent writes. Retired Vault versions remain decrypt-only for existing data and must not be deleted until all referenced ciphertext has been re-encrypted or expired. The active key is selected from the database for every write, while decrypted keys may be cached only in trusted process memory.
 
-Applying the migration and deploying the functions alone does not execute jobs: the worker must be running. Accepted jobs remain queued while it is unavailable. The implementation does not provision a production worker automatically.
+Applying the migration and deploying the functions alone does not execute jobs: the worker must be running. Accepted jobs remain queued while it is unavailable. `npm run stack` and `npm run stack:aws-local` start a worker for their local Supabase stack; production and remote-Supabase deployments must provision the worker separately.
 
 The JavaScript sandbox uses fresh Deno workers with `permissions: "none"`, a per-node deadline, and no access to the parent's environment, files, network or subprocesses. This uses Deno's [worker permission controls](https://docs.deno.com/api/web/workers/). The Docker memory/CPU limits bound the entire worker service; each service runs at most `WORKFLOW_WORKER_CONCURRENCY` jobs. Use the tested Deno version pinned in the Dockerfile.
 

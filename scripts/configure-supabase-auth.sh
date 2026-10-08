@@ -236,6 +236,10 @@ if [[ "$MODE" == "local" ]]; then
     exit 1
   fi
 
+  # Keep the worker on the private local endpoint even when the browser URL is
+  # subsequently replaced with a WSL address or a public ngrok tunnel.
+  backend_api_url="$api_url"
+
   # Auto-adapt localhost/127 Supabase URL when running inside WSL.
   # This helps Windows-host browsers reach the WSL-hosted Supabase API.
   if is_wsl_runtime; then
@@ -291,13 +295,42 @@ EOF
   ensure_env_value "supabase/functions/.env" "PDC_EXECUTE_TOKEN_SECRET" "local-$(random_secret)"
   upsert_env_line "supabase/functions/.env" "SUPABASE_SERVICE_ROLE_KEY" "$service_role_key"
   ensure_env_value "supabase/functions/.env" "EMBED_TOKEN_SECRET" "local-$(random_secret)"
+  ensure_env_value "supabase/functions/.env" "WORKFLOW_INTERNAL_SECRET" "local-$(random_secret)"
+  workflow_interaction_base_url="$(get_env_value "supabase/functions/.env" "WORKFLOW_INTERACTION_BASE_URL")"
+  if [[ -z "$workflow_interaction_base_url" || "$workflow_interaction_base_url" == "https://gateway.example.com" ]]; then
+    workflow_interaction_base_url="${WORKFLOW_INTERACTION_BASE_URL_DEFAULT:-http://localhost:8080}"
+    upsert_env_line "supabase/functions/.env" "WORKFLOW_INTERACTION_BASE_URL" "$workflow_interaction_base_url"
+  fi
   if ! grep -qE '^PDC_BEARER_TOKEN=' "supabase/functions/.env"; then
     printf '%s\n' "PDC_BEARER_TOKEN=" >> "supabase/functions/.env"
   fi
 
+  # The workflow executor is a separate trusted service. Keep its generated
+  # local credentials aligned with the Edge Functions that authenticate its
+  # internal agent requests. The Docker worker reaches the host through the
+  # portable host.docker.internal alias configured by run-all.sh.
+  mkdir -p services/workflow-worker
+  if [[ ! -f "services/workflow-worker/.env" ]]; then
+    if [[ -f "services/workflow-worker/.env.example" ]]; then
+      cp "services/workflow-worker/.env.example" "services/workflow-worker/.env"
+    else
+      touch "services/workflow-worker/.env"
+    fi
+  fi
+  worker_api_url="${backend_api_url/\/\/127.0.0.1:/\/\/host.docker.internal:}"
+  worker_api_url="${worker_api_url/\/\/localhost:/\/\/host.docker.internal:}"
+  workflow_internal_secret="$(get_env_value "supabase/functions/.env" "WORKFLOW_INTERNAL_SECRET")"
+  upsert_env_line "services/workflow-worker/.env" "SUPABASE_URL" "$worker_api_url"
+  upsert_env_line "services/workflow-worker/.env" "SUPABASE_ANON_KEY" "$publishable_key"
+  upsert_env_line "services/workflow-worker/.env" "SUPABASE_SERVICE_ROLE_KEY" "$service_role_key"
+  upsert_env_line "services/workflow-worker/.env" "WORKFLOW_INTERNAL_SECRET" "$workflow_internal_secret"
+  upsert_env_line "services/workflow-worker/.env" "WORKFLOW_INTERACTION_BASE_URL" "$workflow_interaction_base_url"
+  ensure_env_value "services/workflow-worker/.env" "WORKFLOW_WORKER_CONCURRENCY" "4"
+
   echo "Local auth/config files updated:"
   echo "  - .env.local"
   echo "  - supabase/functions/.env"
+  echo "  - services/workflow-worker/.env"
   if [[ "${NGROK_AUTODETECT:-true}" == "true" ]]; then
     ngrok_frontend_url="$(get_ngrok_tunnel_url_for_port "8080" || true)"
     if [[ -n "$ngrok_frontend_url" ]]; then

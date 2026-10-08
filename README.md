@@ -965,7 +965,7 @@ Use one script for all environments:
 
 ```bash
 # Default local command:
-# frontend + backend + local Supabase + local email inbox (Mailpit)
+# frontend + backend + workflow worker + local Supabase + local email inbox (Mailpit)
 # automatically applies pending local migrations via `supabase db push`
 npm run stack
 
@@ -977,14 +977,14 @@ npm run stack:ngrok
 # detects the Supabase tunnel automatically and prints the frontend callback URL
 npm run ngrok:sync
 
-# Local: frontend + backend + local Supabase + local email inbox (Mailpit)
+# Local: frontend + backend + workflow worker + local Supabase + local email inbox (Mailpit)
 # same as `npm run stack`
 # waits for the Supabase CLI Edge Functions runtime before starting the frontend;
 # changes under supabase/functions are picked up automatically
 npm run stack:local
 
 # AWS server with local Supabase on the same server:
-# frontend + backend + local Supabase + local email inbox (Mailpit)
+# frontend + backend + workflow worker + local Supabase + local email inbox (Mailpit)
 npm run stack:aws-local
 
 # AWS server with remote Supabase project:

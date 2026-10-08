@@ -187,6 +187,7 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {activeWindow === "integrations" && revealed && <div className="rounded border p-2 space-y-2"><p className="text-xs">Copy this credential now. It is displayed only after creation or rotation.</p><Textarea readOnly value={revealed} /><Button type="button" size="sm" variant="outline" onClick={() => setRevealed("")}>Dismiss credential</Button></div>}
       {activeWindow === "runs" && health && <div className="grid grid-cols-2 gap-2 rounded border p-2 text-xs md:grid-cols-4"><span>Workers: {health.workers.length}</span><span>Queue: {health.queueDepth}</span><span>Running: {health.runningRuns}</span><span>Waiting: {health.waitingRuns}</span><span>Manual review: {health.manualReviewRuns}</span><span>Expired leases: {health.expiredLeases}</span><span>Notifications: {health.notificationBacklog}</span>{health.oldestQueuedAt && <span>Oldest: {new Date(health.oldestQueuedAt).toLocaleString()}</span>}</div>}
+      {activeWindow === "runs" && health && health.workers.length === 0 && <p role="alert" className="rounded border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-700 dark:text-amber-300">No workflow worker is online. Existing runs will remain queued until a worker starts. Start the full local stack again, or start the deployed workflow-worker service.</p>}
       {activeWindow === "settings" && <details className="rounded border p-3 text-xs">
         <summary className="cursor-pointer font-medium">Organization execution capacity</summary>
         <div className="mt-3 space-y-3">
@@ -244,7 +245,7 @@ export function WorkflowOperationsPanel({ config, organizationId, onChange, onFo
       {activeWindow === "runs" && <div className="space-y-2">
         <p className="text-sm font-medium">Start a backend run</p><Label className="text-xs">Input JSON</Label>
         <Textarea value={payload} onChange={(event) => setPayload(event.target.value)} />
-        <Button type="button" size="sm" disabled={busy || !execution.backendEnabled} onClick={() => void perform(async () => { const result = await api("start", { source: "dashboard", input: JSON.parse(payload) }); await loadRun(result.runId); })}>Run saved workflow</Button>
+        <Button type="button" size="sm" disabled={busy || !execution.backendEnabled || !health?.workers.length} onClick={() => void perform(async () => { const result = await api("start", { source: "dashboard", input: JSON.parse(payload) }); await loadRun(result.runId); })}>Run saved workflow</Button>
       </div>}
       {activeWindow === "runs" && <div className="space-y-2">
         <div className="flex items-center justify-between"><p className="text-sm font-medium">Execution history</p><Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void perform(refresh)}>Refresh</Button></div>

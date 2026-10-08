@@ -127,6 +127,8 @@ fi
 SUPABASE_STARTED="false"
 SUPABASE_DB_PORT="54322"
 FUNCTIONS_LOG="/tmp/ptx-gateway-supabase-functions.log"
+WORKFLOW_WORKER_LOG="/tmp/ptx-gateway-workflow-worker.log"
+WORKFLOW_WORKER_CONTAINER="ptx-gateway-workflow-worker"
 
 detect_supabase_db_port() {
   local config_file="supabase/config.toml"
@@ -264,7 +266,50 @@ start_edge_functions() {
   return 1
 }
 
+start_workflow_worker() {
+  if [[ ! -f "services/workflow-worker/.env" ]]; then
+    echo "Workflow worker environment is missing. Run: npm run setup:local-auth"
+    return 1
+  fi
+
+  echo "Building the workflow worker container..."
+  docker build -f services/workflow-worker/Dockerfile -t ptx-workflow-worker .
+  docker rm -f "$WORKFLOW_WORKER_CONTAINER" >/dev/null 2>&1 || true
+
+  echo "Starting workflow worker..."
+  : > "$WORKFLOW_WORKER_LOG"
+  docker run --rm --name "$WORKFLOW_WORKER_CONTAINER" \
+    --env-file services/workflow-worker/.env \
+    --add-host host.docker.internal:host-gateway \
+    --memory=1g --cpus=2 \
+    ptx-workflow-worker > "$WORKFLOW_WORKER_LOG" 2>&1 &
+  WORKFLOW_WORKER_PID=$!
+
+  local attempts=0
+  while (( attempts < 30 )); do
+    if ! kill -0 "$WORKFLOW_WORKER_PID" 2>/dev/null; then
+      echo "Workflow worker failed to start. Recent log output:"
+      tail -40 "$WORKFLOW_WORKER_LOG" 2>/dev/null || true
+      return 1
+    fi
+    if grep -q '"event":"workflow_worker_ready"' "$WORKFLOW_WORKER_LOG" 2>/dev/null; then
+      echo "Workflow worker ready (container: ${WORKFLOW_WORKER_CONTAINER}, logs: ${WORKFLOW_WORKER_LOG})"
+      return 0
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+
+  echo "Timed out waiting for the workflow worker. Recent log output:"
+  tail -40 "$WORKFLOW_WORKER_LOG" 2>/dev/null || true
+  return 1
+}
+
 cleanup() {
+  if [[ -n "${WORKFLOW_WORKER_PID:-}" ]]; then
+    docker stop --time 30 "$WORKFLOW_WORKER_CONTAINER" >/dev/null 2>&1 || true
+    wait "$WORKFLOW_WORKER_PID" 2>/dev/null || true
+  fi
   if [[ -n "${FUNCTIONS_PID:-}" ]]; then
     kill "$FUNCTIONS_PID" 2>/dev/null || true
   fi
@@ -308,7 +353,7 @@ if [[ "$WITH_SUPABASE" == "true" ]]; then
   SUPABASE_STARTED="true"
 
   echo "Auto-configuring local auth/env files..."
-  if ! bash scripts/configure-supabase-auth.sh local; then
+  if ! WORKFLOW_INTERACTION_BASE_URL_DEFAULT="http://localhost:${FRONTEND_PORT}" bash scripts/configure-supabase-auth.sh local; then
     echo "Warning: auto-configure step failed. Continuing to start frontend."
     echo "You can run it manually later with: npm run setup:local-auth"
   fi
@@ -322,6 +367,7 @@ if [[ "$WITH_SUPABASE" == "true" ]]; then
   fi
 
   start_edge_functions
+  start_workflow_worker
 fi
 
 echo "Starting frontend on http://${HOST}:${FRONTEND_PORT} ..."

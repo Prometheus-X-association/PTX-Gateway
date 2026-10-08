@@ -29,7 +29,7 @@ interface OrganizationKeyRecord { id: string; organization_id: string; key_versi
 const organizationKeyCache = new Map<string, Promise<CryptoKey>>();
 const keyAad = (organizationId: string, keyId: string, version: number) => encoder.encode(`ptx-workflow-org-key:${organizationId}:${keyId}:${version}`);
 const dataAad = (organizationId: string, keyId: string) => encoder.encode(`ptx-workflow-data:${organizationId}:${keyId}`);
-async function importAesKey(bytes: Uint8Array) { return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]); }
+async function importAesKey(bytes: Uint8Array<ArrayBuffer>) { return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]); }
 async function unwrapOrganizationKey(record: OrganizationKeyRecord) {
   const cacheKey = `${record.organization_id}:${record.id}`;
   let cached = organizationKeyCache.get(cacheKey);
