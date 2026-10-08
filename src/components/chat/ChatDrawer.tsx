@@ -565,7 +565,8 @@ const VizBubble = ({ html }: { html: string }) => {
       <div className="relative mt-2 rounded-xl overflow-hidden border border-border group">
         <iframe
           srcDoc={buildSrcdoc(html)}
-          sandbox="allow-scripts allow-popups"
+          sandbox="allow-scripts allow-popups allow-downloads allow-modals"
+          allow="clipboard-write"
           style={{ width: "100%", height: 380, border: "none", display: "block" }}
           title="AI Visualization"
         />
@@ -637,7 +638,8 @@ const VizBubble = ({ html }: { html: string }) => {
           <div className="flex-1 overflow-auto min-h-0 bg-background">
             <iframe
               srcDoc={buildSrcdoc(html)}
-              sandbox="allow-scripts allow-popups"
+              sandbox="allow-scripts allow-popups allow-downloads allow-modals"
+              allow="clipboard-write"
               style={{ width: "100%", height: "100%", border: "none", display: "block", pointerEvents: isResizing ? "none" : "auto" }}
               title="AI Visualization (Expanded)"
             />
