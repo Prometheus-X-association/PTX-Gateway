@@ -147,6 +147,25 @@ const normalizeAgentInputSources = (agent: LlmAgentInfo | null, freeChat: boolea
   }
 };
 
+const workflowInputRequirements = (workflow: WorkflowConfig) => {
+  const triggerNode = workflow.graph.nodes.find((node) => node.type === "trigger");
+  const triggerSources = triggerNode
+    ? (triggerNode.data as import("@/types/workflow").TriggerNodeData).inputSources ?? ["result", "document"]
+    : ["result", "document"];
+  const legacyWorkflowNeedsDocument = workflow.graph.nodes.some((node) => {
+    if (node.type !== "agent") return false;
+    const data = node.data as import("@/types/workflow").AgentNodeData;
+    return data.requiresDocument === true || /uploaded document|attached document|document text/i.test(
+      `${data.mode === "inline" ? data.inlineSystemPrompt || "" : ""}\n${data.promptOverride || ""}`
+    );
+  });
+  return {
+    requiresResult: triggerSources.includes("result"),
+    requiresDocument: triggerSources.includes("document") || triggerSources.includes("user_upload") || legacyWorkflowNeedsDocument,
+    requestsChatUpload: triggerSources.includes("user_upload"),
+  };
+};
+
 // Tags that indicate an HTML document or renderable fragment. Keep this explicit
 // so prose containing comparisons such as "x < y" is not treated as a page.
 const HTML_START_RE = /<!doctype\s+html\b|<(html|head|body|title|meta|link|style|script|div|span|p|a|img|picture|source|svg|canvas|table|thead|tbody|tfoot|tr|th|td|ul|ol|li|section|article|main|header|footer|nav|aside|figure|figcaption|form|label|input|select|option|textarea|button|details|summary|pre|code|blockquote|hr|br|h[1-6])\b/i;
@@ -895,6 +914,10 @@ const ChatDrawer = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // A failed reconnect must not be retried on every render. A newly stored run
+  // ID can still be attempted immediately, and a full page load gets one fresh
+  // attempt for an interrupted run.
+  const backendReconnectAttemptsRef = useRef<Set<string>>(new Set());
   const isFreeChatMode = activeAgentId === "__free__";
   const activeAgent = isFreeChatMode ? null : (agents.find((a) => a.id === activeAgentId) ?? agents[0] ?? null);
 
@@ -1050,22 +1073,7 @@ const ChatDrawer = ({
     const triggerNode = workflow.nodes.find((node) => node.type === "trigger");
     // Resolve preset/automatic prompts from the freshly loaded graph too.
     userMsg ??= (triggerNode?.data as import("@/types/workflow").TriggerNodeData | undefined)?.defaultPrompt || "Run workflow";
-    const configuredTriggerSources = triggerNode
-      ? (triggerNode.data as import("@/types/workflow").TriggerNodeData).inputSources
-      : undefined;
-    const triggerSources = configuredTriggerSources ?? ["result", "document"];
-    const requiresResult = triggerSources.includes("result");
-    const legacyWorkflowNeedsDocument = workflow.nodes.some((node) => {
-      if (node.type !== "agent") return false;
-      const data = node.data as import("@/types/workflow").AgentNodeData;
-      return data.requiresDocument === true || /uploaded document|attached document|document text/i.test(
-        `${data.mode === "inline" ? data.inlineSystemPrompt || "" : ""}\n${data.promptOverride || ""}`
-      );
-    });
-    // A node may independently make a document mandatory even if the trigger
-    // normally starts from result data alone.
-    const requestsChatUpload = triggerSources.includes("user_upload");
-    const requiresDocumentSource = triggerSources.includes("document") || requestsChatUpload || legacyWorkflowNeedsDocument;
+    const { requiresResult, requiresDocument: requiresDocumentSource, requestsChatUpload } = workflowInputRequirements(workflowConfig);
     const hasResult = resultData !== null && resultData !== undefined;
     const hasDoc = !!docText?.trim() || localAttachments.length > 0;
     const needsDoc = requiresDocumentSource;
@@ -1531,8 +1539,15 @@ const ChatDrawer = ({
   // Reconnect to a backend run after a refresh, including paused runs.
   useEffect(() => {
     if (!isOpen || workflowRunningRef.current || pausedWorkflow) return;
-    const pending = workflows.find((workflow) => workflow.execution?.backendEnabled && storedBackendRun(backendRunStorageKey(organizationId, workflow.id, processSessionId)));
-    if (pending) void runWorkflow(undefined, pending);
+    const pending = workflows.map((workflow) => ({
+      workflow,
+      runId: workflow.execution?.backendEnabled
+        ? storedBackendRun(backendRunStorageKey(organizationId, workflow.id, processSessionId))
+        : null,
+    })).find((item) => item.runId);
+    if (!pending?.runId || backendReconnectAttemptsRef.current.has(pending.runId)) return;
+    backendReconnectAttemptsRef.current.add(pending.runId);
+    void runWorkflow(undefined, pending.workflow);
   }, [isOpen, workflows, organizationId, processSessionId, runWorkflow, pausedWorkflow]);
 
   // Auto-run on_load workflows when chat first opens (only once per session)
@@ -1542,7 +1557,11 @@ const ChatDrawer = ({
     const pending = activeWorkflows.filter((wf) => {
       if (autoFiredRef.current.has(wf.id)) return false;
       const trigger = wf.graph.nodes.find((n) => n.type === "trigger");
-      return (trigger?.data as { triggerType?: string } | undefined)?.triggerType === "on_load";
+      if ((trigger?.data as { triggerType?: string } | undefined)?.triggerType !== "on_load") return false;
+      const requirements = workflowInputRequirements(wf);
+      if (requirements.requiresResult && (resultData === null || resultData === undefined)) return false;
+      if (requirements.requiresDocument && !hasDocument) return false;
+      return true;
     });
     for (const wf of pending) {
       autoFiredRef.current.add(wf.id);
@@ -1558,7 +1577,7 @@ const ChatDrawer = ({
     return () => window.clearTimeout(timer);
   // Only fire when isOpen changes or activeWorkflows list changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, activeWorkflows.map((w) => w.id).join(",")]);
+  }, [isOpen, hasDocument, resultData === null || resultData === undefined, activeWorkflows.map((w) => w.id).join(",")]);
 
   // Close both agent pickers when clicking outside
   useEffect(() => {

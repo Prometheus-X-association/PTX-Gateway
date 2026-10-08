@@ -307,7 +307,7 @@ start_workflow_worker() {
 
 cleanup() {
   if [[ -n "${WORKFLOW_WORKER_PID:-}" ]]; then
-    docker stop --time 30 "$WORKFLOW_WORKER_CONTAINER" >/dev/null 2>&1 || true
+    docker stop --timeout 30 "$WORKFLOW_WORKER_CONTAINER" >/dev/null 2>&1 || true
     wait "$WORKFLOW_WORKER_PID" 2>/dev/null || true
   fi
   if [[ -n "${FUNCTIONS_PID:-}" ]]; then

@@ -141,7 +141,7 @@ fi
 
 if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 'ptx-gateway-workflow-worker'; then
   echo "Stopping workflow worker..."
-  docker stop --time 30 ptx-gateway-workflow-worker >/dev/null 2>&1 || true
+  docker stop --timeout 30 ptx-gateway-workflow-worker >/dev/null 2>&1 || true
 fi
 
 if [[ "$WITH_SUPABASE" == "true" ]]; then

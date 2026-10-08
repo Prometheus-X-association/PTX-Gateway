@@ -48,11 +48,25 @@ export async function workflowBackend(action: string, organizationId: string | u
 export const backendRunStorageKey = (organizationId: string | null | undefined, workflowId: string, contextId?: string | null) => `ptx-workflow-run:${organizationId}:${workflowId}:${contextId || "result"}`;
 export function storedBackendRun(key: string) { try { return sessionStorage.getItem(key); } catch { return null; } }
 function storeRun(key: string, value: string | null) { try { if (value) sessionStorage.setItem(key, value); else sessionStorage.removeItem(key); } catch { /* optional reconnection */ } }
+const isMissingRunError = (error: unknown) => error instanceof Error && /run was not found/i.test(error.message);
 
 export async function executeBackendWorkflow(config: WorkflowConfig, ctx: BrowserExecutorContext, attachments: unknown[], targetResourceId?: string | null, contextId?: string | null): Promise<WorkflowResult> {
   const call = (action: string, body: Record<string, unknown>) => workflowBackend(action, ctx.organizationId ?? undefined, body, ctx.orgExecutionToken);
   const key = backendRunStorageKey(ctx.organizationId, config.id, contextId);
-  let runId = (ctx.resume?.waiting as WorkflowWaitingState & { runId?: string })?.runId || storedBackendRun(key);
+  const resumeRunId = (ctx.resume?.waiting as WorkflowWaitingState & { runId?: string })?.runId;
+  const storedRunId = storedBackendRun(key);
+  let runId = resumeRunId || storedRunId || undefined;
+  // Session storage can outlive database resets, retention cleanup, or a
+  // replaced workflow deployment. Validate a reconnect target once and start
+  // cleanly when that durable run no longer exists.
+  if (!resumeRunId && storedRunId) {
+    try { await call("get", { runId: storedRunId }); }
+    catch (error) {
+      if (!isMissingRunError(error)) throw error;
+      storeRun(key, null);
+      runId = undefined;
+    }
+  }
   if (!runId) {
     const started = await call("start", { source: "dashboard", workflowId: config.id, input: ctx.resultData, userMessage: ctx.userMessage, docText: ctx.docText,
       conversationHistory: ctx.conversationHistory, attachments, targetResourceId });
@@ -102,5 +116,8 @@ export async function executeBackendWorkflow(config: WorkflowConfig, ctx: Browse
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1500));
     }
+  } catch (error) {
+    if (isMissingRunError(error)) storeRun(key, null);
+    throw error;
   } finally { ctx.signal?.removeEventListener("abort", cancel); }
 }

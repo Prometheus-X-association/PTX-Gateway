@@ -179,7 +179,7 @@ get_env_value() {
   if [[ ! -f "$file" ]]; then
     return 0
   fi
-  grep -E "^${key}=" "$file" | head -n1 | cut -d'=' -f2-
+  grep -E "^${key}=" "$file" | head -n1 | cut -d'=' -f2- || true
 }
 
 ensure_env_value() {
@@ -200,24 +200,21 @@ if [[ "$MODE" == "local" ]]; then
     exit 1
   fi
 
-  local_status="$(npx supabase status 2>&1 || true)"
+  local_status="$(npx supabase status -o env 2>&1 || true)"
   if [[ -z "$local_status" ]]; then
     echo "Supabase local stack is not running. Start it first with: npx supabase start"
     exit 1
   fi
 
-  api_url="$(printf '%s\n' "$local_status" | sed -n 's/^API URL:[[:space:]]*//p' | head -n1)"
-  if [[ -z "$api_url" ]]; then
-    api_url="$(printf '%s\n' "$local_status" | sed -n 's/.*Project URL[^h]*\(https\?:\/\/[^[:space:]]*\).*/\1/p' | head -n1)"
-  fi
-  publishable_key="$(printf '%s\n' "$local_status" | sed -n 's/^Publishable key: *//p' | head -n1)"
-  if [[ -z "$publishable_key" ]]; then
-    publishable_key="$(printf '%s\n' "$local_status" | sed -n 's/^anon key: *//p' | head -n1)"
-  fi
-  service_role_key="$(printf '%s\n' "$local_status" | sed -n 's/^service_role key: *//p' | head -n1)"
-  if [[ -z "$service_role_key" ]]; then
-    service_role_key="$(printf '%s\n' "$local_status" | sed -n 's/^Secret key: *//p' | head -n1)"
-  fi
+  status_env_value() {
+    local key="$1"
+    printf '%s\n' "$local_status" | sed -n "s/^${key}=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" | head -n1
+  }
+  api_url="$(status_env_value "API_URL")"
+  # The worker's PostgREST Authorization header requires the legacy JWT keys;
+  # the newer sb_publishable/sb_secret values are not JWTs.
+  publishable_key="$(status_env_value "ANON_KEY")"
+  service_role_key="$(status_env_value "SERVICE_ROLE_KEY")"
 
   # Fallback to existing local files when CLI output format differs.
   if [[ -z "$api_url" ]]; then
@@ -231,7 +228,7 @@ if [[ "$MODE" == "local" ]]; then
   fi
 
   if [[ -z "$api_url" || -z "$publishable_key" || -z "$service_role_key" ]]; then
-    echo "Failed to parse required values from `supabase status`."
+    echo "Failed to parse required values from Supabase status."
     echo "Check output manually with: npx supabase status"
     exit 1
   fi
