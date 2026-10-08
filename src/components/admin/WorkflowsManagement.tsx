@@ -4,6 +4,7 @@ import {
   GitBranch, Code2, Bot, Globe2, Route, X, Copy, History, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,7 +15,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ConfirmRecycleButton, RecycleBinPanel } from "@/components/admin/RecycleBinControls";
 import { recycleExpiry } from "@/components/admin/recycleBin";
 import { WorkflowOperationsPanel } from "@/components/admin/WorkflowOperationsPanel";
-import { WorkflowBuilder } from "@/components/admin/WorkflowBuilder";
+import { EXAMPLE_WORKFLOWS, WorkflowBuilder } from "@/components/admin/WorkflowBuilder";
 import {
   ChatAvailabilitySelector,
   type ChatAvailabilityTarget,
@@ -302,10 +303,11 @@ interface WorkflowsManagementProps {
   globalProviders: ProviderStub[];
   mcpServers: McpServerStub[];
   organizationId?: string;
+  onEnsureSkillTemplate?: (skillTemplateId: string) => void;
   onChange: (workflows: WorkflowConfig[]) => void;
 }
 
-export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, skills, globalProviders, mcpServers, organizationId, onChange }: WorkflowsManagementProps) => {
+export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, skills, globalProviders, mcpServers, organizationId, onEnsureSkillTemplate, onChange }: WorkflowsManagementProps) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const activeWorkflows = workflows.filter((workflow) => !workflow.deletedAt);
@@ -392,6 +394,25 @@ export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, sk
     setEditingId(w.id);
   };
 
+  const addTemplate = (template: (typeof EXAMPLE_WORKFLOWS)[number]) => {
+    const graph = typeof structuredClone === "function"
+      ? structuredClone(template.workflow)
+      : JSON.parse(JSON.stringify(template.workflow)) as AgentWorkflow;
+    const workflow: WorkflowConfig = {
+      id: uid(),
+      name: template.name,
+      description: template.description,
+      enabled: true,
+      targetResources: [],
+      graph,
+      execution: template.execution ? { ...template.execution } : undefined,
+      createdAt: new Date().toISOString(),
+    };
+    template.requiredSkillTemplateIds?.forEach((skillTemplateId) => onEnsureSkillTemplate?.(skillTemplateId));
+    onChange([...workflows, workflow]);
+    setEditingId(workflow.id);
+  };
+
   const activeCount = activeWorkflows.filter((w) => w.enabled).length;
 
   return (
@@ -448,9 +469,24 @@ export const WorkflowsManagement = ({ workflows, availabilityTargets, agents, sk
         </div>
       )}
 
-      <Button type="button" variant="outline" size="sm" className="gap-2" onClick={addNew}>
-        <Plus className="h-4 w-4" /> Add Workflow
-      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button type="button" variant="outline" size="sm" className="gap-2">
+            <Plus className="h-4 w-4" /> Add Workflow <ChevronDown className="h-3.5 w-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="max-h-96 w-96 overflow-y-auto">
+          <DropdownMenuItem onSelect={addNew}>Blank workflow</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>Workflow templates</DropdownMenuLabel>
+          {EXAMPLE_WORKFLOWS.map((template) => (
+            <DropdownMenuItem key={template.id} className="block cursor-pointer p-3" onSelect={() => addTemplate(template)}>
+              <p className="text-xs font-semibold">{template.name}</p>
+              <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">{template.description}</p>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 };

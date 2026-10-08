@@ -37,8 +37,10 @@ import type { WorkflowConfig, WorkflowRevision, WorkflowRevisionActor } from "@/
 import type { AgentSkill } from "@/types/agentSkill";
 import {
   DOCUMENT_BASED_SKILL_DESCRIPTION_SKILL_ID,
+  ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID,
   SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID,
   createDocumentBasedSkillDescriptionTemplate,
+  createEscoSkillDescriptionLookupTemplate,
   createSkillsFrameworkDescriptionTemplate,
   createSkillsFrameworkMapperTemplate,
 } from "@/types/agentSkill";
@@ -2601,6 +2603,20 @@ const LlmSettingsSection = () => {
               description: a.description,
               expectedOutput: a.expectedOutput,
             }))}
+            onEnsureSkillTemplate={(skillTemplateId) => {
+              if (skillTemplateId !== ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID) return;
+              setLlm((previous) => {
+                const existing = previous.skills.find((skill) => skill.id === skillTemplateId);
+                if (!existing) return { ...previous, skills: [...previous.skills, createEscoSkillDescriptionLookupTemplate()] };
+                if (existing.enabled && !existing.deletedAt) return previous;
+                return {
+                  ...previous,
+                  skills: previous.skills.map((skill) => skill.id === skillTemplateId
+                    ? { ...skill, enabled: true, deletedAt: undefined, deletedPreviousEnabled: undefined }
+                    : skill),
+                };
+              });
+            }}
             onChange={(workflows) => patchLlm({ workflows })}
           />
             </div>

@@ -27,6 +27,7 @@ import type {
   AgentWorkflow, WorkflowNode, WorkflowEdge,
   TriggerNodeData, DocumentContextNodeData, RetrievalNodeData, UserInputNodeData, EventNodeData, AgentNodeData, ApiNodeData, ApiKeyValue, PluginNodeData, ConditionNodeData, RouterNodeData, RouterRule, ParallelNodeData, JoinNodeData, OutputNodeData, WorkflowStepResult, WorkflowWaitingState, WorkflowRetryPolicy, WorkflowStateDefinition, WorkflowStateRead, WorkflowStateWrite, WorkflowStateReducer,
 } from "@/types/workflow";
+import { ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID } from "@/types/agentSkill";
 import { executeWorkflow } from "@/lib/workflowExecutor";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
 import { supabase } from "@/integrations/supabase/client";
@@ -1966,6 +1967,12 @@ interface ExampleWorkflow {
   name: string;
   description: string;
   workflow: AgentWorkflow;
+  execution?: {
+    apiEnabled?: boolean;
+    webhookEnabled?: boolean;
+    backendEnabled?: boolean;
+  };
+  requiredSkillTemplateIds?: string[];
   testFixture?: {
     inputMode: "json" | "text";
     input: string;
@@ -2018,6 +2025,207 @@ export const EXAMPLE_WORKFLOWS: ExampleWorkflow[] = [
       edges: [
         { id: "request-e1", source: "request-start", target: "request-process" },
         { id: "request-e2", source: "request-process", target: "request-output" },
+      ],
+    },
+  },
+  {
+    id: "esco-api-webhook-lookup-loop",
+    name: "ESCO Lookup from API / Webhook",
+    description: "Starts from an API or webhook payload, looks up an official ESCO skill description, and asks whether to loop for another skill before returning all results.",
+    execution: { backendEnabled: true, apiEnabled: true, webhookEnabled: true },
+    requiredSkillTemplateIds: [ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID],
+    testFixture: {
+      inputMode: "json",
+      input: JSON.stringify({
+        skillName: "project management",
+        context: "Planning technical projects, coordinating resources, deadlines, requirements, and risks.",
+        language: "en",
+      }, null, 2),
+      prompt: "Look up the official ESCO description for the supplied skill.",
+    },
+    workflow: {
+      nodes: [
+        {
+          id: "esco-request-trigger",
+          type: "trigger",
+          position: { x: 20, y: 160 },
+          data: {
+            label: "API / Webhook Request",
+            triggerType: "manual",
+            inputSources: ["input"],
+            defaultPrompt: "Look up the official ESCO description for the supplied skill.",
+            outputSchema: "{ input: { skillName, context?, language? }, triggerSource, runId }",
+          } satisfies TriggerNodeData,
+        },
+        {
+          id: "esco-prepare-request",
+          type: "plugin",
+          position: { x: 290, y: 160 },
+          data: {
+            label: "Validate Request Payload",
+            description: "Normalizes the API or webhook payload for the ESCO skill template.",
+            inputSchema: "{ input: { skillName, context?, language? } }",
+            outputSchema: "{ skillName, context, language, lookups }",
+            code: `const trigger = input.prevOutput || {};
+const payload = trigger.input && typeof trigger.input === 'object' ? trigger.input : {};
+const skillName = String(payload.skillName || payload.skill || payload.name || '').trim();
+if (!skillName) throw new Error('Request payload must include a non-empty skillName.');
+return {
+  skillName,
+  context: String(payload.context || '').trim(),
+  language: String(payload.language || 'en').trim() || 'en',
+  lookups: [],
+};`,
+          } satisfies PluginNodeData,
+        },
+        {
+          id: "esco-lookup-agent",
+          type: "agent",
+          position: { x: 570, y: 160 },
+          data: {
+            label: "Look Up ESCO Description",
+            mode: "inline",
+            inlineName: "ESCO Skill Description Agent",
+            inlineSystemPrompt: "Use the assigned ESCO Skill Description Lookup skill exactly. Return only the official ESCO description text for the requested skill and language.",
+            inlineOutputType: "text",
+            inlineFallbackOutputType: "text",
+            skillIds: [ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID],
+            requiresDocument: false,
+            useUploadedDocument: false,
+            passPrevOutput: true,
+            promptOverride: `Find the official ESCO skill description using these inputs:
+{{prevOutput}}
+
+Follow the assigned ESCO Skill Description Lookup skill. Return only the official description text without rewriting it.`,
+            inputSchema: "{ skillName, context, language, lookups }",
+            outputSchema: "Official ESCO description text",
+          } satisfies AgentNodeData,
+        },
+        {
+          id: "esco-collect-result",
+          type: "plugin",
+          position: { x: 850, y: 160 },
+          data: {
+            label: "Collect Lookup Result",
+            description: "Appends the current ESCO result while preserving earlier loop results.",
+            inputSchema: "Official ESCO description text",
+            outputSchema: "{ skillName, context, language, lastDescription, lookups[] }",
+            code: `const next = input.getNodeOutput('esco-prepare-next');
+const initial = input.getNodeOutput('esco-prepare-request');
+const request = next && typeof next === 'object' ? next : initial || {};
+const description = String(input.prevOutput || '').trim();
+if (!description) throw new Error('The ESCO lookup returned an empty description.');
+const lookups = Array.isArray(request.lookups) ? request.lookups : [];
+return {
+  ...request,
+  lastDescription: description,
+  lookups: [...lookups, {
+    skillName: String(request.skillName || ''),
+    context: String(request.context || ''),
+    language: String(request.language || 'en'),
+    description,
+  }],
+};`,
+          } satisfies PluginNodeData,
+        },
+        {
+          id: "esco-ask-another",
+          type: "user_input",
+          position: { x: 1130, y: 160 },
+          data: {
+            label: "Ask for Another Skill",
+            question: `Official ESCO description for {{prevOutput.skillName}}:
+
+{{prevOutput.lastDescription}}
+
+Would you like to look up another skill description?`,
+            answerKey: "lookupAnother",
+            inputType: "yes_no",
+            description: "The backend run pauses here and can be resumed through the interaction link or workflow API.",
+            inputSchema: "{ skillName, lastDescription, lookups[] }",
+            outputSchema: "{ lookupAnother, lookups[] }",
+          } satisfies UserInputNodeData,
+        },
+        {
+          id: "esco-another-condition",
+          type: "condition",
+          position: { x: 1400, y: 160 },
+          data: {
+            label: "Look Up Another?",
+            expression: "prevOutput?.lookupAnother === true",
+            inputSchema: "{ lookupAnother, lookups[] }",
+          } satisfies ConditionNodeData,
+        },
+        {
+          id: "esco-ask-skill",
+          type: "user_input",
+          position: { x: 1130, y: 390 },
+          data: {
+            label: "Ask for Skill Name",
+            question: "Which skill should I look up next in ESCO?",
+            answerKey: "nextSkillName",
+            inputType: "text",
+            inputSchema: "{ lookups[] }",
+            outputSchema: "{ nextSkillName, lookups[] }",
+          } satisfies UserInputNodeData,
+        },
+        {
+          id: "esco-prepare-next",
+          type: "plugin",
+          position: { x: 850, y: 390 },
+          data: {
+            label: "Prepare Next Lookup",
+            description: "Carries prior results into the next ESCO lookup iteration.",
+            inputSchema: "{ nextSkillName, context, language, lookups[] }",
+            outputSchema: "{ skillName, context, language, lookups[] }",
+            code: `const state = input.prevOutput || {};
+const skillName = String(state.nextSkillName || state.userAnswer || '').trim();
+if (!skillName) throw new Error('Please provide a non-empty skill name.');
+return {
+  skillName,
+  context: String(state.context || '').trim(),
+  language: String(state.language || 'en').trim() || 'en',
+  lookups: Array.isArray(state.lookups) ? state.lookups : [],
+};`,
+          } satisfies PluginNodeData,
+        },
+        {
+          id: "esco-finish",
+          type: "plugin",
+          position: { x: 1680, y: 160 },
+          data: {
+            label: "Build Final Response",
+            description: "Returns every ESCO description collected during the run.",
+            inputSchema: "{ lookups[] }",
+            outputSchema: "{ completed, count, lookups[] }",
+            code: `const state = input.prevOutput || {};
+const lookups = Array.isArray(state.lookups) ? state.lookups : [];
+return { completed: true, count: lookups.length, lookups };`,
+          } satisfies PluginNodeData,
+        },
+        {
+          id: "esco-output",
+          type: "output",
+          position: { x: 1950, y: 160 },
+          data: {
+            label: "Return ESCO Results",
+            renderAs: "json",
+            inputSchema: "{ completed, count, lookups[] }",
+            outputSchema: "{ completed, count, lookups[] }",
+          } satisfies OutputNodeData,
+        },
+      ],
+      edges: [
+        { id: "esco-e1", source: "esco-request-trigger", target: "esco-prepare-request" },
+        { id: "esco-e2", source: "esco-prepare-request", target: "esco-lookup-agent" },
+        { id: "esco-e3", source: "esco-lookup-agent", target: "esco-collect-result" },
+        { id: "esco-e4", source: "esco-collect-result", target: "esco-ask-another" },
+        { id: "esco-e5", source: "esco-ask-another", target: "esco-another-condition" },
+        { id: "esco-e6", source: "esco-another-condition", target: "esco-ask-skill", sourceHandle: "true" },
+        { id: "esco-e7", source: "esco-ask-skill", target: "esco-prepare-next" },
+        { id: "esco-e8", source: "esco-prepare-next", target: "esco-lookup-agent" },
+        { id: "esco-e9", source: "esco-another-condition", target: "esco-finish", sourceHandle: "false" },
+        { id: "esco-e10", source: "esco-finish", target: "esco-output" },
       ],
     },
   },
