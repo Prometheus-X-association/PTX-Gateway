@@ -1,0 +1,6 @@
+.studio-surface { container-type: inline-size; min-width: 0; }
+.studio-elements { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.studio-element { grid-column: span var(--studio-mobile, 12); min-width: 0; overflow-wrap: anywhere; }
+@container (min-width: 640px) { .studio-element { grid-column: span var(--studio-tablet, 12); } }
+@container (min-width: 1024px) { .studio-element { grid-column: span var(--studio-desktop, 12); } }
+.studio-element iframe { max-width: 100%; }

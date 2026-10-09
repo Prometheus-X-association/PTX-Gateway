@@ -1,3 +1,5 @@
+> Studio batch three adds the responsive visual and HTML/CSS/JavaScript page builder. See [builder usage, deployment and validation](application-platform-batch-three.md).
+
 > Studio batch two adds published applications, organization canvases, and reusable Chat Drawers. See [setup, embedding, deployment and validation](application-platform-batch-two.md).
 
 # PTX Gateway Admin Pages Guide

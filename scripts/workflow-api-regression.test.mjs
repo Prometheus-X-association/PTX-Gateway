@@ -526,3 +526,27 @@ test("managed chat assigns agents and workflows without a legacy result resource
   chat = await mutateStudio("activate", chat, { active: false });
   assert.equal((await api(body, "anon")).status, 403);
 });
+
+test("Studio builder properties survive publication and disabled actions cannot execute", async () => {
+  setupStudio();
+  let app = await createStudio("application", "builder");
+  const elements = [
+    { id: "title", type: "text", label: "Bound value", content: "Fallback", binding: "result.skill", responsive: { mobile: 12, tablet: 6, desktop: 4 }, appearance: { padding: 12, radius: 4, color: "#112233", background: "#ffffff", align: "center", minHeight: 48 } },
+    { id: "code", type: "html", label: "Code", content: "<p>HTML</p>", css: "p{color:red}", javascript: "document.body.dataset.ready='yes'" },
+    { id: "disabled", type: "workflow-button", label: "Disabled", workflowId: "shared", enabled: false },
+    { id: "active", type: "workflow-button", label: "Active", workflowId: "shared" },
+  ];
+  let page = await createStudio("page", "responsive", { elements }, app.id);
+  page = await mutateStudio("publish", page);
+  app = await mutateStudio("publish", app);
+  const live = await studio({ action: "resolve", slug: app.slug }, "user-a");
+  assert.equal(live.status, 200);
+  assert.deepEqual(live.body.pages[0].definition.elements[0].responsive, elements[0].responsive);
+  assert.equal(live.body.pages[0].definition.elements[1].javascript, elements[1].javascript);
+  const launch = { action: "launch", id: page.id, releaseId: page.published_release_id, containerId: app.id, containerReleaseId: app.published_release_id, input: {} };
+  assert.equal((await studio({ ...launch, elementId: "disabled" }, "user-a")).status, 403);
+  assert.equal((await studio({ ...launch, elementId: "active" }, "user-a")).status, 202);
+  const invalid = structuredClone(page.draft); invalid.elements[0].responsive.desktop = 24;
+  assert.equal((await studio({ action: "save", id: page.id, expectedRevision: page.revision, definition: invalid })).status, 400);
+  assert.equal(database.tables.studio_items.find((item) => item.id === page.id).revision, page.revision);
+});

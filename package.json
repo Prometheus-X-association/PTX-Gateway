@@ -24,7 +24,7 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:applications": "node --test scripts/application-prototype-regression.test.mjs",
+    "test:applications": "node --test scripts/application-prototype-regression.test.mjs scripts/studio-builder-regression.test.mjs",
     "test:workflow": "node --test scripts/workflow-agent-regression.test.mjs scripts/workflow-api-regression.test.mjs",
     "test:workflow:backend": "deno task --config services/workflow-worker/deno.json test",
     "workflow:worker": "deno task --config services/workflow-worker/deno.json start",

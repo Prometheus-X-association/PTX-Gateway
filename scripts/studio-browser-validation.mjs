@@ -35,6 +35,7 @@ const pageItem = seed("page", "extract", definition("Extracted Skills", { elemen
 const canvas = seed("canvas", "workspace", definition("Organization workspace", { pageIds: [pageItem.id], layout: "grid" })); publish(canvas);
 const chatRequests = [];
 const browserErrors = [];
+let debugPage;
 const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
 async function fixtures(context, authenticated = true) {
   await context.route("**/*", async (route) => {
@@ -97,7 +98,7 @@ async function fixtures(context, authenticated = true) {
 }
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); await fixtures(context);
-  const page = await context.newPage();
+  const page = await context.newPage(); debugPage = page;
   await page.goto(`${base}/admin?section=applications`);
   await page.getByRole("button", { name: "New application", exact: true }).waitFor();
   await page.getByRole("button", { name: "New application", exact: true }).click();
@@ -108,6 +109,92 @@ try {
   await page.getByRole("button", { name: "Publish saved draft", exact: true }).click();
   await page.getByRole("button", { name: "Close editor", exact: true }).click();
   assert.ok(items.some((item) => item.slug === "browser-created" && item.active));
+  // Phase 4: build and publish a responsive page through the actual editor.
+  await page.getByLabel("Item type").selectOption("page");
+  await page.getByRole("button", { name: "New page", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill("Visual skills page");
+  await page.getByLabel("URL slug").fill("visual-skills");
+  const builderApp = items.find((item) => item.slug === "browser-created");
+  await page.getByLabel("Application", { exact: true }).selectOption(builderApp.id);
+  const builder = page.getByRole("region", { name: "Page builder", exact: true });
+  await builder.getByRole("button", { name: "Add Text", exact: true }).dragTo(builder.getByTestId("builder-canvas"), { targetPosition: { x: 60, y: 60 } });
+  await builder.getByLabel("Element label", { exact: true }).fill("Bound skill");
+  await builder.getByLabel("Value binding", { exact: true }).pressSequentially("result.0.skill");
+  await builder.getByLabel("desktop", { exact: true }).selectOption("6");
+  await builder.getByLabel("tablet", { exact: true }).selectOption("6");
+  await builder.getByLabel("Padding (px)", { exact: true }).fill("12");
+  await builder.getByRole("button", { name: "Duplicate element", exact: true }).click();
+  await builder.getByLabel("Element label", { exact: true }).fill("Inactive copy");
+  await builder.getByLabel("Element active", { exact: true }).uncheck();
+  await builder.getByRole("button", { name: "Delete element", exact: true }).click();
+  await builder.getByRole("button", { name: "Undo", exact: true }).click();
+  await builder.getByRole("button", { name: "Redo", exact: true }).click();
+  await builder.getByRole("button", { name: "Undo", exact: true }).click(); // Retain inactive element to test runtime filtering.
+  await builder.getByRole("button", { name: "Add HTML / CSS / JavaScript", exact: true }).click();
+  await builder.getByLabel("Element label", { exact: true }).fill("Interactive code");
+  await builder.getByLabel("desktop", { exact: true }).selectOption("6");
+  await builder.getByRole("button", { name: "JavaScript", exact: true }).click();
+  await builder.getByLabel("JavaScript source", { exact: true }).fill("");
+  await builder.getByRole("button", { name: "HTML", exact: true }).click();
+  await builder.getByLabel("HTML source", { exact: true }).fill('<button id="counter">Count 0</button><p id="context"></p>');
+  await builder.getByRole("button", { name: "CSS", exact: true }).click();
+  await builder.getByLabel("CSS source", { exact: true }).fill('body { font-family: sans-serif; padding: 12px; } button { background: rgb(12, 34, 56); color: white; padding: 12px; }');
+  await builder.getByRole("button", { name: "JavaScript", exact: true }).click();
+  await builder.getByLabel("JavaScript source", { exact: true }).fill('let n = 0; document.querySelector("#counter").onclick = e => e.target.textContent = "Count " + ++n; PTX.onContext(({ result }) => document.querySelector("#context").textContent = result?.[0]?.skill || "No result");');
+  const codeFrame = builder.frameLocator('iframe[title="Interactive code"]');
+  await codeFrame.getByRole("button", { name: "Count 0", exact: true }).click();
+  await codeFrame.getByRole("button", { name: "Count 1", exact: true }).waitFor();
+  await codeFrame.getByText("Analysis", { exact: true }).waitFor();
+  assert.equal(await codeFrame.locator("#counter").evaluate((element) => getComputedStyle(element).backgroundColor), "rgb(12, 34, 56)");
+  const isolated = await codeFrame.locator("body").evaluate(() => { try { return parent.document.body != null; } catch { return false; } });
+  assert.equal(isolated, false, "Custom code must not access the admin DOM");
+  await builder.getByRole("button", { name: "Add Workflow button", exact: true }).click();
+  await builder.getByLabel("Element label", { exact: true }).fill("Run builder workflow");
+  await builder.getByLabel("Workflow ID", { exact: true }).fill("extract");
+  await builder.getByRole("button", { name: "Move up", exact: true }).click();
+  await builder.getByRole("button", { name: "Page JSON", exact: true }).click();
+  const built = JSON.parse(await builder.getByLabel("Definition (JSON)").inputValue());
+  assert.equal(built.elements.find((element) => element.label === "Bound skill").binding, "result.0.skill");
+  assert.equal(built.elements.find((element) => element.label === "Interactive code").responsive.desktop, 6);
+  await builder.getByLabel("Definition (JSON)").fill("{broken");
+  await builder.getByRole("alert").filter({ hasText: "Correct Page JSON" }).waitFor();
+  await builder.getByRole("button", { name: "Undo", exact: true }).click();
+  await builder.getByRole("button", { name: "Preview page", exact: true }).click();
+  await builder.getByLabel("Viewport", { exact: true }).selectOption("375");
+  assert.equal(await builder.getByRole("button", { name: "Run builder workflow", exact: true }).isDisabled(), true);
+  const previewWidth = await builder.getByTestId("builder-canvas").evaluate((element) => element.getBoundingClientRect().width);
+  assert.equal(previewWidth, 375);
+  assert.equal(await builder.getByTestId("builder-canvas").getByText("Inactive copy", { exact: true }).count(), 0);
+  mkdirSync("/tmp/ptx-studio-validation/screenshots", { recursive: true });
+  await builder.frameLocator('iframe[title="Interactive code"]').getByRole("button", { name: "Count 0", exact: true }).waitFor();
+  await page.screenshot({ path: "/tmp/ptx-studio-validation/screenshots/builder-preview.png", fullPage: true });
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  const pagePublication = page.waitForResponse((response) => response.url().endsWith("/studio-api") && response.request().postDataJSON()?.action === "publish");
+  await page.getByRole("button", { name: "Publish saved draft", exact: true }).click();
+  await pagePublication;
+  const builtPage = items.find((item) => item.slug === "visual-skills");
+  assert.ok(builtPage?.active);
+  publish(builderApp); // Container promotion is already exercised by the admin test above.
+  await page.goto(`${base}/o/test-org/apps/browser-created/visual-skills`);
+  await page.getByRole("button", { name: "Run builder workflow", exact: true }).click();
+  await page.getByRole("cell", { name: "Analysis", exact: true }).waitFor();
+  const boundId = builtPage.draft.elements.find((element) => element.label === "Bound skill").id;
+  const inactiveId = builtPage.draft.elements.find((element) => element.label === "Inactive copy").id;
+  await page.locator(`[data-element-id="${boundId}"]`).getByText("Analysis", { exact: true }).waitFor();
+  assert.equal(await page.locator(`[data-element-id="${inactiveId}"]`).count(), 0);
+  const runtimeCode = page.frameLocator('iframe[title="Interactive code"]');
+  await runtimeCode.getByText("Analysis", { exact: true }).waitFor();
+  await runtimeCode.getByRole("button", { name: "Count 0", exact: true }).click();
+  await runtimeCode.getByRole("button", { name: "Count 1", exact: true }).waitFor();
+  for (const [viewport, expectedSpan] of [[1440, 6], [900, 6], [390, 12]]) {
+    await page.setViewportSize({ width: viewport, height: 1000 });
+    assert.equal(await page.locator(`[data-element-id="${boundId}"]`).evaluate((element) => getComputedStyle(element).gridColumnStart), `span ${expectedSpan}`);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `Builder runtime overflows at ${viewport}px`);
+  }
+  await page.screenshot({ path: "/tmp/ptx-studio-validation/screenshots/builder-runtime-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  console.log("PASS: visual drag/drop, properties, bindings, undo/redo, code editing/execution/isolation, publication and three responsive runtime sizes");
+  await page.goto(`${base}/admin?section=applications`);
   await page.getByRole("tab", { name: "Chat Drawers", exact: true }).click();
   await page.getByRole("button", { name: "New chat", exact: true }).waitFor();
   await page.getByRole("button", { name: "Edit", exact: true }).click();
@@ -162,4 +249,8 @@ try {
   const signedOut = await external.newPage(); await signedOut.goto(`${base}/o/test-org/apps/skills`); await signedOut.waitForURL("**/login");
   assert.deepEqual(browserErrors, [], `Browser errors: ${browserErrors.join("; ")}`);
   console.log("PASS: external cross-origin web component/iframe, context bridge, forged-origin rejection, uploads, close/open, missing-parent denial and login protection");
+} catch (error) {
+  mkdirSync("/tmp/ptx-studio-validation/screenshots", { recursive: true });
+  if (debugPage) { await debugPage.screenshot({ path: "/tmp/ptx-studio-validation/screenshots/failure.png", fullPage: true }); console.log((await debugPage.locator('body').innerText()).slice(-5000)); }
+  throw error;
 } finally { await browser.close(); }

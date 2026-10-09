@@ -1,10 +1,12 @@
+import { studioElementStyle } from "@/lib/studioBuilder";
 import { useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { studioApi, type PublishedStudioItem } from "@/services/studioApi";
 import { workflowBackend, type BackendWorkflowRun } from "@/lib/workflowBackend";
-import { customWidgetDocument, outputTable, parseApplicationInput } from "@/lib/applicationPrototype";
+import { parseApplicationInput } from "@/lib/applicationPrototype";
+import { StudioElementContent } from "@/components/studio/StudioElements";
 import ManagedChat from "@/components/chat/ManagedChat";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -38,7 +40,7 @@ export default function StudioRuntimePage({ canvas = false }: { canvas?: boolean
 }
 function PublishedPage({ page, container, organizationId }: { page: PublishedStudioItem; container: PublishedStudioItem; organizationId: string }) {
   const { user } = useAuth();
-  const [payload, setPayload] = useState(page.definition.elements.find((element) => element.type === "json-input")?.content || "{}");
+  const [payload, setPayload] = useState(page.definition.elements.find((element) => element.type === "json-input" && element.enabled !== false)?.content || "{}");
   const [result, setResult] = useState<unknown>(undefined);
   const [error, setError] = useState("");
   const storageKey = `studio-run:${user?.id}:${organizationId}:${page.id}:${page.releaseId}`;
@@ -75,23 +77,15 @@ function PublishedPage({ page, container, organizationId }: { page: PublishedStu
     {run.data?.stopReason && <p>{run.data.stopReason}</p>}
     {run.data?.status === "queued" && <p className="text-sm text-muted-foreground">Waiting for workflow worker capacity.</p>}
     {run.data?.waiting && <RunAnswer organizationId={organizationId} run={run.data} onAnswered={() => void run.refetch()} />}
-    {page.definition.elements.map((element) => {
-      if (element.type === "heading") return <h2 key={element.id} className="text-2xl font-semibold">{element.content || element.label}</h2>;
-      if (element.type === "text") return <p key={element.id} className="whitespace-pre-wrap">{element.content}</p>;
-      if (element.type === "json-input") return <div key={element.id}><Label htmlFor={`${page.id}-${element.id}`}>{element.label}</Label><Textarea id={`${page.id}-${element.id}`} className="min-h-36 font-mono" value={payload} onChange={(event) => setPayload(event.target.value)} /></div>;
-      if (element.type === "workflow-button") return <Button key={element.id} disabled={active || start.isPending} onClick={() => startAction(element.id)}>{start.isPending ? "Starting…" : element.label}</Button>;
-      if (element.type === "html") return <iframe key={element.id} title={element.label || "Custom component"} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={customWidgetDocument(element.content || "")} className="min-h-80 w-full rounded border bg-white" />;
-      if (element.type === "chat") return <div key={element.id} className="h-[640px] min-h-80"><ManagedChat id={element.chatId!} organizationId={organizationId} context={{ resultData: output }} onResultDataChange={setResult} /></div>;
-      return <ResultDisplay key={element.id} value={output} title={element.label} />;
-    })}
+    <div className="studio-surface"><div className="studio-elements">{page.definition.elements.filter((element) => element.enabled !== false).map((element) => <div key={element.id} className="studio-element" data-element-id={element.id} style={studioElementStyle(element)}>
+      <StudioElementContent element={element} input={(() => { try { return JSON.parse(payload); } catch { return null; } })()} result={output} payload={payload} onPayloadChange={setPayload}
+        onAction={startAction} busy={active || start.isPending} scope={page.id}
+        chat={element.type === "chat" ? <div className="min-h-80" style={{ height: element.appearance?.minHeight || 640 }}><ManagedChat id={element.chatId!} organizationId={organizationId} context={{ resultData: output }} onResultDataChange={setResult} /></div> : undefined} />
+    </div>)}</div></div>
   </CardContent></Card>;
 }
 function RunAnswer({ organizationId, run, onAnswered }: { organizationId: string; run: BackendWorkflowRun; onAnswered: () => void }) {
   const [answer, setAnswer] = useState("");
   const submit = useMutation({ mutationFn: () => workflowBackend("resume", organizationId, { runId: run.id, nodeId: run.waiting!.nodeId, waitingVersion: run.waitingVersion, answer }), onSuccess: onAnswered });
   return <div className="space-y-2 rounded border p-3"><Label htmlFor={`answer-${run.id}`}>{run.waiting!.question}</Label>{run.waiting!.options?.length ? <select id={`answer-${run.id}`} className="w-full rounded border bg-background p-2" value={answer} onChange={(event) => setAnswer(event.target.value)}><option value="">Select an answer</option>{run.waiting!.options.map((value) => <option key={value}>{value}</option>)}</select> : <Textarea id={`answer-${run.id}`} value={answer} onChange={(event) => setAnswer(event.target.value)} />}<Button disabled={!answer.trim() || submit.isPending} onClick={() => submit.mutate()}>Submit answer</Button>{submit.error && <p role="alert">{submit.error.message}</p>}</div>;
-}
-function ResultDisplay({ value, title }: { value: unknown; title: string }) {
-  const table = outputTable(value);
-  return <section className="space-y-2"><h3 className="font-medium">{title}</h3>{value == null ? <p className="text-sm text-muted-foreground">No result yet.</p> : <>{table && <div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr>{table.columns.map((column) => <th className="border-b p-2" key={column}>{column}</th>)}</tr></thead><tbody>{table.rows.map((row, index) => <tr key={index}>{table.columns.map((column) => <td className="border-b p-2" key={column}>{typeof row[column] === "string" ? row[column] as string : JSON.stringify(row[column])}</td>)}</tr>)}</tbody></table><p className="text-xs text-muted-foreground">Showing up to 100 rows and 20 columns.</p></div>}<details open={!table}><summary className="cursor-pointer text-sm">Complete JSON output</summary><pre className="max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(value, null, 2)}</pre></details></>}</section>;
 }

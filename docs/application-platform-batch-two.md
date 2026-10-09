@@ -1,5 +1,7 @@
 # Application platform — batch two
 
+The responsive visual and code builder is now implemented in [batch three](application-platform-batch-three.md). The scope below records the batch-two baseline.
+
 This batch implements the organization application registry and publishing foundation (phase 3), plus reusable managed chat. It retains PDC Config, Resources, Global Settings, the result page and legacy gateway routes. The Appsmith-style drag-and-drop designer, prompt-to-page generation, arbitrary JavaScript editor, and managed knowledge-graph/RAG database catalogue remain later phases. The current page editor uses validated JSON and isolated HTML/CSS elements.
 
 ## Admin workflow

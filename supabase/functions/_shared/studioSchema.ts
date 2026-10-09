@@ -7,6 +7,13 @@ export interface StudioElement {
   content?: string;
   workflowId?: string;
   chatId?: string;
+  enabled?: boolean;
+  binding?: string;
+  css?: string;
+  javascript?: string;
+  responsive?: { mobile: number; tablet: number; desktop: number };
+  appearance?: { padding: number; radius: number; color: string; background: string; align: "left" | "center" | "right"; minHeight: number };
+
 }
 export interface StudioDefinition {
   schemaVersion: 1;
@@ -45,6 +52,20 @@ function strings(value: unknown, maximum: number, length: number): string[] {
   if (!Array.isArray(value) || value.length > maximum) throw new Error(`Expected at most ${maximum} entries.`);
   return value.map((entry) => text(entry, length));
 }
+function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) throw new Error(`Expected an integer from ${min} to ${max}.`);
+  return value;
+}
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a settings object.");
+  return value as Record<string, unknown>;
+}
+function color(value: unknown): string {
+  const result = text(value, 9);
+  if (result && !/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(result)) throw new Error("Colors must be #RRGGBB or #RRGGBBAA.");
+  return result;
+}
 export function validateStudioDefinition(kind: StudioKind, raw: unknown): StudioDefinition {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("A page definition object is required.");
   const value = raw as Record<string, unknown>;
@@ -66,9 +87,27 @@ export function validateStudioDefinition(kind: StudioKind, raw: unknown): Studio
       const next: StudioElement = { id, type, label: text(element.label, 160), content: text(element.content, 100_000) };
       if (type === "workflow-button") {
         next.workflowId = text(element.workflowId, 200);
-        if (!next.workflowId) throw new Error("Workflow buttons require a workflow ID.");
+        if (!next.workflowId && element.enabled !== false) throw new Error("Workflow buttons require a workflow ID.");
       }
-      if (type === "chat") next.chatId = studioUuid(element.chatId);
+      if (type === "chat") next.chatId = !element.chatId && element.enabled === false ? "" : studioUuid(element.chatId);
+      if (element.enabled !== undefined) {
+        if (typeof element.enabled !== "boolean") throw new Error("Element activation must be a boolean.");
+        next.enabled = element.enabled;
+      }
+      if (element.binding !== undefined) {
+        next.binding = text(element.binding, 300);
+        if (next.binding && (!/^(result|input)(\.[a-zA-Z0-9_-]+)*$/.test(next.binding) || next.binding.split(".").some((part) => ["__proto__", "prototype", "constructor"].includes(part)))) throw new Error("Bindings must be result or input followed by safe dot-separated property names.");
+      }
+      if (type === "html") { next.css = text(element.css, 100_000); next.javascript = text(element.javascript, 100_000); }
+      if (element.responsive !== undefined) {
+        const sizes = record(element.responsive);
+        next.responsive = { mobile: boundedNumber(sizes.mobile, 12, 1, 12), tablet: boundedNumber(sizes.tablet, 12, 1, 12), desktop: boundedNumber(sizes.desktop, 12, 1, 12) };
+      }
+      if (element.appearance !== undefined) {
+        const style = record(element.appearance);
+        if (style.align !== undefined && !["left", "center", "right"].includes(String(style.align))) throw new Error("Invalid text alignment.");
+        next.appearance = { padding: boundedNumber(style.padding, 0, 0, 64), radius: boundedNumber(style.radius, 0, 0, 48), minHeight: boundedNumber(style.minHeight, 0, 0, 1600), color: color(style.color), background: color(style.background), align: (style.align || "left") as "left" | "center" | "right" };
+      }
       elements.push(next);
     }
     if (elements.filter((element) => element.type === "json-input").length > 1) throw new Error("Pages support one shared JSON input in this schema version.");

@@ -94,7 +94,7 @@ export async function handleStudioRequest(request: Request) {
       const pin = (container.release.definition.pageReleases || []).find((entry: any) => entry.id === body.id && entry.releaseId === body.releaseId);
       if (!pin) throw new HttpError(403, "This page action is not part of the published application.");
       const { item, release } = await pinnedPage(admin, principal.orgId, studioUuid(body.id), studioUuid(body.releaseId));
-      const element = release.definition.elements.find((entry: any) => entry.id === body.elementId && entry.type === "workflow-button");
+      const element = release.definition.elements.find((entry: any) => entry.id === body.elementId && entry.type === "workflow-button" && entry.enabled !== false);
       if (!element || !release.runtime_ciphertext) throw new HttpError(403, "This action is not published.");
       // A global disable or deletion still takes effect even though execution uses an immutable release snapshot.
       const live = await loadWorkflow(admin, principal.orgId, element.workflowId);
@@ -133,6 +133,7 @@ export async function handleStudioRequest(request: Request) {
         const workflows = [];
         let llm: any = {};
         for (const element of definition.elements) {
+          if (element.enabled === false) continue;
           if (element.type === "chat") await publishedItem(admin, principal.orgId, element.chatId, "chat");
           if (element.type === "workflow-button") {
             const loaded = await loadWorkflow(admin, principal.orgId, element.workflowId);
