@@ -1,3 +1,4 @@
+import { loadStudioChatPolicy, allowsStudioChatItem } from "./studioChatAccess.ts";
 import { adminClient, type Principal, loadWorkflow, checkWorkflowAccess } from "./workflowAccess.ts";
 import { interactionUrl, validateInteractionSettings } from "./workflowInteraction.ts";
 import { compileWorkflow, encryptForOrganization, hash, HttpError, object, redact, WORKFLOW_COMPILER_VERSION } from "./workflowSecurity.ts";
@@ -19,10 +20,10 @@ export async function readBody(request: Request, maxBytes = 16 * 1024 * 1024) {
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
   return new TextDecoder().decode(bytes);
 }
-export async function createRun(admin: ReturnType<typeof adminClient>, principal: Principal, body: Record<string, any>, source: "api" | "dashboard" | "webhook", idempotencyKey?: string, webhook?: { id: string; deliveryId: string }) {
+export async function createRun(admin: ReturnType<typeof adminClient>, principal: Principal, body: Record<string, any>, source: "api" | "dashboard" | "webhook", idempotencyKey?: string, webhook?: { id: string; deliveryId: string }, executionSnapshot?: { workflow: any; llm: any; studioContext?: { pageId: string; releaseId: string; containerId: string; containerReleaseId: string; elementId: string } }) {
   const workflowId = String(body.workflowId || "");
   checkWorkflowAccess(principal, workflowId);
-  const { workflow: savedWorkflow, llm } = await loadWorkflow(admin, principal.orgId, workflowId);
+  const { workflow: savedWorkflow, llm } = executionSnapshot ?? await loadWorkflow(admin, principal.orgId, workflowId);
   const workflow = compileWorkflow(savedWorkflow);
   const execution = object(workflow.execution);
   // The organization chat switch controls dashboard execution, not external triggers.
@@ -30,12 +31,15 @@ export async function createRun(admin: ReturnType<typeof adminClient>, principal
   if (source === "api" && !execution.apiEnabled) throw new HttpError(403, "API execution is disabled for this workflow.");
   if (source === "webhook" && !execution.webhookEnabled) throw new HttpError(403, "Webhook execution is disabled for this workflow.");
   if (source === "dashboard" && !execution.backendEnabled) throw new HttpError(403, "Backend execution is disabled for this workflow.");
-  if (principal.publicToken && (source !== "dashboard" || !body.targetResourceId || !workflow.targetResources?.includes(body.targetResourceId))) throw new HttpError(403, "Workflow is not available for this result page.");
+  if (body.studio_chat_id) {
+    const chat = await loadStudioChatPolicy(admin, principal.orgId, body.studio_chat_id);
+    if (source !== "dashboard" || !allowsStudioChatItem(chat, "workflow", workflow)) throw new HttpError(403, "Workflow is not assigned to this chat drawer.");
+  } else if (principal.publicToken && (source !== "dashboard" || !body.targetResourceId || !workflow.targetResources?.includes(body.targetResourceId))) throw new HttpError(403, "Workflow is not available for this result page.");
   validateInteractionSettings(workflow);
   if (idempotencyKey && idempotencyKey.length > 200) throw new HttpError(400, "Idempotency key is too long.");
   const trigger = workflow.graph.nodes.find((node: any) => node.type === "trigger");
   const input = { resultData: Object.hasOwn(body, "input") ? body.input : body.resultData ?? null, userMessage: body.userMessage ?? trigger.data.defaultPrompt ?? "Run workflow", docText: body.docText ?? null,
-    attachments: body.attachments ?? [], conversationHistory: body.conversationHistory ?? "" };
+    attachments: body.attachments ?? [], conversationHistory: body.conversationHistory ?? "", ...(executionSnapshot?.studioContext ? { studioContext: executionSnapshot.studioContext } : {}) };
   if (typeof input.userMessage !== "string" || input.userMessage.length > 100_000 || (input.docText !== null && (typeof input.docText !== "string" || input.docText.length > 2_000_000)) || typeof input.conversationHistory !== "string" || input.conversationHistory.length > 100_000) throw new HttpError(400, "Invalid workflow text input.");
   if (!Array.isArray(input.attachments) || input.attachments.length > 10) throw new HttpError(400, "At most ten attachments are allowed.");
   for (const file of input.attachments) if (typeof file.name !== "string" || file.name.length > 255 || !/\.(pdf|txt|md|markdown|csv|json|jsonl|xml|html?|ya?ml|doc|docx|xls|xlsx)$/i.test(file.name) || typeof file.mimeType !== "string" || file.mimeType.length > 255 || !Number.isInteger(file.size) || file.size < 0 || file.size > 10 * 1024 * 1024 || typeof file.base64 !== "string" || !file.base64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64) || Math.floor(file.base64.length * 0.75) > 10 * 1024 * 1024) throw new HttpError(400, "Invalid workflow attachment.");

@@ -1,3 +1,4 @@
+import { loadStudioChatPolicy, allowsStudioChatItem } from "../_shared/studioChatAccess.ts";
 import { authenticatedWorkerRun } from "../_shared/workflowAccess.ts";
 import { decryptForOrganization } from "../_shared/workflowSecurity.ts";
 import { buildChunkedResultPayload, formatChunkedResultContext, formatUploadedDocumentContext } from "./resultContext.ts";
@@ -173,6 +174,7 @@ interface ChatRequest {
   /** Result chat resolves saved nodes; builder tests execute the unsaved canvas. */
   mode?: "run" | "test";
   org_execution_token?: string;
+  studio_chat_id?: string;
   agentId?: string;
   /** Inline agent: system prompt provided directly, bypassing agent lookup */
   systemPrompt?: string;
@@ -1077,6 +1079,19 @@ serve(async (req: Request) => {
 
   const features = toObject(gc.features);
   const llmConfig = workerSnapshot?.llm ?? toObject(features.llmInsights) as LlmInsightsConfig;
+
+  if (!workerSnapshot && body.studio_chat_id) {
+    try {
+      const policy = await loadStudioChatPolicy(admin, orgContext.orgId, body.studio_chat_id);
+      if (body.workflowId) {
+        const workflow = ((llmConfig as { workflows?: Array<{ id?: string; targetResources?: string[] }> }).workflows || []).find((entry) => entry.id === body.workflowId);
+        if (!workflow || !allowsStudioChatItem(policy, "workflow", workflow)) return sendError("Workflow is not assigned to this chat drawer", 403);
+      } else if (body.agentId) {
+        const agent = llmConfig.agents?.find((entry) => entry.id === body.agentId);
+        if (!agent || !allowsStudioChatItem(policy, "agent", agent)) return sendError("Agent is not assigned to this chat drawer", 403);
+      }
+    } catch { return sendError("Chat drawer is unavailable", 403); }
+  }
 
   // A verified worker lease authorizes the saved workflow independently of chat.
   if (!workerSnapshot && !llmConfig.enabled) return sendError("LLM insights are disabled", 400);

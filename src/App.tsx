@@ -13,6 +13,9 @@ import NotFound from "./pages/NotFound";
 // Heavy pages are lazy-loaded so the embed and other lightweight routes
 // do not pay the cost of loading the admin/dashboard/results bundles.
 const WorkflowInteractionPage = lazy(() => import("./pages/WorkflowInteractionPage"));
+const StudioRuntimePage = lazy(() => import("./pages/StudioRuntimePage"));
+const ChatComponentPage = lazy(() => import("./pages/ChatComponentPage"));
+const ApplicationPreviewPage = lazy(() => import("./pages/ApplicationPreviewPage"));
 const OrgGateway = lazy(() => import("./pages/OrgGateway"));
 const AdminDashboard = lazy(() => import("./components/admin/AdminDashboard"));
 const EmbedGateway = lazy(() => import("./components/embed/EmbedGateway"));
@@ -49,6 +52,12 @@ const App = () => (
                   </ProtectedRoute>
                 }
               />
+              <Route path="/admin/application-preview/:organizationId" element={<ProtectedRoute requireAdmin><ApplicationPreviewPage /></ProtectedRoute>} />
+              <Route path="/o/:orgSlug/apps/:appSlug" element={<ProtectedRoute><StudioRuntimePage /></ProtectedRoute>} />
+              <Route path="/o/:orgSlug/apps/:appSlug/:pageSlug" element={<ProtectedRoute><StudioRuntimePage /></ProtectedRoute>} />
+              <Route path="/o/:orgSlug/canvas/:canvasSlug" element={<ProtectedRoute><StudioRuntimePage canvas /></ProtectedRoute>} />
+              <Route path="/o/:orgSlug/chat/:chatId" element={<ProtectedRoute><ChatComponentPage /></ProtectedRoute>} />
+              <Route path="/chat/embed/:orgSlug/:chatId" element={<ChatComponentPage embedded />} />
               {/* Organization-specific gateway route */}
               <Route path="/:slug" element={<OrgGateway />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

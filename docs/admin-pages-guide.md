@@ -1,3 +1,5 @@
+> Studio batch two adds published applications, organization canvases, and reusable Chat Drawers. See [setup, embedding, deployment and validation](application-platform-batch-two.md).
+
 # PTX Gateway Admin Pages Guide
 
 This guide helps administrators manage their own PTX Gateway configuration safely and consistently.
@@ -9,14 +11,18 @@ Purpose:
 - Central control panel for organization configuration.
 - Export/Import settings for backup, migration, and environment setup.
 
-Main tabs:
-- `PDC Config`
+Current navigation:
+- `Overview`: live workflow worker and queue health.
+- `Agent Orchestration` (default): workflows, agents, agent capabilities, providers and MCP integrations.
+- `Applications & Pages`: authenticated workflow application and custom-component prototype.
 - `Resources`
-- `Global Settings`
-- `Visualization`
-- `Embed`
-- `Users` (super admin only)
-- `Organization` (super admin only)
+- `PDC Configuration`
+- `Global Settings`: General, Placeholders, OIDC Provider, Visualization, Embed, Users and Organization (the latter two retain super-admin restrictions).
+- `Legacy Gateway`: Analytics Selection, Data Selection, Processing and Results settings.
+
+Sections support direct links such as `/admin?section=applications`. The standalone application prototype is available at `/admin/application-preview/:organizationId` and requires admin access to the active organization. Existing end-user gateway routes remain unchanged.
+
+See [batch-one architecture and acceptance guide](./application-platform-batch-one.md). The illustrations below show the earlier layout; the configuration functions remain available in the destinations above.
 
 ## 1) PDC Config
 ![PDC Config](./images/admin/01-pdc-config.svg)

@@ -50,7 +50,7 @@ export function storedBackendRun(key: string) { try { return sessionStorage.getI
 function storeRun(key: string, value: string | null) { try { if (value) sessionStorage.setItem(key, value); else sessionStorage.removeItem(key); } catch { /* optional reconnection */ } }
 const isMissingRunError = (error: unknown) => error instanceof Error && /run was not found/i.test(error.message);
 
-export async function executeBackendWorkflow(config: WorkflowConfig, ctx: BrowserExecutorContext, attachments: unknown[], targetResourceId?: string | null, contextId?: string | null): Promise<WorkflowResult> {
+export async function executeBackendWorkflow(config: WorkflowConfig, ctx: BrowserExecutorContext, attachments: unknown[], targetResourceId?: string | null, contextId?: string | null, studioChatId?: string): Promise<WorkflowResult> {
   const call = (action: string, body: Record<string, unknown>) => workflowBackend(action, ctx.organizationId ?? undefined, body, ctx.orgExecutionToken);
   const key = backendRunStorageKey(ctx.organizationId, config.id, contextId);
   const resumeRunId = (ctx.resume?.waiting as WorkflowWaitingState & { runId?: string })?.runId;
@@ -69,7 +69,7 @@ export async function executeBackendWorkflow(config: WorkflowConfig, ctx: Browse
   }
   if (!runId) {
     const started = await call("start", { source: "dashboard", workflowId: config.id, input: ctx.resultData, userMessage: ctx.userMessage, docText: ctx.docText,
-      conversationHistory: ctx.conversationHistory, attachments, targetResourceId });
+      conversationHistory: ctx.conversationHistory, attachments, targetResourceId, studio_chat_id: studioChatId });
     runId = started.runId;
     storeRun(key, runId!);
   }

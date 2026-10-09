@@ -2293,46 +2293,48 @@ const LlmSettingsSection = () => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Brain className="h-5 w-5" />
-          Agent Operations
+          Agent Orchestration
         </CardTitle>
         <CardDescription>
-          Configure LLM providers, MCP servers, agents, skills, and workflows for result-page chat and standalone API or webhook execution.
+          Design workflows, manage agents and capabilities, and operate API and webhook integrations.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
 
-        {/* Enable toggle */}
+        <details className="rounded-lg border p-3">
+          <summary className="cursor-pointer text-sm font-medium">Shared chat engine</summary>
         <div className="flex items-center justify-between p-4 border rounded-lg">
           <div>
-            <p className="font-medium">Enable result-page agent chat</p>
-            <p className="text-sm text-muted-foreground">Activate result-page agent chat. Standalone workflows remain available through their enabled API and webhook integrations.</p>
+            <p className="font-medium">Enable conversational chat</p>
+            <p className="text-sm text-muted-foreground">Enable result-page chat and managed chat drawers. Standalone API and webhook workflows remain available independently.</p>
           </div>
           <Switch checked={llm.enabled} onCheckedChange={(v) => patchLlm({ enabled: v })} />
         </div>
+        </details>
 
-        <Tabs defaultValue="providers" className="space-y-5">
+        <Tabs defaultValue="workflows" className="space-y-5">
           <TabsList className="grid h-auto w-full grid-cols-1 gap-1 rounded-xl bg-muted/60 p-1 sm:grid-cols-2 lg:grid-cols-4">
-            <TabsTrigger value="providers" className="gap-2 rounded-lg py-2.5">
-              <Server className="h-4 w-4" />
-              Providers &amp; MCP
-              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">
-                {activeProviders.length + activeMcpServers.length}
-              </Badge>
-            </TabsTrigger>
-            <TabsTrigger value="skills" className="gap-2 rounded-lg py-2.5">
-              <BookOpen className="h-4 w-4" />
-              Agent Skills
-              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{activeSkills.length}</Badge>
+            <TabsTrigger value="workflows" className="gap-2 rounded-lg py-2.5">
+              <Workflow className="h-4 w-4" />
+              Agent Workflows
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.workflows.filter((workflow) => !workflow.deletedAt).length}</Badge>
             </TabsTrigger>
             <TabsTrigger value="agents" className="gap-2 rounded-lg py-2.5">
               <Bot className="h-4 w-4" />
               AI Agents
               <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{activeAgents.length}</Badge>
             </TabsTrigger>
-            <TabsTrigger value="workflows" className="gap-2 rounded-lg py-2.5">
-              <Workflow className="h-4 w-4" />
-              Agent Workflows
-              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.workflows.filter((workflow) => !workflow.deletedAt).length}</Badge>
+            <TabsTrigger value="skills" className="gap-2 rounded-lg py-2.5">
+              <BookOpen className="h-4 w-4" />
+              Agent Capabilities
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{activeSkills.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="providers" className="gap-2 rounded-lg py-2.5">
+              <Server className="h-4 w-4" />
+              Providers &amp; MCP
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">
+                {activeProviders.length + activeMcpServers.length}
+              </Badge>
             </TabsTrigger>
           </TabsList>
 

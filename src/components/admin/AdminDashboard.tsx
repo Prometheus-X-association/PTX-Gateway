@@ -1,5 +1,5 @@
-import { ChangeEvent, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { ChangeEvent, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -16,8 +16,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/contexts/AuthContext";
-import { Settings, Database, Globe, Users, Shield, ArrowLeft, Building2, Palette, Link2, Brain, FileJson, Timer } from "lucide-react";
+import { Settings, Database, Globe, Shield, ArrowLeft, Brain, LayoutDashboard, PanelsTopLeft, History } from "lucide-react";
 import { Download, Upload, Loader2, Copy, Info } from "lucide-react";
+import StudioManagement from "./StudioManagement";
+import AdminOverview from "./AdminOverview";
 import PdcConfigSection from "./PdcConfigSection";
 import ResourcesConfigSection from "./ResourcesConfigSection";
 import GlobalConfigSection from "./GlobalConfigSection";
@@ -44,13 +46,25 @@ import { toast } from "sonner";
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const { user, isAdmin, isSuperAdmin } = useAuth();
-  const [activeTab, setActiveTab] = useState("pdc");
-  const [activeGeneralSubTab, setActiveGeneralSubTab] = useState("global");
-  const topTabsScrollRef = useRef<HTMLDivElement | null>(null);
-  const [topTabsScrollState, setTopTabsScrollState] = useState({
-    canScrollLeft: false,
-    canScrollRight: false,
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sections = [
+    { id: "overview", label: "Overview", icon: LayoutDashboard },
+    { id: "llm", label: "Agent Orchestration", icon: Brain },
+    { id: "applications", label: "Applications & Pages", icon: PanelsTopLeft },
+    { id: "chat-drawers", label: "Chat Drawers", icon: Brain },
+    { id: "resources", label: "Resources", icon: Database },
+    { id: "pdc", label: "PDC Configuration", icon: Globe },
+    { id: "global", label: "Global Settings", icon: Settings },
+    { id: "legacy", label: "Legacy Gateway", icon: History },
+  ];
+  const requestedSection = searchParams.get("section") || "llm";
+  const activeTab = sections.some((section) => section.id === requestedSection) ? requestedSection : "llm";
+  const setActiveTab = (section: string) => setSearchParams((previous) => {
+    const next = new URLSearchParams(previous);
+    next.set("section", section);
+    return next;
   });
+  const [activeGeneralSubTab, setActiveGeneralSubTab] = useState("global");
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isCopyingFromOrg, setIsCopyingFromOrg] = useState(false);
@@ -70,42 +84,6 @@ const AdminDashboard = () => {
     organizationSettings: false,
     embedSettings: false,
   });
-
-  useEffect(() => {
-    const scrollEl = topTabsScrollRef.current;
-    if (!scrollEl) return;
-
-    const updateScrollState = () => {
-      const maxScrollLeft = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
-      setTopTabsScrollState({
-        canScrollLeft: scrollEl.scrollLeft > 2,
-        canScrollRight: scrollEl.scrollLeft < maxScrollLeft - 2,
-      });
-    };
-
-    updateScrollState();
-    scrollEl.addEventListener("scroll", updateScrollState, { passive: true });
-    window.addEventListener("resize", updateScrollState);
-
-    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateScrollState) : null;
-    resizeObserver?.observe(scrollEl);
-
-    return () => {
-      scrollEl.removeEventListener("scroll", updateScrollState);
-      window.removeEventListener("resize", updateScrollState);
-      resizeObserver?.disconnect();
-    };
-  }, [isSuperAdmin]);
-
-  const scrollTopTabs = (direction: "left" | "right") => {
-    const scrollEl = topTabsScrollRef.current;
-    if (!scrollEl) return;
-
-    scrollEl.scrollBy({
-      left: direction === "left" ? -Math.max(280, scrollEl.clientWidth * 0.75) : Math.max(280, scrollEl.clientWidth * 0.75),
-      behavior: "smooth",
-    });
-  };
 
   const formatImportSummary = (summary?: ImportSettingsSummary | null) => {
     if (!summary) return "";
@@ -265,26 +243,27 @@ const AdminDashboard = () => {
   return (
     <div className="min-h-screen bg-background">
       {/* Background Glow */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] opacity-30 pointer-events-none">
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-[800px] h-[600px] opacity-30 pointer-events-none">
         <div className="absolute inset-0" style={{ background: "var(--gradient-glow)" }} />
       </div>
 
-      <div className="relative z-10 container mx-auto px-4 py-8 max-w-6xl">
+      <div className="relative z-10 container mx-auto px-4 py-8 max-w-[1600px]">
         <header className="mb-8">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
             <div className="flex items-center gap-3">
               <Button 
                 variant="ghost" 
                 size="icon" 
+                aria-label="Return to debug gateway"
                 onClick={() => navigate("/debug")}
                 className="mr-2"
               >
                 <ArrowLeft className="h-5 w-5" />
               </Button>
               <Settings className="h-8 w-8 text-primary" />
-              <h1 className="text-3xl font-bold">Admin Dashboard</h1>
+              <h1 className="text-3xl font-bold">Organization Studio</h1>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
                 onClick={() => setShowCrossOrgImportDialog(true)}
@@ -332,92 +311,44 @@ const AdminDashboard = () => {
             </div>
           </div>
           <p className="text-muted-foreground ml-14">
-            Manage PDC configuration, resources, and system settings for{" "}
+            Build applications and orchestrate agents for{" "}
             <span className="font-medium text-foreground">{user?.organization?.name}</span>
           </p>
-          <p className="text-sm text-muted-foreground ml-14 mt-2">
-            You can import a settings file exported from this organization or a different organization. Imported data
-            is applied to the currently active organization.
-          </p>
-          <p className="text-xs text-muted-foreground ml-14 mt-1">
-            Export schema: <code>v7</code>. Backups include agent operations, placeholders, result/data/processing mappings, OIDC client configuration, and software-scoped resource visibility.
-          </p>
-          {sourceOrganizations.length === 0 && (
-            <p className="text-sm text-muted-foreground ml-14 mt-1">
-              Cross-organization import is available when you are an admin in more than one organization.
-            </p>
-          )}
+          <details className="mt-3 text-sm text-muted-foreground">
+            <summary className="cursor-pointer">About settings backups</summary>
+            <p className="mt-2">Imports apply to the active organization. Version 7 backups include agent operations, placeholders, legacy gateway settings and OIDC configuration. Cross-organization import requires admin access to both organizations.</p>
+          </details>
         </header>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <div className="relative max-w-full overflow-hidden">
-            {topTabsScrollState.canScrollLeft && (
-              <button
-                type="button"
-                aria-label="Scroll admin tabs left"
-                onClick={() => scrollTopTabs("left")}
-                className="absolute inset-y-0 left-0 z-10 w-12 cursor-pointer bg-gradient-to-r from-background via-background/85 to-transparent shadow-[12px_0_20px_-18px_hsl(var(--primary))] transition-opacity hover:from-background hover:via-background/95"
-              />
-            )}
-            {topTabsScrollState.canScrollRight && (
-              <button
-                type="button"
-                aria-label="Scroll admin tabs right"
-                onClick={() => scrollTopTabs("right")}
-                className="absolute inset-y-0 right-0 z-10 w-12 cursor-pointer bg-gradient-to-l from-background via-background/85 to-transparent shadow-[-12px_0_20px_-18px_hsl(var(--primary))] transition-opacity hover:from-background hover:via-background/95"
-              />
-            )}
-            <div
-              ref={topTabsScrollRef}
-              className="scrollbar-hidden max-w-full overflow-x-auto rounded-xl cursor-grab active:cursor-grabbing"
-              role="region"
-              aria-label="Admin dashboard sections"
-            >
-              <TabsList className="inline-flex h-auto min-w-max w-max gap-1 whitespace-nowrap">
-                <TabsTrigger value="pdc" className="flex shrink-0 items-center gap-2">
-                  <Globe className="h-4 w-4" />
-                  <span className="hidden sm:inline">PDC Config</span>
-                  <span className="sm:hidden">PDC</span>
+        <Tabs value={activeTab} onValueChange={setActiveTab} orientation="vertical" className="grid items-start gap-6 md:grid-cols-[220px_minmax(0,1fr)]">
+          <nav aria-label="Organization administration" className="md:sticky md:top-6">
+            <TabsList className="flex h-auto w-full flex-col items-stretch gap-1 bg-muted/40 p-2">
+              {sections.map(({ id, label, icon: Icon }) => (
+                <TabsTrigger key={id} value={id} className="justify-start gap-3 whitespace-normal px-3 py-3 text-left">
+                  <Icon className="h-4 w-4 shrink-0" />{label}
                 </TabsTrigger>
-                <TabsTrigger value="global" className="flex shrink-0 items-center gap-2">
-                  <Settings className="h-4 w-4" />
-                  <span className="hidden sm:inline">Global Settings</span>
-                  <span className="sm:hidden">Settings</span>
-                </TabsTrigger>
-                <TabsTrigger value="resources" className="flex shrink-0 items-center gap-2">
-                  <Database className="h-4 w-4" />
-                  <span className="hidden sm:inline">Resources</span>
-                  <span className="sm:hidden">Data</span>
-                </TabsTrigger>
-                <TabsTrigger value="choose-analytics-page" className="flex shrink-0 items-center gap-2">
-                  <Database className="h-4 w-4" />
-                  <span className="hidden sm:inline">Analytics Selection</span>
-                  <span className="sm:hidden">Analytics</span>
-                </TabsTrigger>
-                <TabsTrigger value="data-selection" className="flex shrink-0 items-center gap-2">
-                  <Database className="h-4 w-4" />
-                  <span className="hidden sm:inline">Data Selection</span>
-                  <span className="sm:hidden">Data Sel</span>
-                </TabsTrigger>
-                <TabsTrigger value="processing-page" className="flex shrink-0 items-center gap-2">
-                  <Timer className="h-4 w-4" />
-                  <span className="hidden sm:inline">Show Processing</span>
-                  <span className="sm:hidden">Processing</span>
-                </TabsTrigger>
-                <TabsTrigger value="result" className="flex shrink-0 items-center gap-2">
-                  <FileJson className="h-4 w-4" />
-                  <span className="hidden sm:inline">Result Page</span>
-                  <span className="sm:hidden">Result</span>
-                </TabsTrigger>
-                <TabsTrigger value="llm" className="flex shrink-0 items-center gap-2">
-                  <Brain className="h-4 w-4" />
-                  <span className="hidden sm:inline">Agent Operations</span>
-                  <span className="sm:hidden">Agents</span>
-                </TabsTrigger>
+              ))}
+            </TabsList>
+          </nav>
+          <main className="min-w-0" key={`${user?.id}:${user?.organization?.id}`}>
+          <TabsContent value="overview"><AdminOverview onNavigate={setActiveTab} /></TabsContent>
+          <TabsContent value="applications"><StudioManagement key={user?.organization?.id} /></TabsContent>
+          <TabsContent value="chat-drawers"><StudioManagement key={user?.organization?.id} chats /></TabsContent>
+          <TabsContent value="legacy">
+            <Card className="mb-4"><CardHeader><CardTitle>Legacy Gateway</CardTitle><CardDescription>Configure the existing four-step gateway while application pages are introduced.</CardDescription></CardHeader></Card>
+            <Tabs defaultValue="analytics">
+              <TabsList className="flex h-auto flex-wrap justify-start">
+                <TabsTrigger value="analytics">Analytics Selection</TabsTrigger>
+                <TabsTrigger value="data">Data Selection</TabsTrigger>
+                <TabsTrigger value="processing">Processing</TabsTrigger>
+                <TabsTrigger value="results">Results</TabsTrigger>
               </TabsList>
-            </div>
-          </div>
-
+              <TabsContent value="analytics"><ChooseAnalyticsPageSettingsSection /></TabsContent>
+              <TabsContent value="data"><DataSelectionSettingsSection /></TabsContent>
+              <TabsContent value="processing"><ProcessingPageSettingsSection /></TabsContent>
+              <TabsContent value="results"><ResultPageSettingsSection /></TabsContent>
+            </Tabs>
+          </TabsContent>
           <TabsContent value="pdc">
             <PdcConfigSection />
           </TabsContent>
@@ -426,9 +357,6 @@ const AdminDashboard = () => {
             <ResourcesConfigSection />
           </TabsContent>
 
-          <TabsContent value="choose-analytics-page">
-            <ChooseAnalyticsPageSettingsSection />
-          </TabsContent>
 
           <TabsContent value="global">
             <Tabs value={activeGeneralSubTab} onValueChange={setActiveGeneralSubTab} className="w-full">
@@ -513,22 +441,14 @@ const AdminDashboard = () => {
             </Tabs>
           </TabsContent>
 
-          <TabsContent value="data-selection">
-            <DataSelectionSettingsSection />
-          </TabsContent>
 
-          <TabsContent value="processing-page">
-            <ProcessingPageSettingsSection />
-          </TabsContent>
 
-          <TabsContent value="result">
-            <ResultPageSettingsSection />
-          </TabsContent>
 
           <TabsContent value="llm">
             <LlmSettingsSection />
           </TabsContent>
 
+          </main>
         </Tabs>
       </div>
 

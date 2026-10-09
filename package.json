@@ -24,10 +24,12 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test:applications": "node --test scripts/application-prototype-regression.test.mjs",
     "test:workflow": "node --test scripts/workflow-agent-regression.test.mjs scripts/workflow-api-regression.test.mjs",
     "test:workflow:backend": "deno task --config services/workflow-worker/deno.json test",
     "workflow:worker": "deno task --config services/workflow-worker/deno.json start",
-    "test:workflow:worker": "node --test scripts/workflow-worker-regression.test.mjs"
+    "test:workflow:worker": "node --test scripts/workflow-worker-regression.test.mjs",
+    "test:studio:browser": "node scripts/studio-browser-validation.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

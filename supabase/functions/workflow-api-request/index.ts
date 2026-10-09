@@ -1,3 +1,4 @@
+import { loadStudioChatPolicy, allowsStudioChatItem } from "../_shared/studioChatAccess.ts";
 import { runRequest } from "../_shared/workflowHttp.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -35,6 +36,7 @@ type RequestBody = {
   result?: unknown;
   userMessage?: string;
   org_execution_token?: string;
+  studio_chat_id?: string;
 };
 
 const json = (body: Record<string, unknown>, status = 200) => new Response(JSON.stringify(body), {
@@ -107,6 +109,10 @@ serve(async (request) => {
       if (error || !row) return json({ ok: false, error: "Organization workflow configuration was not found." }, 404);
       const llm = object(object(row.features).llmInsights);
       const workflow = (Array.isArray(llm.workflows) ? llm.workflows : []).map(object).find((item) => item.id === body.workflowId && item.enabled !== false && !item.deletedAt);
+      if (body.studio_chat_id) {
+        const policy = await loadStudioChatPolicy(admin, orgId, body.studio_chat_id);
+        if (!workflow || !allowsStudioChatItem(policy, "workflow", workflow)) return json({ ok: false, error: "Workflow is not assigned to this chat drawer." }, 403);
+      }
       const execution = object(workflow?.execution);
       allowedOutboundHosts = Array.isArray(execution.allowedOutboundHosts) ? execution.allowedOutboundHosts.map(String) : undefined;
       const graph = object(workflow?.graph);

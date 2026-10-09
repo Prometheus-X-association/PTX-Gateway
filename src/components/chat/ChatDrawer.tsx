@@ -65,10 +65,13 @@ export interface LlmAgentInfo {
   resultChunkSize?: number;
 }
 
-interface ChatDrawerProps {
+export interface ChatDrawerProps {
+  presentation?: "drawer" | "inline";
+  title?: string;
   resultData: unknown;
   onResultDataChange?: (nextData: unknown) => void;
   organizationId?: string | null;
+  studioChatId?: string;
   orgExecutionToken?: string | null;
   agents?: LlmAgentInfo[];
   globalPrompts?: string[];
@@ -845,9 +848,12 @@ const fileAsAttachment = async (file: File): Promise<LlmAttachment> => {
 };
 
 const ChatDrawer = ({
+  presentation = "drawer",
+  title = "AI Assistant",
   resultData,
   onResultDataChange,
   organizationId,
+  studioChatId,
   orgExecutionToken,
   agents = [],
   globalPrompts = [],
@@ -1133,7 +1139,7 @@ const ChatDrawer = ({
         .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
         .join("\n\n");
       const executor = workflowConfig.execution?.backendEnabled
-        ? (_graph: AgentWorkflow, context: Parameters<typeof executeWorkflow>[1]) => executeBackendWorkflow(workflowConfig, context, localAttachments, targetResourceId, processSessionId)
+        ? (_graph: AgentWorkflow, context: Parameters<typeof executeWorkflow>[1]) => executeBackendWorkflow(workflowConfig, context, localAttachments, targetResourceId, processSessionId, studioChatId)
         : executeWorkflow;
       const { results, aborted, error: workflowError, waiting } = await executor(workflow, {
         workflowId: workflowConfig.id,
@@ -1167,6 +1173,7 @@ const ChatDrawer = ({
               input,
               result: resultData,
               userMessage: userMsg,
+              studio_chat_id: studioChatId,
               org_execution_token: orgExecutionToken,
             }),
           });
@@ -1229,6 +1236,7 @@ const ChatDrawer = ({
               mode: "run",
               nodeId,
               organizationId,
+              studio_chat_id: studioChatId,
               org_execution_token: orgExecutionToken,
               agentId,
               systemPrompt: systemPromptOverride,
@@ -1442,7 +1450,7 @@ const ChatDrawer = ({
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange, targetResourceId, processSessionId]);
+  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, studioChatId, orgExecutionToken, onResultDataChange, targetResourceId, processSessionId]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -1689,6 +1697,7 @@ const ChatDrawer = ({
               attachment: attachmentsForAgent[0] ?? null,
               attachments: attachmentsForAgent,
               result: contextPayload,
+              studio_chat_id: studioChatId,
               org_execution_token: orgExecutionToken || undefined,
               agentId,
             }),
@@ -1769,7 +1778,7 @@ const ChatDrawer = ({
         abortRef.current = null;
       }
     },
-    [messages, isStreaming, resultData, orgExecutionToken, getAuthHeaders, activeAgentId, agents, propDocText, localDocText, localAttachments, localAttachmentSource, isFreeChatMode]
+    [messages, isStreaming, resultData, studioChatId, orgExecutionToken, getAuthHeaders, activeAgentId, agents, propDocText, localDocText, localAttachments, localAttachmentSource, isFreeChatMode]
   );
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1896,8 +1905,6 @@ const ChatDrawer = ({
     echarts: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
     table: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
     mixed: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
-    html: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-    json: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
     __free__: "bg-muted text-muted-foreground",
   };
 
@@ -1906,11 +1913,11 @@ const ChatDrawer = ({
       {/* Header */}
       <div
         className="flex shrink-0 items-center justify-between border-b border-border bg-muted/30 px-4 py-3 lg:cursor-move lg:touch-none"
-        onPointerDown={startChatPanelDrag}
+        onPointerDown={presentation === "drawer" ? startChatPanelDrag : undefined}
       >
         <div className="flex items-center gap-2 min-w-0">
           <MessageSquareDot className="h-5 w-5 text-primary shrink-0" />
-          <span className="font-semibold text-sm">AI Assistant</span>
+          <span className="font-semibold text-sm">{title}</span>
           <div className="relative">
             <button
               onClick={(e) => { e.stopPropagation(); setShowHeaderAgentPicker((v) => !v); setShowAgentPicker(false); }}
@@ -1975,7 +1982,7 @@ const ChatDrawer = ({
           {messages.length > 0 && (
             <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={handleClear}>Clear</Button>
           )}
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close chat">
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -2275,12 +2282,12 @@ const ChatDrawer = ({
                 <Square className="h-4 w-4" />
               </Button>
             ) : isStreaming ? (
-              <Button variant="destructive" size="icon" className="h-10 w-10 shrink-0" onClick={handleStop}>
+              <Button variant="destructive" size="icon" className="h-10 w-10 shrink-0" onClick={handleStop} aria-label="Stop response">
                 <X className="h-4 w-4" />
               </Button>
             ) : (
               <Button
-                size="icon" className="h-10 w-10 shrink-0"
+                size="icon" className="h-10 w-10 shrink-0" aria-label="Send message"
                 disabled={!input.trim() || input === "/"}
                 onClick={() => {
                   const trimmed = input.trim();
@@ -2327,6 +2334,8 @@ const ChatDrawer = ({
       </div>
     </div>
   );
+
+  if (presentation === "inline") return <section className="h-full min-h-0 overflow-hidden rounded-lg border" aria-label={title}>{panel}</section>;
 
   return (
     <>

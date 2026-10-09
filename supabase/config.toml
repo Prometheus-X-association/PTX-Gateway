@@ -56,3 +56,6 @@ verify_jwt = false
 
 [functions.workflow-interaction]
 verify_jwt = false
+
+[functions.studio-api]
+verify_jwt = false

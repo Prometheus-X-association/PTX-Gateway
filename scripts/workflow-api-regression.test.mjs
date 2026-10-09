@@ -324,3 +324,205 @@ test("response policies and notification configuration are validated before acce
   workflow.execution.notifications.secret='x'.repeat(32);
   assert.equal((await api({action:'start',workflowId:'shared'})).status,202);
 });
+
+test("authenticated application preview starts and reads results without result-page chat", async () => {
+  setup();
+  const llm = database.tables.global_configs[0].features.llmInsights;
+  llm.enabled = false;
+  llm.workflows[0].execution.backendEnabled = false;
+  llm.workflows[0].targetResources = [];
+  const payload = { documentIds: ["document-1"], request: "Extract skills" };
+  const started = await api({ action: "start", workflowId: "shared", input: payload });
+  assert.equal(started.status, 202);
+  const stored = database.tables.workflow_runs.find((run) => run.id === started.body.runId);
+  assert.equal(stored.organization_id, "org-a");
+  assert.deepEqual(stored.input.resultData, payload);
+  const output = [{ skill: "Analysis", sourceDocumentId: "document-1" }];
+  Object.assign(stored, { status: "succeeded", output });
+  const result = await api({ action: "get", runId: started.body.runId });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.run.status, "succeeded");
+  assert.deepEqual(result.body.run.output, output);
+  assert.equal((await api({ action: "get", runId: stored.id }, "admin-b", "org-b")).status, 404);
+  assert.equal((await api({ action: "start", workflowId: "shared", input: payload }, "admin-a", "org-b")).status, 403);
+  llm.workflows[0].execution.apiEnabled = false;
+  assert.equal((await api({ action: "start", workflowId: "shared", input: payload })).status, 403);
+});
+
+const { handleStudioRequest } = load("supabase/functions/studio-api/index.ts");
+const { validateStudioDefinition } = load("supabase/functions/_shared/studioSchema.ts");
+const studioDefinition = (title, extra = {}) => ({ schemaVersion: 1, title, description: "", elements: [], pageIds: [], ...extra });
+function setupStudio() {
+  setup();
+  database.tables.organizations = [{ id: "org-a", slug: "organization-a", name: "A", is_active: true }, { id: "org-b", slug: "organization-b", name: "B", is_active: true }];
+  database.tables.studio_items = []; database.tables.studio_releases = [];
+  const original = database.rpc.bind(database);
+  database.rpc = async (name, args) => {
+    if (name !== "studio_mutate") return original(name, args);
+    let item = database.tables.studio_items.find((entry) => entry.id === args.p_id && entry.organization_id === args.p_org && !entry.deleted_at);
+    if (args.p_action === "create") {
+      item = { id: randomUUID(), organization_id: args.p_org, kind: args.p_kind, slug: args.p_slug, parent_id: args.p_parent, draft: structuredClone(args.p_definition), revision: 1, active: false, deleted_at: null, published_release_id: null, created_at: new Date().toISOString() };
+      database.tables.studio_items.push(item);
+    } else {
+      if (!item || item.revision !== args.p_expected) return { error: { code: "40001", message: "Draft changed" } };
+      if (args.p_action === "save") item.draft = structuredClone(args.p_definition);
+      if (args.p_action === "publish") {
+        const release = { id: randomUUID(), organization_id: args.p_org, item_id: item.id, definition: structuredClone(args.p_definition || item.draft), revision: item.revision, runtime_ciphertext: args.p_runtime };
+        database.tables.studio_releases.push(release); item.published_release_id = release.id; item.active = true;
+      }
+      if (args.p_action === "rollback") item.published_release_id = args.p_release;
+      if (args.p_action === "activate") item.active = args.p_active;
+      if (args.p_action === "delete") { item.deleted_at = new Date().toISOString(); item.active = false; }
+      item.revision++;
+    }
+    return { data: structuredClone(item), error: null };
+  };
+}
+async function studio(body, user = "admin-a", org = "org-a") {
+  const response = await handleStudioRequest(new Request("https://gateway.test/functions/v1/studio-api", { method: "POST", headers: { Authorization: `Bearer ${user}`, "x-organization-id": org, "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+  return { status: response.status, body: await response.json() };
+}
+async function createStudio(kind, slug, extra = {}, parentId) {
+  const result = await studio({ action: "create", kind, slug, parentId, definition: studioDefinition(slug, extra) });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  return result.body.item;
+}
+async function mutateStudio(action, item, extra = {}) {
+  const result = await studio({ action, id: item.id, expectedRevision: item.revision, ...extra });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  return result.body.item;
+}
+
+test("Studio schemas reject duplicate elements, cross-origin wildcards and unsupported components", () => {
+  assert.throws(() => validateStudioDefinition("page", studioDefinition("Page", { elements: [{ id: "a", type: "text" }, { id: "a", type: "text" }] })), /unique/);
+  assert.throws(() => validateStudioDefinition("chat", studioDefinition("Chat", { allowedOrigins: ["https://*.example.com/path"] })), /origins/);
+  assert.throws(() => validateStudioDefinition("page", studioDefinition("Page", { elements: [{ id: "a", type: "script" }] })), /Unsupported/);
+  const clean = validateStudioDefinition("page", studioDefinition("Page", { secret: "not-a-property", elements: [{ id: "a", type: "text", content: "Safe", script: "ignored" }] }));
+  assert.equal(clean.secret, undefined); assert.equal(clean.elements[0].script, undefined);
+});
+
+test("Studio membership protects drafts while members can view published applications", async () => {
+  setupStudio();
+  const app = await createStudio("application", "skills");
+  assert.equal((await studio({ action: "list" }, "user-a")).status, 403);
+  assert.equal((await studio({ action: "list" }, "admin-a", "org-b")).status, 403);
+  assert.equal((await studio({ action: "resolve", slug: "skills" }, "user-a")).status, 404);
+  await mutateStudio("publish", app);
+  const live = await studio({ action: "resolve", slug: "skills" }, "user-a");
+  assert.equal(live.status, 200); assert.equal(live.body.item.definition.title, "skills");
+  assert.equal(live.body.item.draft, undefined);
+  assert.equal((await studio({ action: "save", id: app.id, expectedRevision: 1, definition: studioDefinition("Overwrite") })).status, 409);
+});
+
+test("published applications pin page and workflow versions and never return execution secrets", async () => {
+  setupStudio();
+  let app = await createStudio("application", "skills");
+  const page = await createStudio("page", "extract", { elements: [{ id: "run", type: "workflow-button", label: "Extract", workflowId: "shared" }, { id: "result", type: "result", label: "Skills" }] }, app.id);
+  const publishedPage = await mutateStudio("publish", page);
+  app = await mutateStudio("publish", app);
+  const oldRelease = app.published_release_id;
+  const liveWorkflow = database.tables.global_configs[0].features.llmInsights.workflows[0];
+  liveWorkflow.name = "Edited workflow";
+  const changedPage = await mutateStudio("save", publishedPage, { definition: studioDefinition("Changed page", { elements: page.draft.elements }) });
+  await mutateStudio("publish", changedPage);
+  const live = await studio({ action: "resolve", slug: "skills" }, "user-a");
+  assert.equal(live.status, 200);
+  assert.equal(live.body.pages[0].definition.title, "extract");
+  assert.equal(live.body.pages[0].releaseId, publishedPage.published_release_id);
+  assert.ok(!JSON.stringify(live.body).includes("provider-private-key"));
+  assert.ok(!JSON.stringify(live.body).includes("ciphertext"));
+  const launch = { action: "launch", id: page.id, releaseId: publishedPage.published_release_id, containerId: app.id, containerReleaseId: oldRelease, elementId: "run", input: { document: "source" } };
+  const started = await studio(launch, "user-a");
+  assert.equal(started.status, 202, JSON.stringify(started.body));
+  const stored = database.tables.workflow_runs.find((run) => run.id === started.body.runId);
+  const snapshot = await decryptForOrganization(database, "org-a", stored.snapshot.ciphertext);
+  assert.equal(snapshot.workflow.name, "Shared");
+  assert.equal(stored.input.studioContext.releaseId, publishedPage.published_release_id);
+  assert.equal(stored.input.studioContext.containerReleaseId, oldRelease);
+  app = await mutateStudio("publish", app);
+  assert.equal((await studio(launch, "user-a")).status, 409);
+  app = await mutateStudio("rollback", app, { releaseId: oldRelease });
+  assert.equal((await studio(launch, "user-a")).status, 202);
+  liveWorkflow.execution.apiEnabled = false;
+  assert.equal((await studio(launch, "user-a")).status, 403);
+  await mutateStudio("activate", app, { active: false });
+  assert.equal((await studio({ action: "resolve", slug: "skills" }, "user-a")).status, 404);
+});
+
+test("canvases reject unpublished and cross-organization pages", async () => {
+  setupStudio();
+  let app = await createStudio("application", "skills");
+  let page = await createStudio("page", "source", {}, app.id);
+  const canvas = await createStudio("canvas", "workspace", { pageIds: [page.id] });
+  assert.equal((await studio({ action: "publish", id: canvas.id, expectedRevision: canvas.revision })).status, 404);
+  page = await mutateStudio("publish", page);
+  app = await mutateStudio("publish", app);
+  await mutateStudio("publish", canvas);
+  assert.equal((await studio({ action: "resolve", kind: "canvas", slug: "workspace" }, "user-a")).body.pages.length, 1);
+  database.tables.studio_items.find((item) => item.id === page.id).organization_id = "org-b";
+  assert.deepEqual((await studio({ action: "resolve", kind: "canvas", slug: "workspace" }, "user-a")).body.pages, []);
+  const foreignCanvas = await createStudio("canvas", "foreign-pages", { pageIds: [page.id] });
+  assert.equal((await studio({ action: "publish", id: foreignCanvas.id, expectedRevision: foreignCanvas.revision })).status, 404);
+});
+
+test("external chat requires an active release, allowed exact origin and valid organization embed token", async () => {
+  setupStudio();
+  let chat = await createStudio("chat", "assistant", { allowEmbedding: true, allowedOrigins: ["https://portal.example"] });
+  chat = await mutateStudio("publish", chat);
+  const originalFetch = globalThis.fetch;
+  let validationCalls = 0;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("embed-auth")) {
+      validationCalls++;
+      const body = JSON.parse(init.body);
+      return body.token === "valid-token" ? Response.json({ ok: true, organization_id: "org-a", origin: "https://portal.example" }) : Response.json({ ok: false, error: "Revoked token" }, { status: 401 });
+    }
+    return Response.json({ ok: true, token: "short-lived-org-token", expires_at: new Date(Date.now() + 900000).toISOString() });
+  };
+  try {
+    const request = { action: "embed_chat", orgSlug: "organization-a", id: chat.id, token: "valid-token", parentOrigin: "https://portal.example" };
+    assert.equal((await studio({ ...request, parentOrigin: "https://evil.example" }, "anonymous")).status, 403);
+    assert.equal(validationCalls, 0);
+    assert.equal((await studio({ ...request, token: "revoked" }, "anonymous")).status, 401);
+    const result = await studio(request, "anonymous");
+    assert.equal(result.status, 200); assert.equal(result.body.executionToken, "short-lived-org-token");
+    chat = await mutateStudio("activate", chat, { active: false });
+    assert.equal((await studio(request, "anonymous")).status, 404);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("managed chat assigns agents and workflows without a legacy result resource", async () => {
+  setupStudio();
+  const llm = database.tables.global_configs[0].features.llmInsights;
+  llm.workflows[0].targetResources = [];
+  llm.agents = [{ id: "agent-a", name: "Analyst", enabled: true, targetResources: [], expectedOutput: "text" }];
+  let chat = await createStudio("chat", "direct-assignments", { agentIds: ["agent-a"], workflowIds: ["shared"] });
+  chat = await mutateStudio("publish", chat);
+  const header = btoa(JSON.stringify({ alg: "HS256" })).replace(/=+$/, "");
+  const payload = btoa(JSON.stringify({ typ: "pdc_exec", org_id: "org-a", exp: Math.floor(Date.now() / 1000) + 300 })).replace(/=+$/, "");
+  const digest = await hmac(env.get("PDC_EXECUTE_TOKEN_SECRET"), `${header}.${payload}`);
+  const signature = btoa(String.fromCharCode(...digest.match(/../g).map((pair) => parseInt(pair, 16)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const token = `${header}.${payload}.${signature}`;
+  const body = { action: "start", source: "dashboard", org_execution_token: token, workflow_session_id: "a".repeat(72), studio_chat_id: chat.id, workflowId: "shared", input: { message: "Analyze" } };
+  const started = await api(body, "anon");
+  assert.equal(started.status, 202, JSON.stringify(started.body));
+  assert.equal((await api({ ...body, studio_chat_id: undefined }, "anon")).status, 403);
+  // The legacy status endpoint additionally requires a UUID organization claim.
+  const statusOrg = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const migratedRows = Object.values(database.tables).flat().filter((row) => row.organization_id === "org-a");
+  migratedRows.forEach((row) => { row.organization_id = statusOrg; });
+  const statusPayload = btoa(JSON.stringify({ typ: "pdc_exec", org_id: statusOrg, exp: Math.floor(Date.now() / 1000) + 300 })).replace(/=+$/, "");
+  const statusDigest = await hmac(env.get("PDC_EXECUTE_TOKEN_SECRET"), `${header}.${statusPayload}`);
+  const statusSignature = Buffer.from(statusDigest, "hex").toString("base64url");
+  const statusToken = `${header}.${statusPayload}.${statusSignature}`;
+  const { handleLlmInsights } = load("supabase/functions/llm-insights/index.ts");
+  const statusResponse = await handleLlmInsights(new Request("https://gateway.test/functions/v1/llm-insights", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "status", studio_chat_id: chat.id, org_execution_token: statusToken }) }));
+  assert.equal(statusResponse.status, 200);
+  const status = await statusResponse.json();
+  assert.deepEqual(status.agents.map((agent) => agent.id), ["agent-a"]);
+  assert.deepEqual(status.workflows.map((workflow) => workflow.id), ["shared"]);
+  assert.ok(!JSON.stringify(status).includes("provider-private-key"));
+  migratedRows.forEach((row) => { row.organization_id = "org-a"; });
+  chat = await mutateStudio("activate", chat, { active: false });
+  assert.equal((await api(body, "anon")).status, 403);
+});

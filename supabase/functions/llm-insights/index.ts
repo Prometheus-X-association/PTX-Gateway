@@ -1,3 +1,4 @@
+import { loadStudioChatPolicy, allowsStudioChatItem } from "../_shared/studioChatAccess.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -17,6 +18,7 @@ interface LlmInsightsRequest {
   action?: "status" | "generate";
   org_execution_token?: string;
   target_resource_id?: string;
+  studio_chat_id?: string;
   result?: unknown;
   prompt_context?: string;
 }
@@ -424,7 +426,7 @@ const normalizeInsightsPayload = (raw: unknown, forcedType?: SupportedChartType 
   const links = Array.isArray(visualization.links) ? visualization.links : [];
   const hierarchy =
     visualization.hierarchy && typeof visualization.hierarchy === "object" && !Array.isArray(visualization.hierarchy)
-      ? visualization.hierarchy
+      ? toObject(visualization.hierarchy)
       : undefined;
   const type = typeof visualization.type === "string" ? visualization.type.toLowerCase() : "bar";
   const allowedTypes = new Set(["bar", "line", "area", "scatter", "pie", "radial", "treemap", "network", "map"]);
@@ -473,7 +475,7 @@ const getExecutionTokenSecret = (): string | null =>
   Deno.env.get("SUPABASE_INTERNAL_JWT_SECRET") ||
   LOCAL_SUPABASE_JWT_FALLBACK;
 
-serve(async (req) => {
+export const handleLlmInsights = async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -538,11 +540,12 @@ serve(async (req) => {
     const providers = resolveProviders(llmConfig);
 
     if (body.action === "status") {
+      const chatPolicy = body.studio_chat_id ? await loadStudioChatPolicy(adminClient, orgContext.orgId, body.studio_chat_id) : null;
       const requestedTargetId = String(body.target_resource_id || "").trim();
       // Build safe agent list (no systemPrompt / mcpServerIds exposed to client)
       const agentList = Array.isArray(llmConfig.agents)
         ? llmConfig.agents
-            .filter((a) => a.enabled !== false && !a.deletedAt && Boolean(requestedTargetId) && Array.isArray(a.targetResources) && a.targetResources.includes(requestedTargetId))
+            .filter((a) => a.enabled !== false && !a.deletedAt && (chatPolicy ? allowsStudioChatItem(chatPolicy, "agent", a) : Boolean(requestedTargetId) && Array.isArray(a.targetResources) && a.targetResources.includes(requestedTargetId)))
             .map((a) => ({
               id: String(a.id || ""),
               name: String(a.name || "Agent"),
@@ -599,7 +602,7 @@ serve(async (req) => {
           workflows: Array.isArray(llmConfig.workflows)
             ? publicSafeWorkflows(llmConfig.workflows.filter((workflow) => {
                 const item = toObject(workflow);
-                return item.enabled !== false && !item.deletedAt && Boolean(requestedTargetId) && Array.isArray(item.targetResources) && item.targetResources.map(String).includes(requestedTargetId);
+                return item.enabled !== false && !item.deletedAt && (chatPolicy ? allowsStudioChatItem(chatPolicy, "workflow", item) : Boolean(requestedTargetId) && Array.isArray(item.targetResources) && item.targetResources.map(String).includes(requestedTargetId));
               }))
             : [],
         }),
@@ -699,4 +702,5 @@ serve(async (req) => {
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-});
+};
+serve(handleLlmInsights);
