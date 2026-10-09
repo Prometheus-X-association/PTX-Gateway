@@ -16,7 +16,7 @@ const WorkflowInteractionPage = lazy(() => import("./pages/WorkflowInteractionPa
 const StudioRuntimePage = lazy(() => import("./pages/StudioRuntimePage"));
 const ChatComponentPage = lazy(() => import("./pages/ChatComponentPage"));
 const ApplicationPreviewPage = lazy(() => import("./pages/ApplicationPreviewPage"));
-const OrgGateway = lazy(() => import("./pages/OrgGateway"));
+const OrgGateway = lazy(() => import("./pages/OrgEntryPage"));
 const AdminDashboard = lazy(() => import("./components/admin/AdminDashboard"));
 const EmbedGateway = lazy(() => import("./components/embed/EmbedGateway"));
 const DebugModePage = lazy(() => import("./pages/DebugModePage"));

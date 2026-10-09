@@ -2,7 +2,7 @@
 export type StudioKind = "application" | "page" | "canvas" | "chat";
 export interface StudioElement {
   id: string;
-  type: "heading" | "text" | "json-input" | "workflow-button" | "result" | "html" | "chat" | "knowledge";
+  type: "heading" | "text" | "json-input" | "workflow-button" | "result" | "html" | "chat" | "knowledge" | "legacy-gateway";
   label: string;
   content?: string;
   workflowId?: string;
@@ -84,7 +84,7 @@ export function validateStudioDefinition(kind: StudioKind, raw: unknown): Studio
       const id = text(element.id, 80);
       if (!/^[a-zA-Z0-9_-]+$/.test(id) || ids.has(id)) throw new Error("Element IDs must be unique letters, digits, underscores or hyphens.");
       ids.add(id);
-      if (!["heading", "text", "json-input", "workflow-button", "result", "html", "chat", "knowledge"].includes(String(element.type))) throw new Error("Unsupported page element.");
+      if (!["heading", "text", "json-input", "workflow-button", "result", "html", "chat", "knowledge", "legacy-gateway"].includes(String(element.type))) throw new Error("Unsupported page element.");
       const type = element.type as StudioElement["type"];
       const next: StudioElement = { id, type, label: text(element.label, 160), content: text(element.content, 100_000) };
       if (type === "workflow-button") {

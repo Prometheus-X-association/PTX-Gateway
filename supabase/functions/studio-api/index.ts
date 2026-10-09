@@ -68,6 +68,20 @@ export async function handleStudioRequest(request: Request) {
     // Studio mutations and runtime are member-authenticated; workflow API keys and legacy public tokens cannot access drafts.
     const principal = await authorize(request, { organizationId: orgId }, admin);
     if (!principal.userId || principal.publicToken || principal.keyId) throw new HttpError(403, "Sign in to use Studio.");
+    if (action === "landing") {
+      const selected = await admin.from("studio_gateway_rollout").select("application_id").eq("organization_id", principal.orgId).maybeSingle();
+      fail(selected.error);
+      if (!selected.data?.application_id) return json({ ok: true, applicationSlug: null });
+      try {
+        const app = await publishedItem(admin, principal.orgId, selected.data.application_id, "application");
+        let available = false;
+        for (const pin of app.release.definition.pageReleases || []) {
+          try { await pinnedPage(admin, principal.orgId, pin.id, pin.releaseId); available = true; break; }
+          catch (error) { if (!(error instanceof HttpError) || error.status !== 404) throw error; }
+        }
+        return json({ ok: true, applicationSlug: available ? app.item.slug : null });
+      } catch (error) { if (!(error instanceof HttpError) || error.status !== 404) throw error; return json({ ok: true, applicationSlug: null }); }
+    }
     if (action === "resolve" || action === "chat") {
       if (action === "chat") {
         const { item, release } = await publishedItem(admin, principal.orgId, studioUuid(body.id), "chat");

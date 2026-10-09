@@ -130,3 +130,7 @@ Admin checklist:
 3. Adjust `Global Settings` and `Visualization`.
 4. Configure `Embed` if external integration is needed.
 5. Export settings backup after major updates.
+
+## Prompt authoring and migration
+
+Use **Organization Studio → Prompt & Migration** to generate and review application/page proposals, migrate the legacy gateway into a compatibility page with optional native workflow pages, and set or revert the signed-in gateway default. Applying proposals creates drafts; publication remains a separate step. See [Batch five setup, migration limits and validation](application-platform-batch-five.md).

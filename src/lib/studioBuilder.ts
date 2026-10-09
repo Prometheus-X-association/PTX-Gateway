@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import type { StudioElement } from '../../supabase/functions/_shared/studioSchema';
 
 export const elementTypes: StudioElement['type'][] = ['heading', 'text', 'json-input', 'workflow-button', 'result', 'html', 'chat', 'knowledge'];
-export const elementNames: Record<StudioElement['type'], string> = { heading: 'Heading', text: 'Text', 'json-input': 'JSON input', 'workflow-button': 'Workflow button', result: 'Result', html: 'HTML / CSS / JavaScript', chat: 'Chat drawer', knowledge: 'Skill workspace' };
+export const elementNames: Record<StudioElement['type'], string> = { heading: 'Heading', text: 'Text', 'json-input': 'JSON input', 'workflow-button': 'Workflow button', result: 'Result', html: 'HTML / CSS / JavaScript', chat: 'Chat drawer', knowledge: 'Skill workspace', 'legacy-gateway': 'Legacy gateway' };
 export const defaultAppearance = { padding: 0, radius: 0, color: '', background: '', align: 'left' as const, minHeight: 0 };
 export const defaultResponsive = { mobile: 12, tablet: 12, desktop: 12 };
 export function newStudioElement(type: StudioElement['type']): StudioElement {

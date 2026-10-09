@@ -1,3 +1,4 @@
+import StudioAuthoring from "./StudioAuthoring";
 import KnowledgeManagement from "./KnowledgeManagement";
 import { ChangeEvent, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -51,6 +52,7 @@ const AdminDashboard = () => {
   const sections = [
     { id: "overview", label: "Overview", icon: LayoutDashboard },
     { id: "llm", label: "Agent Orchestration", icon: Brain },
+    { id: "authoring", label: "Prompt & Migration", icon: PanelsTopLeft },
     { id: "applications", label: "Applications & Pages", icon: PanelsTopLeft },
     { id: "knowledge", label: "Knowledge & Skills", icon: Database },
     { id: "chat-drawers", label: "Chat Drawers", icon: Brain },
@@ -335,6 +337,7 @@ const AdminDashboard = () => {
           <main className="min-w-0" key={`${user?.id}:${user?.organization?.id}`}>
           <TabsContent value="overview"><AdminOverview onNavigate={setActiveTab} /></TabsContent>
           <TabsContent value="knowledge"><KnowledgeManagement key={user?.organization?.id} /></TabsContent>
+          <TabsContent value="authoring"><StudioAuthoring key={user?.organization?.id} /></TabsContent>
           <TabsContent value="applications"><StudioManagement key={user?.organization?.id} /></TabsContent>
           <TabsContent value="chat-drawers"><StudioManagement key={user?.organization?.id} chats /></TabsContent>
           <TabsContent value="legacy">

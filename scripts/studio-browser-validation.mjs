@@ -11,6 +11,7 @@ const user = { id: "11111111-1111-4111-8111-111111111111", email: "studio@exampl
 const definition = (title, extra = {}) => ({ schemaVersion: 1, title, description: "", elements: [], pageIds: [], layout: "tabs", targetResourceId: "", prompts: [], allowedOrigins: [], allowEmbedding: false, ...extra });
 const items = [];
 const releases = new Map();
+const authoringProposals = []; let gatewayRollout = null; let landingRequests = 0;
 function seed(kind, slug, draft, parent_id = null) {
   const item = { id: randomUUID(), organization_id: org.id, kind, slug, draft, parent_id, revision: 1, active: false, published_release_id: null, created_at: new Date().toISOString() };
   items.push(item); return item;
@@ -86,8 +87,29 @@ async function fixtures(context, authenticated = true) {
         }
         return json({ok:false,error:'Unknown knowledge fixture'},400);
       }
+      if (url.pathname.endsWith("studio-authoring")) {
+        if(body.action==='catalog')return json({ok:true,catalog:{workflows:[{id:'extract',name:'Extract skills'}],chats:[{id:chat.id,name:'Assistant'}],knowledge:[]},providers:[{id:'test-provider',name:'Test provider',model:'fixture'}],inventory:{organizationName:org.name,resources:[{id:'legacy-tool',name:'Legacy analytics',type:'software'}],chains:[],featureNames:['resultPageSettings']}});
+        if(body.action==='list')return json({ok:true,proposals:authoringProposals,rollout:gatewayRollout});
+        if(body.action==='generate'||body.action==='migrate'){
+          const existing=items.find(item=>item.id===body.pageId);
+          const migration=body.action==='migrate';
+          const manifest={application:{slug:migration?body.slug:'prompt-app',definition:definition(migration?'Migrated application':'Prompt application')},pages:[{slug:existing?.slug||'overview',definition:definition(existing?'Refined page':migration?'Legacy gateway':'Prompt overview',{elements:migration?[{id:'legacy',type:'legacy-gateway',label:'Legacy gateway'}]:[{id:'headline',type:'heading',label:'Prompt heading',content:existing?'Refined heading':'Generated heading',responsive:{mobile:12,tablet:6,desktop:6}}]})}]};
+          const proposal={id:randomUUID(),kind:migration?'migration':'prompt',status:'review',manifest,base_item_id:existing?.id,base_definition:existing?.draft||null,allow_code:body.allowCode===true,warnings:['Review before applying; drafts only.'],created_at:new Date().toISOString()};authoringProposals.unshift(proposal);return json({ok:true,proposal});
+        }
+        if(body.action==='apply'){
+          const proposal=authoringProposals.find(row=>row.id===body.id);
+          if(proposal.status==='review'){
+            if(proposal.base_item_id){const existing=items.find(row=>row.id===proposal.base_item_id);existing.draft=body.manifest.pages[0].definition;existing.revision++;}
+            else{const created=seed('application',body.manifest.application.slug,body.manifest.application.definition);body.manifest.pages.forEach(page=>seed('page',page.slug,page.definition,created.id));}
+            proposal.status='applied';proposal.applied_manifest=body.manifest;
+          }return json({ok:true});
+        }
+        if(body.action==='discard'){authoringProposals.find(row=>row.id===body.id).status='discarded';return json({ok:true});}
+        if(body.action==='rollout'){gatewayRollout={application_id:body.applicationId,revision:(gatewayRollout?.revision||0)+1};return json({ok:true,rollout:gatewayRollout});}
+      }
       if (url.pathname.endsWith("studio-api")) {
         const item = items.find((entry) => entry.id === body.id);
+        if (body.action === "landing") {landingRequests++;return json({ok:true,applicationSlug:items.find(row=>row.id===gatewayRollout?.application_id)?.slug||null});}
         if (body.action === "list") return json({ ok: true, items });
         if (body.action === "create") { const created = seed(body.kind, body.slug, body.definition, body.parentId || null); return json({ ok: true, item: created }); }
         if (body.action === "save") { item.draft = body.definition; item.revision++; return json({ ok: true, item }); }
@@ -129,6 +151,57 @@ async function fixtures(context, authenticated = true) {
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } }); await fixtures(context);
   const page = await context.newPage(); debugPage = page;
+  // Phase 7: proposal review, edits, refinement, migration and reversible rollout.
+  await page.goto(`${base}/admin?section=authoring`);
+  await page.getByRole('heading',{name:'Prompt authoring & migration'}).waitFor();
+  await page.getByLabel('Authoring provider',{exact:true}).selectOption('test-provider');
+  await page.getByLabel('Authoring prompt',{exact:true}).fill('Build a responsive overview');
+  await page.getByRole('button',{name:'Generate proposal',exact:true}).click();
+  await page.getByLabel('Proposal JSON',{exact:true}).waitFor();
+  assert.equal(items.some(item=>item.slug==='prompt-app'),false);
+  const proposalSource=JSON.parse(await page.getByLabel('Proposal JSON',{exact:true}).inputValue());
+  proposalSource.pages[0].definition.elements[0].content='Reviewed heading';
+  await page.getByLabel('Proposal JSON',{exact:true}).fill(JSON.stringify(proposalSource));
+  await page.getByRole('button',{name:'Preview reviewed proposal',exact:true}).click();
+  await page.getByRole('heading',{name:'Reviewed heading',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Apply to drafts',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Proposal applied'}).waitFor();
+  const generatedApp=items.find(item=>item.slug==='prompt-app');assert.ok(generatedApp&&!generatedApp.active&&!generatedApp.published_release_id);
+  const generatedPage=items.find(item=>item.parent_id===generatedApp.id);assert.equal(generatedPage.draft.elements[0].content,'Reviewed heading');
+  await page.getByLabel('Authoring target',{exact:true}).selectOption(pageItem.id);
+  await page.getByLabel('Authoring prompt',{exact:true}).fill('Refine this page heading');
+  const liveRelease=pageItem.published_release_id;
+  await page.getByRole('button',{name:'Generate proposal',exact:true}).click();
+  await page.getByText('Original page draft',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Apply to drafts',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Proposal applied'}).waitFor();
+  assert.equal(pageItem.published_release_id,liveRelease);
+  await page.getByLabel('Migration slug',{exact:true}).fill('migration-browser');
+  await page.getByLabel('Workflow for Legacy analytics',{exact:true}).selectOption('extract');
+  await page.getByRole('button',{name:'Prepare migration proposal',exact:true}).click();
+  await page.getByLabel('Proposal JSON',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Apply to drafts',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Proposal applied'}).waitFor();
+  const migratedApp=items.find(item=>item.slug==='migration-browser');const legacyPage=items.find(item=>item.parent_id===migratedApp.id);
+  assert.equal(legacyPage.draft.elements[0].type,'legacy-gateway');
+  publish(legacyPage);publish(migratedApp);
+  await page.reload();
+  await page.getByLabel('Gateway default',{exact:true}).selectOption(migratedApp.id);
+  await page.getByRole('button',{name:'Set gateway default',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Gateway default updated'}).waitFor();
+  await page.goto(`${base}/test-org`);await page.waitForURL('**/o/test-org/apps/migration-browser');
+  const legacyFrame=page.locator('iframe[title="Legacy gateway"]');await legacyFrame.waitFor();
+  assert.equal(await legacyFrame.getAttribute('src'),'/test-org?legacy=1');
+  const requestsBefore=landingRequests;
+  await page.goto(`${base}/test-org?legacy=1`);await page.waitForTimeout(400);assert.equal(landingRequests,requestsBefore);
+  await page.goto(`${base}/admin?section=authoring`);await page.getByLabel('Gateway default',{exact:true}).selectOption('');
+  await page.getByRole('button',{name:'Set gateway default',exact:true}).click();await page.getByRole('status').filter({hasText:'Gateway default updated'}).waitFor();
+  assert.equal(gatewayRollout.application_id,null);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.screenshot({path:'/tmp/ptx-studio-validation/screenshots/authoring-mobile.png',fullPage:true});
+  await page.setViewportSize({width:1440,height:1000});
+  console.log('PASS: prompt proposal review/edit/preview/apply, refinement preserves publication, migration, rollout and legacy bypass');
   await page.goto(`${base}/admin?section=applications`);
   await page.getByRole("button", { name: "New application", exact: true }).waitFor();
   await page.getByRole("button", { name: "New application", exact: true }).click();

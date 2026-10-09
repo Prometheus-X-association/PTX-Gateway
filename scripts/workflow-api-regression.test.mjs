@@ -624,3 +624,94 @@ test('REST knowledge adapters use encrypted credentials server-side, bound respo
   assert.equal(calls.length,1,'Unsafe connector requests reached fetch');
  }finally{globalThis.fetch=originalFetch;env.delete('KNOWLEDGE_REST_ALLOWED_HOSTS');}
 });
+
+const { handleAuthoringRequest } = load('supabase/functions/studio-authoring/index.ts');
+const { validateAuthoringManifest, legacyMigration, parseAuthoringResponse, authoringChanges } = load('supabase/functions/_shared/studioAuthoring.ts');
+const { generateStudioProposal } = load('supabase/functions/_shared/studioAuthoringProvider.ts');
+const authoringManifest = () => ({application:{slug:'generated',definition:studioDefinition('Generated')},pages:[{slug:'overview',definition:studioDefinition('Overview',{elements:[{id:'heading',type:'heading',label:'Welcome',content:'Hello'}]})}]});
+async function authoring(body, bearer='admin-a', organization='org-a') {
+ const response=await handleAuthoringRequest(new Request('http://test.invalid/authoring',{method:'POST',headers:{Authorization:`Bearer ${bearer}`,'Content-Type':'application/json','x-organization-id':organization},body:JSON.stringify(body)}));
+ return {status:response.status,body:await response.json()};
+}
+test('authoring validates references, explicit code opt-in and compatibility-only migration',()=>{
+ const catalog={workflows:[{id:'shared',name:'Shared'}],chats:[],knowledge:[]};
+ assert.deepEqual(parseAuthoringResponse('```json\n{"valid":true}\n```'),{valid:true});
+ assert.throws(()=>parseAuthoringResponse('not JSON'));
+ const manifest=authoringManifest();manifest.pages[0].definition.elements=[{id:'code',type:'html',label:'Code',content:'<p>Test</p>'}];
+ assert.throws(()=>validateAuthoringManifest(manifest,catalog));
+ assert.doesNotThrow(()=>validateAuthoringManifest(manifest,catalog,true));
+ manifest.pages[0].definition.elements=[{id:'run',type:'workflow-button',label:'Run',workflowId:'foreign'}];
+ assert.throws(()=>validateAuthoringManifest(manifest,catalog));
+ manifest.pages[0].definition.elements=[{id:'input',type:'json-input',label:'Input',content:'invalid'}];
+ assert.throws(()=>validateAuthoringManifest(manifest,catalog),/valid default JSON/);
+ assert.ok(authoringChanges(studioDefinition('Before'),studioDefinition('After')).includes('Change page title'));
+ const inventory={organizationName:'A',resources:[{id:'tool',name:'Tool',type:'software'}],chains:[],featureNames:['resultPageSettings']};
+ const migrated=legacyMigration(inventory,catalog,'migrated',{tool:'shared'});
+ assert.equal(migrated.manifest.pages.length,2);assert.equal(migrated.manifest.pages[0].definition.elements[0].type,'legacy-gateway');
+ assert.throws(()=>validateAuthoringManifest(migrated.manifest,catalog));
+ assert.throws(()=>legacyMigration(inventory,catalog,'migrated',{foreign:'shared'}));
+ assert.throws(()=>legacyMigration(inventory,catalog,'migrated',{tool:'foreign'}));
+});
+test('authoring is admin-only, keeps providers private, stores proposals without creating live items',async()=>{
+ setupStudio();const count=database.tables.studio_items.length;
+ const config=database.tables.global_configs[0].features.llmInsights;
+ config.providers=[{id:'provider',name:'Test provider',apiKey:'private-key',model:'test-model',apiBaseUrl:'https://public.example/v1'}];
+ assert.equal((await authoring({action:'catalog'},'user-a')).status,403);
+ assert.equal((await authoring({action:'catalog'},'admin-a','org-b')).status,403);
+ const catalog=await authoring({action:'catalog'});assert.equal(catalog.status,200);assert.ok(!JSON.stringify(catalog.body).includes('private-key'));
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async(url,options)=>{
+  assert.equal(options.headers.Authorization,'Bearer private-key');
+  assert.ok(!options.body.includes('private-key'));
+  return new Response(JSON.stringify({choices:[{message:{content:JSON.stringify(authoringManifest())}}]}));
+ };
+ try{
+  const generated=await authoring({action:'generate',providerId:'provider',prompt:'Build a dashboard'});
+  assert.equal(generated.status,200,JSON.stringify(generated.body));assert.equal(generated.body.proposal.kind,'prompt');
+  assert.equal(database.tables.studio_items.length,count);assert.equal(database.tables.studio_releases.length,0);
+  globalThis.fetch=async()=>new Response(JSON.stringify({choices:[{message:{content:'invalid'}}]}));
+  assert.equal((await authoring({action:'generate',providerId:'provider',prompt:'Build'})).status,400);
+  assert.equal(database.tables.studio_authoring_proposals.length,1);
+ }finally{globalThis.fetch=originalFetch;}
+});
+test('migration detects changed inventory, refuses cross-org proposal and refinement targets',async()=>{
+ setupStudio();database.tables.dataspace_params=[{id:'resource',organization_id:'org-a',resource_name:'Resource',resource_type:'software'}];
+ const migration=await authoring({action:'migrate',slug:'migrated',mappings:{resource:'shared'}});
+ assert.equal(migration.status,200,JSON.stringify(migration.body));
+ assert.equal(migration.body.proposal.manifest.pages.length,2);
+ database.tables.dataspace_params[0].resource_name='Changed';
+ assert.equal((await authoring({action:'apply',id:migration.body.proposal.id,manifest:migration.body.proposal.manifest})).status,409);
+ assert.equal((await authoring({action:'apply',id:randomUUID(),manifest:authoringManifest()})).status,404);
+ assert.equal((await authoring({action:'generate',pageId:randomUUID(),providerId:'provider',prompt:'Refine'})).status,404);
+});
+test('provider adapters use server credentials, reject private endpoints, redact errors and bound responses',async()=>{
+ const originalFetch=globalThis.fetch;
+ const provider={apiKey:'secret',model:'test',apiBaseUrl:'https://public.example/v1'};
+ try{
+  for(const type of ['openai','anthropic','gemini']){
+   globalThis.fetch=async(url,options)=>{
+    assert.equal(options.redirect,'error');
+    const body=JSON.parse(options.body);assert.equal(JSON.stringify(body).includes('secret'),false);
+    if(type==='anthropic'){assert.equal(options.headers['x-api-key'],'secret');return new Response(JSON.stringify({content:[{type:'text',text:'{}'}]}));}
+    if(type==='gemini'){assert.equal(options.headers['x-goog-api-key'],'secret');return new Response(JSON.stringify({candidates:[{content:{parts:[{text:'{}'}]}}]}));}
+    return new Response(JSON.stringify({choices:[{message:{content:'{}'}}]}));
+   };
+   assert.equal(await generateStudioProposal({...provider,providerType:type},'system','prompt'),'{}');
+  }
+  await assert.rejects(()=>generateStudioProposal(provider,'system','x'.repeat(512001)),/context exceeds/);
+  await assert.rejects(()=>generateStudioProposal({...provider,apiBaseUrl:'https://private.example'},'system','prompt'),/private|local/);
+  globalThis.fetch=async()=>new Response('secret details',{status:401});
+  await assert.rejects(()=>generateStudioProposal(provider,'system','prompt'),error=>error.message.includes('401')&&!error.message.includes('secret'));
+  globalThis.fetch=async()=>new Response('x'.repeat(768001));
+  await assert.rejects(()=>generateStudioProposal(provider,'system','prompt'),/too large/);
+ }finally{globalThis.fetch=originalFetch;}
+});
+test('gateway rollout resolves published applications and falls back when pages are disabled',async()=>{
+ setupStudio();let app=await createStudio('application','rollout');let page=await createStudio('page','overview',{},app.id);
+ page=await mutateStudio('publish',page);app=await mutateStudio('publish',app);
+ database.tables.studio_gateway_rollout=[{organization_id:'org-a',application_id:app.id}];
+ assert.equal((await studio({action:'landing'},'user-a')).body.applicationSlug,'rollout');
+ await mutateStudio('activate',page,{active:false});
+ assert.equal((await studio({action:'landing'},'user-a')).body.applicationSlug,null);
+ assert.equal((await studio({action:'landing'},'anon')).status,401);
+});

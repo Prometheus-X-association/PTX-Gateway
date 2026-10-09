@@ -36,10 +36,10 @@ export default function StudioRuntimePage({ canvas = false }: { canvas?: boolean
     {!pages.length && <p>No active pages have been published.</p>}
     {!grid && <nav aria-label="Application pages" className="flex flex-wrap gap-2">{pages.map((page) => canvas ? <Button key={page.id} variant={current?.id === page.id ? "default" : "outline"} onClick={() => setSelected(page.id)}>{page.definition.title}</Button> : <Button key={page.id} variant={current?.id === page.id ? "default" : "outline"} asChild><Link to={`/o/${organization.slug}/apps/${params.appSlug}/${page.slug}`} aria-current={current?.id === page.id ? "page" : undefined}>{page.definition.title}</Link></Button>)}</nav>}
     {!grid && pages.length > 0 && !current && <p role="alert">This page is not available.</p>}
-    <div className={grid ? "grid items-start gap-6 lg:grid-cols-2" : "space-y-6"}>{(grid ? pages : current ? [current] : []).map((page) => <PublishedPage key={`${user?.id}:${organization.id}:${page.id}:${page.releaseId}`} page={page} container={item} organizationId={organization.id} />)}</div>
+    <div className={grid ? "grid items-start gap-6 lg:grid-cols-2" : "space-y-6"}>{(grid ? pages : current ? [current] : []).map((page) => <PublishedPage key={`${user?.id}:${organization.id}:${page.id}:${page.releaseId}`} page={page} container={item} organizationId={organization.id} orgSlug={organization.slug} />)}</div>
   </main>;
 }
-function PublishedPage({ page, container, organizationId }: { page: PublishedStudioItem; container: PublishedStudioItem; organizationId: string }) {
+function PublishedPage({ page, container, organizationId, orgSlug }: { page: PublishedStudioItem; container: PublishedStudioItem; organizationId: string; orgSlug: string }) {
   const { user } = useAuth();
   const [payload, setPayload] = useState(page.definition.elements.find((element) => element.type === "json-input" && element.enabled !== false)?.content || "{}");
   const [result, setResult] = useState<unknown>(undefined);
@@ -79,7 +79,7 @@ function PublishedPage({ page, container, organizationId }: { page: PublishedStu
     {run.data?.status === "queued" && <p className="text-sm text-muted-foreground">Waiting for workflow worker capacity.</p>}
     {run.data?.waiting && <RunAnswer organizationId={organizationId} run={run.data} onAnswered={() => void run.refetch()} />}
     <div className="studio-surface"><div className="studio-elements">{page.definition.elements.filter((element) => element.enabled !== false).map((element) => <div key={element.id} className="studio-element" data-element-id={element.id} style={studioElementStyle(element)}>
-      {element.type === "knowledge" ? <SkillWorkspace storeId={element.knowledgeId!} organizationId={organizationId} pageId={page.id} initialView={element.knowledgeView} /> : <StudioElementContent element={element} input={(() => { try { return JSON.parse(payload); } catch { return null; } })()} result={output} payload={payload} onPayloadChange={setPayload}
+      {element.type === "legacy-gateway" ? <iframe title="Legacy gateway" src={`/${encodeURIComponent(orgSlug)}?legacy=1`} className="w-full min-h-[800px] border-0" /> : element.type === "knowledge" ? <SkillWorkspace storeId={element.knowledgeId!} organizationId={organizationId} pageId={page.id} initialView={element.knowledgeView} /> : <StudioElementContent element={element} input={(() => { try { return JSON.parse(payload); } catch { return null; } })()} result={output} payload={payload} onPayloadChange={setPayload}
         onAction={startAction} busy={active || start.isPending} scope={page.id}
         chat={element.type === "chat" ? <div className="min-h-80" style={{ height: element.appearance?.minHeight || 640 }}><ManagedChat id={element.chatId!} organizationId={organizationId} context={{ resultData: output }} onResultDataChange={setResult} /></div> : undefined} />}
     </div>)}</div></div>
