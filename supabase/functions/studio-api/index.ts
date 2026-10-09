@@ -1,3 +1,4 @@
+import { knowledgeStore } from "../_shared/knowledgeRetrieval.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { adminClient, authorize, loadWorkflow } from "../_shared/workflowAccess.ts";
 import { createRun, cors, readBody } from "../_shared/workflowRuns.ts";
@@ -134,6 +135,7 @@ export async function handleStudioRequest(request: Request) {
         let llm: any = {};
         for (const element of definition.elements) {
           if (element.enabled === false) continue;
+          if (element.type === "knowledge") { const store = await knowledgeStore(admin, principal.orgId, element.knowledgeId); if (!store.settings.pageIds.includes(existing.id)) throw new HttpError(400, "Assign this page to its knowledge store before publishing."); }
           if (element.type === "chat") await publishedItem(admin, principal.orgId, element.chatId, "chat");
           if (element.type === "workflow-button") {
             const loaded = await loadWorkflow(admin, principal.orgId, element.workflowId);

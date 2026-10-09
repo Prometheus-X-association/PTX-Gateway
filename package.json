@@ -29,7 +29,8 @@
     "test:workflow:backend": "deno task --config services/workflow-worker/deno.json test",
     "workflow:worker": "deno task --config services/workflow-worker/deno.json start",
     "test:workflow:worker": "node --test scripts/workflow-worker-regression.test.mjs",
-    "test:studio:browser": "node scripts/studio-browser-validation.mjs"
+    "test:studio:browser": "node scripts/studio-browser-validation.mjs",
+    "knowledge:worker": "deno run --allow-net --allow-env services/knowledge-worker/main.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

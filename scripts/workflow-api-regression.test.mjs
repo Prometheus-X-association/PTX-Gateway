@@ -18,7 +18,7 @@ function load(path) {
     if (name.includes("supabase-js")) return { createClient: () => database };
     return load(resolve(dirname(path), name));
   };
-  new Function("exports", "module", "require", "Deno", "crypto", output)(module.exports, module, require, { env: { get: (key) => env.get(key) } }, webcrypto);
+  new Function("exports", "module", "require", "Deno", "crypto", output)(module.exports, module, require, { env: { get: (key) => env.get(key) }, resolveDns: async (hostname, type) => type === 'AAAA' || hostname === 'unresolved.example' ? [] : [hostname === 'private.example' ? '10.0.0.1' : '203.0.113.10'] }, webcrypto);
   modules.set(path, module.exports);
   return module.exports;
 }
@@ -38,6 +38,7 @@ class Query {
   gt(key, value) { this.filters.push((row) => row[key] > value); return this; }
   order(key, options = {}) { this.ordering = [key, options.ascending !== false]; return this; }
   limit(value) { this.maximum = value; return this; }
+  range(from, to) { this.offset = from; this.maximum = to - from + 1; return this; }
   insert(value) { this.operation = "insert"; this.value = value; return this; }
   upsert(value) { this.operation = "upsert"; this.value = value; return this; }
   update(value) { this.operation = "update"; this.value = value; return this; }
@@ -61,7 +62,7 @@ class Query {
     if (this.operation === "delete") this.db.tables[this.table] = table.filter((row) => !rows.includes(row));
     if (this.ordering) { const [key, asc] = this.ordering; rows.sort((a, b) => (a[key] > b[key] ? 1 : -1) * (asc ? 1 : -1)); }
     const count = rows.length;
-    rows = rows.slice(0, this.maximum ?? rows.length).map((row) => this.columns === "*" ? structuredClone(row) : Object.fromEntries(this.columns.split(",").map((key) => [key, row[key]])));
+    rows = rows.slice(this.offset || 0, (this.offset || 0) + (this.maximum ?? rows.length)).map((row) => this.columns === "*" ? structuredClone(row) : Object.fromEntries(this.columns.split(",").map((key) => [key, row[key]])));
     return { data: this.options?.head ? null : single ? rows[0] ?? null : rows, count, error: null };
   }
 }
@@ -549,4 +550,77 @@ test("Studio builder properties survive publication and disabled actions cannot 
   const invalid = structuredClone(page.draft); invalid.elements[0].responsive.desktop = 24;
   assert.equal((await studio({ action: "save", id: page.id, expectedRevision: page.revision, definition: invalid })).status, 400);
   assert.equal(database.tables.studio_items.find((item) => item.id === page.id).revision, page.revision);
+});
+
+const { handleKnowledgeRequest } = load('supabase/functions/knowledge-api/index.ts');
+const { processKnowledgeJob } = load('services/knowledge-worker/processor.ts');
+const { validateKnowledgeStore, validateKnowledgeRecord, parseKnowledgeWorkflowOutput } = load('supabase/functions/_shared/knowledgeSchema.ts');
+function setupKnowledge() {
+ setupStudio();
+ const store={id:randomUUID(),organization_id:'org-a',name:'Evidence',kind:'knowledge_graph',provider:'managed',endpoint:'',active:true,deleted_at:null,revision:1,secret_ciphertext:'never-return-this',settings:{pageIds:[],agentIds:['agent-a'],workflowIds:['shared'],changeWorkflowId:'shared',memberWrites:false}};
+ database.tables.workflow_api_keys=[];database.tables.workflow_runs=[];
+ database.tables.knowledge_stores=[store];database.tables.knowledge_records=[];database.tables.knowledge_versions=[];database.tables.knowledge_jobs=[];database.tables.knowledge_edges=[];
+ return store;
+}
+async function knowledge(body,user='admin-a',org='org-a') {
+ const response=await handleKnowledgeRequest(new Request('https://gateway.test/functions/v1/knowledge-api',{method:'POST',headers:{Authorization:`Bearer ${user}`,'x-organization-id':org,'Content-Type':'application/json'},body:JSON.stringify(body)}));
+ return {status:response.status,body:await response.json()};
+}
+test('knowledge schemas require evidence, existing-style bindings, and safe connector configuration',()=>{
+ assert.throws(()=>validateKnowledgeStore({name:'Vector',kind:'vector',provider:'managed'}),/REST/);
+ assert.throws(()=>validateKnowledgeStore({name:'RAG',kind:'rag',provider:'rest',endpoint:'http://example.com'}),/HTTPS/);
+ assert.throws(()=>validateKnowledgeStore({name:'RAG',kind:'rag',provider:'managed',settings:{changeWorkflowId:'other',workflowIds:['shared']}}),/assigned/);
+ assert.throws(()=>validateKnowledgeRecord({kind:'skill',name:'Invented',body:{evidence:[]}}),/evidence/);
+ assert.throws(()=>validateKnowledgeRecord({kind:'job',name:'Empty',body:{description:'Empty',requirements:[]}}),/at least one/);
+ assert.throws(()=>parseKnowledgeWorkflowOutput({records:[]}),/nonempty/);
+ assert.equal(parseKnowledgeWorkflowOutput('```json\n{"records":[{"kind":"document","name":"Source","body":{"text":"Evidence"}}]}\n```')[0].body.text,'Evidence');
+});
+test('knowledge API enforces tenant isolation, admin writes, page assignments, activation, and secret redaction',async()=>{
+ const store=setupKnowledge();
+ const listed=await knowledge({action:'list'},'user-a');assert.equal(listed.status,200);assert.equal(listed.body.stores.length,1);assert.ok(!JSON.stringify(listed.body).includes('never-return-this'));assert.equal(listed.body.stores[0].credentialConfigured,true);
+ assert.equal((await knowledge({action:'snapshot',storeId:store.id},'admin-b','org-b')).status,404);
+ assert.equal((await knowledge({action:'save_record',storeId:store.id,record:{kind:'document',name:'Unauthorized',body:{text:'No'}}},'user-a')).status,403);
+ assert.equal((await knowledge({action:'snapshot',storeId:store.id,pageId:randomUUID()},'user-a')).status,403);
+ store.active=false;
+ assert.equal((await knowledge({action:'snapshot',storeId:store.id},'user-a')).status,404);
+ assert.equal((await knowledge({action:'list'},'user-a')).body.stores.length,0);
+ assert.equal((await knowledge({action:'create_store',store:{}},'user-a')).status,403);
+});
+test('workflow API keys can query only assigned stores and cannot read configuration or write records',async()=>{
+ const store=setupKnowledge();const key='wfk_knowledge-secret';
+ database.tables.workflow_api_keys.push({id:randomUUID(),organization_id:'org-a',key_hash:await hash(key),enabled:true,workflow_ids:['shared']});
+ const original=database.rpc.bind(database);database.rpc=async(name,args)=>name==='knowledge_search'?{data:[{content:'Evidence',documentId:'document-1',revision:1}],error:null}:original(name,args);
+ const result=await knowledge({action:'query',storeId:store.id,workflowId:'shared',query:'Evidence'},key);assert.equal(result.status,200);assert.equal(result.body.matches[0].revision,1);
+ assert.equal((await knowledge({action:'list'},key)).status,403);
+ assert.equal((await knowledge({action:'query',storeId:store.id,workflowId:'other',query:'Evidence'},key)).status,403);
+ store.settings.workflowIds=[];assert.equal((await knowledge({action:'query',storeId:store.id,workflowId:'shared',query:'Evidence'},key)).status,403);
+});
+test('knowledge dispatcher starts one durable run, waits for completion, and sends validated output to review',async()=>{
+ const store=setupKnowledge();const job={id:randomUUID(),organization_id:'org-a',store_id:store.id,actor_id:'admin-a',workflow_id:'shared',input:{documentId:randomUUID(),documentRevision:1},status:'queued',lease_token:randomUUID()};database.tables.knowledge_jobs.push(job);
+ await processKnowledgeJob(database,structuredClone(job));assert.equal(job.status,'running');assert.ok(job.run_id);assert.equal(database.tables.workflow_runs.length,1);
+ const run=database.tables.workflow_runs[0];assert.equal(run.input.resultData.knowledgeJobId,job.id);assert.equal(run.caller_user_id,'admin-a');
+ // Simulate lease recovery before the first run ID was committed: idempotency reconnects the same run.
+ job.lease_token=randomUUID();await processKnowledgeJob(database,{...structuredClone(job),run_id:undefined});assert.equal(database.tables.workflow_runs.length,1);
+ run.status='succeeded';run.output={records:[{kind:'document',name:'Imported evidence',body:{text:'Traceable evidence'}}]};job.lease_token=randomUUID();await processKnowledgeJob(database,structuredClone(job));assert.equal(job.status,'review');
+ const review=await knowledge({action:'review_job',storeId:store.id,id:job.id});assert.equal(review.status,200);assert.equal(review.body.records[0].name,'Imported evidence');
+});
+test('knowledge dispatcher fails closed after assignment removal and rejects malformed model output',async()=>{
+ const store=setupKnowledge();const job={id:randomUUID(),organization_id:'org-a',store_id:store.id,actor_id:'admin-a',workflow_id:'shared',input:{},status:'queued',lease_token:randomUUID()};database.tables.knowledge_jobs.push(job);
+ store.settings.workflowIds=[];await processKnowledgeJob(database,structuredClone(job));assert.equal(job.status,'failed');assert.equal(database.tables.workflow_runs.length,0);
+ store.settings.workflowIds=['shared'];job.lease_token=randomUUID();await processKnowledgeJob(database,structuredClone(job));
+ database.tables.workflow_runs[0].status='succeeded';database.tables.workflow_runs[0].output={records:[{kind:'skill',name:'Uncited',body:{}}]};job.lease_token=randomUUID();await processKnowledgeJob(database,structuredClone(job));assert.equal(job.status,'failed');assert.match(job.error,/evidence/);
+});
+
+test('REST knowledge adapters use encrypted credentials server-side, bound response data, and block unsafe destinations',async()=>{
+ const store=setupKnowledge();const {encryptForOrganization}=load('supabase/functions/_shared/workflowSecurity.ts');
+ store.provider='rest';store.endpoint='https://adapter.example/query';store.secret_ciphertext=await encryptForOrganization(database,'org-a',{token:'connector-private-secret'});
+ env.set('KNOWLEDGE_REST_ALLOWED_HOSTS','adapter.example,private.example,unresolved.example');
+ const originalFetch=globalThis.fetch;const calls=[];
+ globalThis.fetch=async(url,options)=>{calls.push({url,options});return Response.json({matches:[{content:'Retrieved evidence',sourceId:'external-document',url:'https://source.example/document',score:.9,secret:'must-be-stripped'}]});};
+ try{
+  const result=await knowledge({action:'query',storeId:store.id,query:'skills'});
+  assert.equal(result.status,200);assert.equal(calls[0].options.headers.Authorization,'Bearer connector-private-secret');assert.equal(result.body.matches[0].content,'Retrieved evidence');assert.ok(!JSON.stringify(result.body).includes('secret'));assert.equal(calls[0].options.redirect,'error');
+  for(const endpoint of ['https://127.0.0.1/query','https://private.example/query','https://unresolved.example/query','https://unapproved.example/query']){store.endpoint=endpoint;assert.notEqual((await knowledge({action:'query',storeId:store.id,query:'skills'})).status,200);}
+  assert.equal(calls.length,1,'Unsafe connector requests reached fetch');
+ }finally{globalThis.fetch=originalFetch;env.delete('KNOWLEDGE_REST_ALLOWED_HOSTS');}
 });

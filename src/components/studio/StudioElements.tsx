@@ -27,6 +27,7 @@ export function StudioElementContent({ element, input, result, payload, onPayloa
   if (element.type === 'json-input') return <div><Label htmlFor={`${scope}-${element.id}`}>{element.label}</Label><Textarea id={`${scope}-${element.id}`} className="min-h-36 font-mono" value={payload} onChange={(event) => onPayloadChange?.(event.target.value)} readOnly={!onPayloadChange} /></div>;
   if (element.type === 'workflow-button') return <Button disabled={busy || !onAction} onClick={() => onAction?.(element.id)}>{element.label}</Button>;
   if (element.type === 'html') return <StudioCode element={element} input={input} result={result} />;
+  if (element.type === 'knowledge') return <div className="rounded border border-dashed p-6 text-sm">Skill workspace · {element.knowledgeView} · {element.knowledgeId || 'Choose a knowledge store in properties'}</div>;
   if (element.type === 'chat') return chat || <div className="rounded border border-dashed p-6 text-sm">Chat drawer: {element.chatId || 'Choose a published drawer in properties'}</div>;
   return <StudioResult value={element.binding ? bound : result} title={element.label} />;
 }

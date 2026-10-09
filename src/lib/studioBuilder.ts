@@ -1,15 +1,15 @@
 import type { CSSProperties } from "react";
 import type { StudioElement } from '../../supabase/functions/_shared/studioSchema';
 
-export const elementTypes: StudioElement['type'][] = ['heading', 'text', 'json-input', 'workflow-button', 'result', 'html', 'chat'];
-export const elementNames: Record<StudioElement['type'], string> = { heading: 'Heading', text: 'Text', 'json-input': 'JSON input', 'workflow-button': 'Workflow button', result: 'Result', html: 'HTML / CSS / JavaScript', chat: 'Chat drawer' };
+export const elementTypes: StudioElement['type'][] = ['heading', 'text', 'json-input', 'workflow-button', 'result', 'html', 'chat', 'knowledge'];
+export const elementNames: Record<StudioElement['type'], string> = { heading: 'Heading', text: 'Text', 'json-input': 'JSON input', 'workflow-button': 'Workflow button', result: 'Result', html: 'HTML / CSS / JavaScript', chat: 'Chat drawer', knowledge: 'Skill workspace' };
 export const defaultAppearance = { padding: 0, radius: 0, color: '', background: '', align: 'left' as const, minHeight: 0 };
 export const defaultResponsive = { mobile: 12, tablet: 12, desktop: 12 };
 export function newStudioElement(type: StudioElement['type']): StudioElement {
   return { id: `element-${crypto.randomUUID()}`, type, label: elementNames[type], enabled: true,
     content: type === 'heading' ? 'New heading' : type === 'text' ? 'Write your content here.' : type === 'json-input' ? '{}' : type === 'html' ? '<button id="counter">Clicked 0 times</button>' : '',
     ...(type === 'html' ? { css: 'body { font-family: system-ui; padding: 16px; }\nbutton { padding: 12px; border-radius: 8px; }', javascript: "let count = 0;\ndocument.querySelector('#counter').onclick = event => { event.target.textContent = `Clicked ${++count} times`; };" } : {}),
-    ...(type === 'workflow-button' ? { workflowId: '' } : {}), ...(type === 'chat' ? { chatId: '' } : {}),
+    ...(type === 'workflow-button' ? { workflowId: '' } : {}), ...(type === 'chat' ? { chatId: '' } : {}), ...(type === 'knowledge' ? { knowledgeId: '', knowledgeView: 'document' as const } : {}),
     responsive: { ...defaultResponsive }, appearance: { ...defaultAppearance } };
 }
 /** Safe lookup, never evaluates JavaScript expressions or traverses prototypes. */

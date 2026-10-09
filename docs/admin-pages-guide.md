@@ -1,3 +1,5 @@
+> Batch four adds Knowledge & Skills and the evidence-backed skill application. See [setup, operations, deployment and validation](application-platform-batch-four.md).
+
 > Studio batch three adds the responsive visual and HTML/CSS/JavaScript page builder. See [builder usage, deployment and validation](application-platform-batch-three.md).
 
 > Studio batch two adds published applications, organization canvases, and reusable Chat Drawers. See [setup, embedding, deployment and validation](application-platform-batch-two.md).

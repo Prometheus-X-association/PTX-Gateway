@@ -2,11 +2,13 @@
 export type StudioKind = "application" | "page" | "canvas" | "chat";
 export interface StudioElement {
   id: string;
-  type: "heading" | "text" | "json-input" | "workflow-button" | "result" | "html" | "chat";
+  type: "heading" | "text" | "json-input" | "workflow-button" | "result" | "html" | "chat" | "knowledge";
   label: string;
   content?: string;
   workflowId?: string;
   chatId?: string;
+  knowledgeId?: string;
+  knowledgeView?: "document" | "skill" | "mapping" | "job";
   enabled?: boolean;
   binding?: string;
   css?: string;
@@ -82,7 +84,7 @@ export function validateStudioDefinition(kind: StudioKind, raw: unknown): Studio
       const id = text(element.id, 80);
       if (!/^[a-zA-Z0-9_-]+$/.test(id) || ids.has(id)) throw new Error("Element IDs must be unique letters, digits, underscores or hyphens.");
       ids.add(id);
-      if (!["heading", "text", "json-input", "workflow-button", "result", "html", "chat"].includes(String(element.type))) throw new Error("Unsupported page element.");
+      if (!["heading", "text", "json-input", "workflow-button", "result", "html", "chat", "knowledge"].includes(String(element.type))) throw new Error("Unsupported page element.");
       const type = element.type as StudioElement["type"];
       const next: StudioElement = { id, type, label: text(element.label, 160), content: text(element.content, 100_000) };
       if (type === "workflow-button") {
@@ -90,6 +92,11 @@ export function validateStudioDefinition(kind: StudioKind, raw: unknown): Studio
         if (!next.workflowId && element.enabled !== false) throw new Error("Workflow buttons require a workflow ID.");
       }
       if (type === "chat") next.chatId = !element.chatId && element.enabled === false ? "" : studioUuid(element.chatId);
+      if (type === "knowledge") {
+        next.knowledgeId = studioUuid(element.knowledgeId);
+        if (!["document", "skill", "mapping", "job"].includes(String(element.knowledgeView))) throw new Error("Knowledge components require a valid view.");
+        next.knowledgeView = element.knowledgeView as StudioElement["knowledgeView"];
+      }
       if (element.enabled !== undefined) {
         if (typeof element.enabled !== "boolean") throw new Error("Element activation must be a boolean.");
         next.enabled = element.enabled;

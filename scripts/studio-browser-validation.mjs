@@ -33,6 +33,16 @@ const pageItem = seed("page", "extract", definition("Extracted Skills", { elemen
   { id: "chat", type: "chat", label: "Assistant", chatId: chat.id },
 ] }), app.id); publish(pageItem); publish(app);
 const canvas = seed("canvas", "workspace", definition("Organization workspace", { pageIds: [pageItem.id], layout: "grid" })); publish(canvas);
+const knowledgeStores=[]; const knowledgeRecords=[]; const knowledgeVersions=[]; const knowledgeJobs=[]; const knowledgeEdges=[];
+function saveKnowledge(storeId,record,id) {
+ let row=knowledgeRecords.find(item=>item.id===id);
+ if(row) Object.assign(row,record,{revision:row.revision+1});
+ else { row={id:randomUUID(),store_id:storeId,...record,revision:1}; knowledgeRecords.push(row); }
+ row.updated_at=new Date().toISOString();row.updated_by=user.id;
+ knowledgeVersions.push({id:randomUUID(),record_id:row.id,name:row.name,body:structuredClone(row.body),revision:row.revision,actor_id:user.id,created_at:row.updated_at});
+ const targets=row.kind==='skill'?(row.body.evidence||[]).map(e=>({id:e.documentId,version:e.version,relation:'evidenced_by'})):row.kind==='mapping'?[{id:row.body.skillId,version:1,relation:'maps_skill'}]:row.kind==='job'?(row.body.requirements||[]).map(e=>({id:e.skillId,version:1,relation:'requires_skill'})):[];
+ targets.forEach(target=>knowledgeEdges.push({source_id:row.id,target_id:target.id,target_revision:target.version,relation:target.relation}));return row;
+}
 const chatRequests = [];
 const browserErrors = [];
 let debugPage;
@@ -56,6 +66,26 @@ async function fixtures(context, authenticated = true) {
         return json(route.request().headers().accept?.includes("object") ? rows[0] || null : rows);
       }
       const body = route.request().postDataJSON() || {};
+      if (url.pathname.endsWith("knowledge-api")) {
+        const store=knowledgeStores.find(item=>item.id===body.storeId);
+        if(body.action==='list')return json({ok:true,stores:knowledgeStores,isAdmin:true,organizationId:org.id});
+        if(body.action==='create_store'){const created={id:randomUUID(),organization_id:org.id,...body.store,revision:1,credentialConfigured:false};knowledgeStores.push(created);return json({ok:true,store:created});}
+        if(body.action==='save_store'){Object.assign(store,body.store,{revision:store.revision+1});return json({ok:true,store});}
+        if(body.action==='snapshot'){if(!store.active)return json({ok:false,error:'Active knowledge store not found.'},404);return json({ok:true,store,records:knowledgeRecords.filter(row=>row.store_id===store.id&&row.kind===body.kind),jobs:knowledgeJobs,edges:knowledgeEdges,canWrite:true,nextOffset:null});}
+        if(body.action==='save_record')return json({ok:true,result:saveKnowledge(store.id,body.record,body.id)});
+        if(body.action==='history')return json({ok:true,versions:knowledgeVersions.filter(row=>row.record_id===body.id).reverse()});
+        if(body.action==='graph')return json({ok:true,nodes:knowledgeRecords,edges:knowledgeEdges});
+        if(body.action==='query'){const source=knowledgeRecords.find(row=>row.kind==='document');return json({ok:true,matches:[{documentId:source.id,revision:source.revision,content:source.body.text,score:1}]});}
+        if(body.action==='queue'){const source=knowledgeRecords.find(row=>row.kind==='document');knowledgeJobs.push({id:randomUUID(),workflow_id:body.workflowId,status:'review',run_id:randomUUID(),records:[{kind:'skill',name:'Generated planning',body:{description:'Planning',evidence:[{documentId:source.id,version:1,quote:'Planning'}]}}]});return json({ok:true});}
+        if(body.action==='review_job')return json({ok:true,records:knowledgeJobs.find(job=>job.id===body.id).records});
+        if(body.action==='apply_job'){const job=knowledgeJobs.find(job=>job.id===body.id);job.records.forEach(record=>saveKnowledge(store.id,record));job.status='succeeded';return json({ok:true});}
+        if(body.action==='create_skill_app'){
+          const skillApp=seed('application','skill-app',definition('Evidence skill application'));
+          for(const [kind,title] of [['document','Source documents'],['skill','Extracted skills'],['mapping','Framework mappings'],['job','Job profiles']]){const child=seed('page',kind,definition(title,{elements:[{id:'knowledge',type:'knowledge',label:title,knowledgeId:store.id,knowledgeView:kind}]}),skillApp.id);publish(child);store.settings.pageIds.push(child.id);}
+          publish(skillApp);return json({ok:true,slug:skillApp.slug});
+        }
+        return json({ok:false,error:'Unknown knowledge fixture'},400);
+      }
       if (url.pathname.endsWith("studio-api")) {
         const item = items.find((entry) => entry.id === body.id);
         if (body.action === "list") return json({ ok: true, items });
@@ -218,6 +248,61 @@ try {
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), "Mobile runtime overflows viewport");
   await page.screenshot({ path: "/tmp/ptx-studio-validation/screenshots/studio-mobile.png", fullPage: true });
   console.log("PASS: admin create/publish, chat management, published workflow output, inline chat, canvas and mobile layout");
+  // Phase 5–6: administer a store and exercise the complete evidence-backed skill application.
+  await page.setViewportSize({width:1440,height:1000});
+  await page.goto(`${base}/admin?section=knowledge`);
+  await page.getByRole('button',{name:'New knowledge store',exact:true}).click();
+  await page.getByLabel('Store configuration (JSON)',{exact:true}).fill(JSON.stringify({name:'Evidence graph',kind:'knowledge_graph',provider:'managed',endpoint:'',active:true,settings:{pageIds:[],agentIds:[],workflowIds:['extract'],changeWorkflowId:'extract',memberWrites:true}}));
+  await page.getByRole('button',{name:'Save knowledge store',exact:true}).click();
+  await page.getByRole('button',{name:'Open skill workspace',exact:true}).click();
+  const workspace=page.getByRole('region',{name:'Skill workspace',exact:true});
+  async function addRecord(kind,name,body){
+    await workspace.getByRole('button',{name:`Add ${kind}`,exact:true}).click();
+    await workspace.getByLabel('Record name',{exact:true}).fill(name);
+    await workspace.getByLabel('Record fields (JSON)',{exact:true}).fill(JSON.stringify(body));
+    await workspace.getByRole('button',{name:'Save record',exact:true}).click();
+    await workspace.getByText(name,{exact:true}).waitFor();
+  }
+  await addRecord('document','Course evidence',{text:'Planning and analysis skills are needed.',url:'https://example.test/course',documentType:'course'});
+  const sourceRecord=knowledgeRecords.find(row=>row.kind==='document');
+  await workspace.getByRole('button',{name:'Extracted skills',exact:true}).click();
+  await addRecord('skill','Analysis',{description:'Analyze evidence',framework:'Internal',category:'Analytical',level:'Advanced',evidence:[{documentId:sourceRecord.id,version:1,quote:'analysis skills'}]});
+  const skillRecord=knowledgeRecords.find(row=>row.kind==='skill');
+  await workspace.getByRole('button',{name:'History & evidence',exact:true}).click();
+  await page.getByRole('dialog').getByText(/manual change/).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Source revision 1',exact:true}).click();
+  await page.getByRole('dialog').getByRole('heading',{name:'Course evidence · revision 1',exact:true}).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();
+  await workspace.getByRole('button',{name:'Framework mappings',exact:true}).click();
+  await addRecord('mapping','Analysis mapping',{skillId:skillRecord.id,framework:'Internal',category:'Analytical',level:'Advanced'});
+  await workspace.getByRole('button',{name:'Job profiles',exact:true}).click();
+  await addRecord('job','Data analyst',{description:'Analyzes source evidence',requirements:[{skillId:skillRecord.id,category:'Analytical',level:'Advanced'}]});
+  await workspace.getByRole('button',{name:'Traceable graph',exact:true}).click();
+  await page.getByRole('dialog').getByText('→ requires skill →',{exact:true}).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();
+  await workspace.getByText('Search knowledge',{exact:true}).click();
+  await workspace.getByLabel('Knowledge query',{exact:true}).fill('analysis');
+  await workspace.getByRole('button',{name:'Search',exact:true}).click();
+  await workspace.locator('blockquote').getByText('Planning and analysis skills are needed.',{exact:true}).waitFor();
+  await workspace.getByText('Knowledge operations',{exact:true}).click();
+  await workspace.getByLabel('Build workflow',{exact:true}).selectOption('extract');
+  await workspace.getByLabel('Build request (JSON)',{exact:true}).fill(JSON.stringify({documentId:sourceRecord.id,documentRevision:1,prompt:'Extract planning skills'}));
+  await workspace.getByRole('button',{name:'Queue build',exact:true}).click();
+  await workspace.getByRole('button',{name:'Review generated records',exact:true}).click();
+  await page.getByRole('dialog').getByText(/Generated planning/).waitFor();
+  await page.getByRole('dialog').getByRole('button',{name:'Apply reviewed records',exact:true}).click();
+  await workspace.getByText('extract · succeeded',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Create skill application',exact:true}).click();
+  await page.getByRole('link',{name:'Open application',exact:true}).waitFor();
+  await page.goto(`${base}/o/test-org/apps/skill-app/document`);
+  await page.getByRole('region',{name:'Skill workspace',exact:true}).getByText('Course evidence',{exact:true}).waitFor();
+  await page.getByRole('navigation',{name:'Application pages',exact:true}).getByRole('link',{name:'Extracted skills',exact:true}).click();
+  await page.getByRole('region',{name:'Skill workspace',exact:true}).getByText('Generated planning',{exact:true}).waitFor();
+  await page.screenshot({path:'/tmp/ptx-studio-validation/screenshots/knowledge-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Skill application overflows mobile viewport');
+  await page.screenshot({path:'/tmp/ptx-studio-validation/screenshots/knowledge-mobile.png',fullPage:true});
+  console.log('PASS: knowledge registry, source/skill/mapping/job editing, evidence history, graph, retrieval, generated-record review and published skill application');
   const external = await browser.newContext({ viewport: { width: 1000, height: 850 } });
   // This test uses two loopback origins; Chromium requires explicit local-network permission.
   await external.grantPermissions(["local-network-access"], { origin: "http://localhost:4173" });

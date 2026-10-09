@@ -1,3 +1,4 @@
+import KnowledgeManagement from "./KnowledgeManagement";
 import { ChangeEvent, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,7 @@ const AdminDashboard = () => {
     { id: "overview", label: "Overview", icon: LayoutDashboard },
     { id: "llm", label: "Agent Orchestration", icon: Brain },
     { id: "applications", label: "Applications & Pages", icon: PanelsTopLeft },
+    { id: "knowledge", label: "Knowledge & Skills", icon: Database },
     { id: "chat-drawers", label: "Chat Drawers", icon: Brain },
     { id: "resources", label: "Resources", icon: Database },
     { id: "pdc", label: "PDC Configuration", icon: Globe },
@@ -332,6 +334,7 @@ const AdminDashboard = () => {
           </nav>
           <main className="min-w-0" key={`${user?.id}:${user?.organization?.id}`}>
           <TabsContent value="overview"><AdminOverview onNavigate={setActiveTab} /></TabsContent>
+          <TabsContent value="knowledge"><KnowledgeManagement key={user?.organization?.id} /></TabsContent>
           <TabsContent value="applications"><StudioManagement key={user?.organization?.id} /></TabsContent>
           <TabsContent value="chat-drawers"><StudioManagement key={user?.organization?.id} chats /></TabsContent>
           <TabsContent value="legacy">

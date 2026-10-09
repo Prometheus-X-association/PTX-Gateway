@@ -305,7 +305,38 @@ start_workflow_worker() {
   return 1
 }
 
+start_knowledge_worker() {
+  echo "Building the knowledge dispatcher container..."
+  docker build -f services/knowledge-worker/Dockerfile -t ptx-knowledge-worker .
+  docker rm -f ptx-gateway-knowledge-worker >/dev/null 2>&1 || true
+  docker run --rm --name ptx-gateway-knowledge-worker \
+    --env-file services/workflow-worker/.env \
+    --add-host host.docker.internal:host-gateway \
+    --memory=512m --cpus=1 \
+    ptx-knowledge-worker > /tmp/ptx-gateway-knowledge-worker.log 2>&1 &
+  KNOWLEDGE_WORKER_PID=$!
+  local attempts=0
+  while (( attempts < 30 )); do
+    if ! kill -0 "$KNOWLEDGE_WORKER_PID" 2>/dev/null; then
+      echo "Knowledge dispatcher failed to start. See /tmp/ptx-gateway-knowledge-worker.log"
+      return 1
+    fi
+    if grep -q 'Knowledge job dispatcher started' /tmp/ptx-gateway-knowledge-worker.log; then
+      echo "Knowledge dispatcher ready (logs: /tmp/ptx-gateway-knowledge-worker.log)"
+      return 0
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+  echo "Timed out waiting for the knowledge dispatcher."
+  return 1
+}
+
 cleanup() {
+  if [[ -n "${KNOWLEDGE_WORKER_PID:-}" ]]; then
+    docker stop --timeout 30 ptx-gateway-knowledge-worker >/dev/null 2>&1 || true
+    wait "$KNOWLEDGE_WORKER_PID" 2>/dev/null || true
+  fi
   if [[ -n "${WORKFLOW_WORKER_PID:-}" ]]; then
     docker stop --timeout 30 "$WORKFLOW_WORKER_CONTAINER" >/dev/null 2>&1 || true
     wait "$WORKFLOW_WORKER_PID" 2>/dev/null || true
@@ -368,6 +399,7 @@ if [[ "$WITH_SUPABASE" == "true" ]]; then
 
   start_edge_functions
   start_workflow_worker
+  start_knowledge_worker
 fi
 
 echo "Starting frontend on http://${HOST}:${FRONTEND_PORT} ..."

@@ -1,3 +1,4 @@
+import SkillWorkspace from "@/components/knowledge/SkillWorkspace";
 import { studioElementStyle } from "@/lib/studioBuilder";
 import { useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -78,9 +79,9 @@ function PublishedPage({ page, container, organizationId }: { page: PublishedStu
     {run.data?.status === "queued" && <p className="text-sm text-muted-foreground">Waiting for workflow worker capacity.</p>}
     {run.data?.waiting && <RunAnswer organizationId={organizationId} run={run.data} onAnswered={() => void run.refetch()} />}
     <div className="studio-surface"><div className="studio-elements">{page.definition.elements.filter((element) => element.enabled !== false).map((element) => <div key={element.id} className="studio-element" data-element-id={element.id} style={studioElementStyle(element)}>
-      <StudioElementContent element={element} input={(() => { try { return JSON.parse(payload); } catch { return null; } })()} result={output} payload={payload} onPayloadChange={setPayload}
+      {element.type === "knowledge" ? <SkillWorkspace storeId={element.knowledgeId!} organizationId={organizationId} pageId={page.id} initialView={element.knowledgeView} /> : <StudioElementContent element={element} input={(() => { try { return JSON.parse(payload); } catch { return null; } })()} result={output} payload={payload} onPayloadChange={setPayload}
         onAction={startAction} busy={active || start.isPending} scope={page.id}
-        chat={element.type === "chat" ? <div className="min-h-80" style={{ height: element.appearance?.minHeight || 640 }}><ManagedChat id={element.chatId!} organizationId={organizationId} context={{ resultData: output }} onResultDataChange={setResult} /></div> : undefined} />
+        chat={element.type === "chat" ? <div className="min-h-80" style={{ height: element.appearance?.minHeight || 640 }}><ManagedChat id={element.chatId!} organizationId={organizationId} context={{ resultData: output }} onResultDataChange={setResult} /></div> : undefined} />}
     </div>)}</div></div>
   </CardContent></Card>;
 }

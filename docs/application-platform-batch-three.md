@@ -92,7 +92,7 @@ HTML elements also support `css` and `javascript` alongside the existing `conten
 
 No new database migration is needed for batch three. Batch two's tables and migration remain prerequisites. Deploy the updated **studio-api** and its shared schema **before** deploying the frontend, so saves retain the new fields and inactive actions are enforced. Redeploy other functions importing the shared schema through the normal backend deployment process. Existing pages render full width until edited; existing releases remain immutable. This implementation does not deploy to a live environment.
 
-Prompt-generated applications and managed knowledge-store administration remain later phases.
+Managed knowledge-store administration and the skill application are delivered in [batch four](application-platform-batch-four.md). Prompt-generated applications remain a future feature.
 
 ## Validation
 

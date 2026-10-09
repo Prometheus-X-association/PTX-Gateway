@@ -59,3 +59,6 @@ verify_jwt = false
 
 [functions.studio-api]
 verify_jwt = false
+
+[functions.knowledge-api]
+verify_jwt = false
