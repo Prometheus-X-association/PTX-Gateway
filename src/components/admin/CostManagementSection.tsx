@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,7 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { costControl } from "@/lib/costControl";
-import { Loader2, RefreshCw, Save, Send, ShieldCheck } from "lucide-react";
+import type { CostDistributionItem } from "@/components/admin/CostDistributionChart";
+import { Bot, GitBranch, Loader2, RefreshCw, Save, Send, ShieldCheck, Wrench } from "lucide-react";
+
+const CostDistributionChart = lazy(async () => ({ default: (await import("@/components/admin/CostDistributionChart")).CostDistributionChart }));
 
 type ScalarMap = Record<string, string | number>;
 type Item = Record<string, unknown> & {
@@ -14,6 +17,7 @@ type Item = Record<string, unknown> & {
   change_reason?: string; archived_at?: string; retired_at?: string; target_type?: string; target_id?: string;
   definition?: Record<string, unknown> & { rates?: Record<string, string> }; formula_ast?: unknown;
   executionCount?: number; usageEventCount?: number; totals?: ScalarMap; providers?: Record<string, Item>; executions?: Item[];
+  distributions?: { workflows?: CostDistributionItem[]; llmProviders?: CostDistributionItem[]; mcpServers?: CostDistributionItem[] };
   execution?: Item; steps?: Item[]; usage?: unknown; valuations?: unknown; stepTotals?: Record<string, ScalarMap>;
   events?: number; inputTokens?: number; outputTokens?: number; costs?: ScalarMap;
   execution_mode?: string; execution_kind?: string; started_at?: string; workflow_id?: string; agent_id?: string;
@@ -45,6 +49,7 @@ export function CostManagementSection({ organizationId, providers, mcpServers, w
   const [budgetName, setBudgetName] = useState("Monthly AI budget"); const [budgetAmount, setBudgetAmount] = useState("1000");
   const [subscriptionPolicy, setSubscriptionPolicy] = useState(""); const [subscriptionAmount, setSubscriptionAmount] = useState("0");
   const [reconcileExecution, setReconcileExecution] = useState(""); const [reconcileAmount, setReconcileAmount] = useState("");
+  const [dashboardCurrency, setDashboardCurrency] = useState("");
 
   const call = useCallback((action: string, body: Record<string, unknown> = {}) => costControl(action, organizationId, body), [organizationId]);
   const refresh = useCallback(async () => {
@@ -59,12 +64,15 @@ export function CostManagementSection({ organizationId, providers, mcpServers, w
     finally { setBusy(false); }
   }, [call, organizationId]);
   useEffect(() => { void refresh(); }, [refresh]);
+  const dashboardCurrencies = useMemo(() => Object.keys(summary?.totals ?? {}), [summary?.totals]);
+  useEffect(() => { if (dashboardCurrencies.length && !dashboardCurrencies.includes(dashboardCurrency)) setDashboardCurrency(dashboardCurrencies[0]); }, [dashboardCurrencies, dashboardCurrency]);
 
   const targets = useMemo(() => targetType === "llm_provider" ? providers.map((item) => ({ ...item, label: `${item.name}${item.model ? ` · ${item.model}` : ""}` }))
     : targetType === "mcp_server" ? mcpServers.map((item) => ({ ...item, label: item.name }))
     : targetType === "workflow" ? workflows.map((item) => ({ ...item, label: item.name }))
     : targetType === "agent" ? agents.map((item) => ({ ...item, label: item.name })) : [], [agents, mcpServers, providers, targetType, workflows]);
   const version = versions.find((item) => item.id === selectedVersion);
+  const workflowNames = useMemo(() => Object.fromEntries(workflows.map((workflow) => [workflow.id, workflow.name])), [workflows]);
   const perform = async (fn: () => Promise<void>) => { setBusy(true); setError(""); try { await fn(); await refresh(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(false); } };
 
   const loadVersion = (id: string) => { setSelectedVersion(id); const item = versions.find((value) => value.id === id); if (item) { setRates(pretty(item.definition?.rates ?? {})); setFormula(pretty(item.formula_ast)); setAssignmentPolicy(item.policy_id); } };
@@ -75,7 +83,13 @@ export function CostManagementSection({ organizationId, providers, mcpServers, w
     <Tabs defaultValue="dashboard">
       <TabsList className="grid h-auto grid-cols-2 lg:grid-cols-4"><TabsTrigger value="dashboard">Cost dashboard</TabsTrigger><TabsTrigger value="executions">Executions</TabsTrigger><TabsTrigger value="policies">Policies</TabsTrigger><TabsTrigger value="controls">Budgets &amp; billing</TabsTrigger></TabsList>
       <TabsContent value="dashboard" className="space-y-3 pt-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 p-3"><div><p className="text-sm font-semibold">Cost allocation overview</p><p className="text-[11px] text-muted-foreground">Effective valued cost from the last 30 days. Hover chart segments for details.</p></div>{dashboardCurrencies.length > 0 && <select aria-label="Dashboard currency" className="h-8 rounded-md border bg-background px-3 text-xs font-medium" value={dashboardCurrency} onChange={(event) => setDashboardCurrency(event.target.value)}>{dashboardCurrencies.map((value) => <option key={value}>{value}</option>)}</select>}</div>
         <div className="grid gap-2 sm:grid-cols-3"><Metric label="Executions" value={summary?.executionCount ?? 0} /><Metric label="Usage events" value={summary?.usageEventCount ?? 0} /><Metric label="Estimated totals" value={Object.entries(summary?.totals ?? {}).map(([unit, value]) => `${Number(value).toFixed(4)} ${unit}`).join(" · ") || "0"} /></div>
+        <Suspense fallback={<div className="grid gap-3 xl:grid-cols-3">{[0,1,2].map((item) => <div key={item} className="h-[330px] animate-pulse rounded-xl border bg-muted/40" />)}</div>}><div className="grid gap-3 xl:grid-cols-3">
+          <CostDistributionChart title="Workflow cost share" description="Percentage of effective cost attributed to each workflow." icon={<GitBranch className="h-4 w-4" />} items={summary?.distributions?.workflows ?? []} currency={dashboardCurrency || dashboardCurrencies[0] || "EUR"} workflowNames={workflowNames} />
+          <CostDistributionChart title="LLM provider distribution" description="Token and request cost split across configured LLM providers." icon={<Bot className="h-4 w-4" />} items={summary?.distributions?.llmProviders ?? []} currency={dashboardCurrency || dashboardCurrencies[0] || "EUR"} />
+          <CostDistributionChart title="MCP cost distribution" description="Tool-call cost split across MCP servers." icon={<Wrench className="h-4 w-4" />} items={summary?.distributions?.mcpServers ?? []} currency={dashboardCurrency || dashboardCurrencies[0] || "EUR"} />
+        </div></Suspense>
         <div className="rounded border"><div className="grid grid-cols-5 gap-2 border-b bg-muted/40 p-2 text-[10px] font-semibold uppercase"><span>Provider/source</span><span>Events</span><span>Input tokens</span><span>Output tokens</span><span>Cost</span></div>{Object.entries(summary?.providers ?? {}).map(([provider, raw]) => { const value = raw as Item; return <div key={provider} className="grid grid-cols-5 gap-2 border-b p-2 text-xs last:border-0"><span>{provider}</span><span>{value.events}</span><span>{Number(value.inputTokens).toLocaleString()}</span><span>{Number(value.outputTokens).toLocaleString()}</span><span>{Object.entries(value.costs ?? {}).map(([unit, amount]) => `${amount} ${unit}`).join(" · ") || "—"}</span></div>; })}</div>
       </TabsContent>
       <TabsContent value="executions" className="space-y-2 pt-3">

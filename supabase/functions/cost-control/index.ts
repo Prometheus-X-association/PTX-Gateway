@@ -10,8 +10,9 @@ import type { WorkflowNode } from "../_shared/workflowTypes.ts";
 
 type AdminClient = ReturnType<typeof adminClient>;
 type FormulaInput = string | number | bigint | boolean | null | undefined;
-interface CostValuationRow { usage_event_id?: string; step_id?: string; currency: string; amount: string; calculation_breakdown?: { inclusive?: boolean } }
+interface CostValuationRow { usage_event_id?: string; execution_id: string; step_id?: string; currency: string; amount: string; calculation_breakdown?: { inclusive?: boolean } }
 interface CostUsageRow { id: string; provider_name?: string; provider_id?: string; mcp_server_id?: string; event_kind: string; input_tokens?: number; output_tokens?: number }
+interface ExecutionRow { id: string; workflow_id?: string; execution_kind?: string; metadata?: { workflowName?: string } }
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-organization-id" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
@@ -217,10 +218,25 @@ export const handleCostControlRequest = async (request: Request) => {
       const totals = Object.fromEntries(Object.entries(scaledTotals).map(([currency, amount]) => [currency, decimalString(amount)]));
       const providers: Record<string, { events: number; inputTokens: number; outputTokens: number; scaledCosts: Record<string, bigint>; costs?: Record<string, string> }> = {};
       const usageRows = (usage ?? []) as CostUsageRow[]; const usageById = new Map(usageRows.map((item) => [item.id, item]));
+      const executionRows = (executions ?? []) as ExecutionRow[]; const executionById = new Map(executionRows.map((item) => [item.id, item]));
+      type DistributionValue = { id: string; label: string; scaledCosts: Record<string, bigint> };
+      const workflowDistribution: Record<string, DistributionValue> = {}; const llmDistribution: Record<string, DistributionValue> = {}; const mcpDistribution: Record<string, DistributionValue> = {};
+      const addDistribution = (target: Record<string, DistributionValue>, id: string, label: string, currency: string, amount: string) => {
+        const row = target[id] ??= { id, label, scaledCosts: {} }; row.scaledCosts[currency] = (row.scaledCosts[currency] ?? 0n) + decimal(amount);
+      };
       for (const item of usageRows) { const key = item.provider_name || item.provider_id || item.mcp_server_id || item.event_kind; const target = providers[key] ??= { events: 0, inputTokens: 0, outputTokens: 0, scaledCosts: {} }; target.events++; target.inputTokens += Number(item.input_tokens || 0); target.outputTokens += Number(item.output_tokens || 0); }
-      for (const value of effectiveValuations) { const item = value.usage_event_id ? usageById.get(value.usage_event_id) : undefined; if (!item) continue; const key = item.provider_name || item.provider_id || item.mcp_server_id || item.event_kind; const target = providers[key] ??= { events: 0, inputTokens: 0, outputTokens: 0, scaledCosts: {} }; target.scaledCosts[value.currency] = (target.scaledCosts[value.currency] ?? 0n) + decimal(value.amount); }
+      for (const value of effectiveValuations) {
+        const execution = executionById.get(value.execution_id); const workflowId = execution?.workflow_id || (execution?.execution_kind === "direct_agent" ? "direct-agent" : "unassigned");
+        addDistribution(workflowDistribution, workflowId, execution?.metadata?.workflowName || (workflowId === "direct-agent" ? "Direct agent" : workflowId === "unassigned" ? "Unassigned" : workflowId), value.currency, value.amount);
+        const item = value.usage_event_id ? usageById.get(value.usage_event_id) : undefined; if (!item) continue;
+        const key = item.provider_name || item.provider_id || item.mcp_server_id || item.event_kind; const target = providers[key] ??= { events: 0, inputTokens: 0, outputTokens: 0, scaledCosts: {} }; target.scaledCosts[value.currency] = (target.scaledCosts[value.currency] ?? 0n) + decimal(value.amount);
+        if (item.event_kind === "llm_request") addDistribution(llmDistribution, item.provider_id || key, item.provider_name || item.provider_id || "Unknown LLM", value.currency, value.amount);
+        if (item.event_kind === "mcp_tool_call") addDistribution(mcpDistribution, item.mcp_server_id || item.provider_id || key, item.provider_name || item.mcp_server_id || "Unknown MCP", value.currency, value.amount);
+      }
       for (const target of Object.values(providers)) { target.costs = Object.fromEntries(Object.entries(target.scaledCosts).map(([currency, amount]) => [currency, decimalString(amount)])); delete target.scaledCosts; }
-      return json({ ok: true, from, to, totals, executionCount: executions?.length ?? 0, usageEventCount: usage?.length ?? 0, providers, executions });
+      const distribution = (target: Record<string, DistributionValue>) => Object.values(target).map(({ id, label, scaledCosts: values }) => ({ id, label, costs: Object.fromEntries(Object.entries(values).map(([currency, amount]) => [currency, decimalString(amount)])) }));
+      return json({ ok: true, from, to, totals, executionCount: executions?.length ?? 0, usageEventCount: usage?.length ?? 0, providers, executions,
+        distributions: { workflows: distribution(workflowDistribution), llmProviders: distribution(llmDistribution), mcpServers: distribution(mcpDistribution) } });
     }
     if (action === "execution_detail") {
       const executionId = uuid(body.executionId, "Execution ID");

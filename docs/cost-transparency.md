@@ -22,6 +22,6 @@ The LLM provider list includes disabled OpenAI GPT, Anthropic Claude, and Google
 
 ## Reporting and reconciliation
 
-The dashboard shows exact decimal totals by currency and provider/source. Execution drill-down shows each node's cost and the underlying usage and valuation records. Inclusive node policies replace child/provider valuations in rollups; additive policies remain separate.
+The dashboard shows exact decimal totals by currency and provider/source, plus interactive workflow-share, LLM-provider, and MCP-server distribution charts. A currency selector keeps percentages meaningful when an organization records more than one currency. Execution drill-down shows each node's cost and the underlying usage and valuation records. Inclusive node policies replace child/provider valuations in rollups; additive policies remain separate.
 
 Budgets and subscription periods are administered in the same view. Subscription amounts are allocated with fixed-decimal arithmetic, with any rounding remainder assigned deterministically so allocations equal the original amount. Provider invoices can be recorded as reconciled valuations without replacing the original estimate.
