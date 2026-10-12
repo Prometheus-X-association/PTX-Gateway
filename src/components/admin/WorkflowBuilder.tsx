@@ -31,6 +31,7 @@ import { ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID } from "@/types/agentSkill";
 import { executeWorkflow } from "@/lib/workflowExecutor";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
 import { supabase } from "@/integrations/supabase/client";
+import type { NodeCostConfiguration } from "../../../supabase/functions/_shared/costTypes.ts";
 
 // ─── Agent stub (only what WorkflowBuilder needs from LlmAgent) ──────────────
 
@@ -702,6 +703,24 @@ const NodeStateMappingPanel = ({ node, state, onChange }: { node: Node; state?: 
     <Label className="mt-3 block text-[10px]">Writes</Label>
     <div className="space-y-1">{writes.map((write, index) => <div key={index} className="grid grid-cols-[1fr_90px_90px_auto] gap-1">{keyInput(write.key, (key) => onChange({ stateWrites: writes.map((item, current) => current === index ? { ...item, key } : item) }))}<Input className="h-7 text-[10px]" value={write.sourcePath ?? ""} placeholder="output path" onChange={(event) => onChange({ stateWrites: writes.map((item, current) => current === index ? { ...item, sourcePath: event.target.value || undefined } : item) })} /><select className="rounded-md border bg-background px-1 text-[10px]" value={write.reducer ?? ""} onChange={(event) => onChange({ stateWrites: writes.map((item, current) => current === index ? { ...item, reducer: (event.target.value || undefined) as WorkflowStateReducer | undefined } : item) })}><option value="">schema</option>{["replace","merge","append","append_unique","sum","min","max","first"].map((value) => <option key={value}>{value}</option>)}</select><Button type="button" size="sm" variant="ghost" onClick={() => onChange({ stateWrites: writes.filter((_, current) => current !== index) })}>×</Button></div>)}</div>
     <Button type="button" size="sm" variant="outline" className="mt-1" onClick={() => onChange({ stateWrites: [...writes, { key: keys[0] ?? "" }] })}>Add write</Button>
+  </details>;
+};
+
+const NodeCostPanel = ({ node, onChange }: { node: WorkflowNode; onChange: (cost?: NodeCostConfiguration) => void }) => {
+  const cost = node.cost ?? { mode: "none" as const };
+  const patch = (value: Partial<NodeCostConfiguration>) => onChange({ ...cost, ...value });
+  return <details className="mt-3 rounded-lg border p-3 text-xs">
+    <summary className="cursor-pointer font-medium">Cost configuration</summary>
+    <p className="mt-2 text-[10px] text-muted-foreground">Provider charges remain separately visible. Node charges are additive unless Inclusive is enabled.</p>
+    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+      <label className="space-y-1"><span>Calculation</span><Select value={cost.mode} onValueChange={(mode) => patch({ mode: mode as NodeCostConfiguration["mode"] })}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{[
+        ["none","No additional cost"], ["policy","Versioned cost policy"], ["fixed_attempt","Fixed per attempt"], ["fixed_success","Fixed on success"], ["quantity","Response quantity"], ["duration","Duration based"],
+      ].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select></label>
+      {(cost.mode === "policy" || cost.mode === "quantity" || cost.mode === "duration") && <label className="space-y-1"><span>Policy UUID</span><Input className="h-8 font-mono text-xs" value={cost.policyId ?? ""} placeholder="Assign from Costs & Usage" onChange={(event) => patch({ policyId: event.target.value || undefined })} /></label>}
+      {(cost.mode === "fixed_attempt" || cost.mode === "fixed_success") && <><label className="space-y-1"><span>Amount</span><Input className="h-8" type="number" min="0" step="0.000001" value={cost.fixedAmount ?? "0"} onChange={(event) => patch({ fixedAmount: event.target.value })} /></label><label className="space-y-1"><span>Currency</span><Input className="h-8" maxLength={3} value={cost.currency ?? "EUR"} onChange={(event) => patch({ currency: event.target.value.toUpperCase() })} /></label></>}
+      {cost.mode === "quantity" && <><label className="space-y-1"><span>Quantity source</span><Select value={cost.quantitySource ?? "response_body"} onValueChange={(quantitySource) => patch({ quantitySource: quantitySource as "response_body" | "response_header" })}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="response_body">Response body path</SelectItem><SelectItem value="response_header">Response header</SelectItem></SelectContent></Select></label><label className="space-y-1"><span>{cost.quantitySource === "response_header" ? "Header" : "JSON path"}</span><Input className="h-8 font-mono text-xs" value={cost.quantitySource === "response_header" ? cost.quantityHeader ?? "" : cost.quantityPath ?? ""} onChange={(event) => cost.quantitySource === "response_header" ? patch({ quantityHeader: event.target.value }) : patch({ quantityPath: event.target.value })} /></label><label className="space-y-1"><span>Unit</span><Input className="h-8" value={cost.unit ?? "unit"} onChange={(event) => patch({ unit: event.target.value })} /></label></>}
+      {cost.mode !== "none" && <label className="flex items-center gap-2 self-end"><Switch checked={Boolean(cost.inclusive)} onCheckedChange={(inclusive) => patch({ inclusive })} />Inclusive of child/provider costs</label>}
+    </div>
   </details>;
 };
 
@@ -5349,6 +5368,10 @@ export const WorkflowBuilder = ({ traceNodeId, workflowId, workflow, state, agen
     const next = nodes.map((node) => node.id === selectedNodeId ? { ...node, ...patch } : node);
     setNodes(next); commit(next, edges);
   };
+  const updateSelectedNodeCost = (cost?: NodeCostConfiguration) => {
+    const next = nodes.map((node) => node.id === selectedNodeId ? { ...node, cost } : node);
+    setNodes(next); commit(next, edges);
+  };
 
   const updateSelectedRouterData = (data: RouterNodeData) => {
     const nextNodes = nodes.map((node) => node.id === selectedNodeId ? { ...node, data: { ...node.data, ...data } } : node);
@@ -7230,6 +7253,7 @@ Return JSON only with {"nodes":[],"edges":[]}.`;
                   onChange={(data) => updateSelectedNodeData(data as never)}
                 />}
                 <NodeStateMappingPanel node={selectedNode} state={state} onChange={updateSelectedNodeState} />
+                <NodeCostPanel node={selectedNode as unknown as WorkflowNode} onChange={updateSelectedNodeCost} />
                 {testRuns[selectedNode.id] && (
                   <div className="mt-4 space-y-2 border-t pt-4">
                     <div className="flex items-center justify-between">

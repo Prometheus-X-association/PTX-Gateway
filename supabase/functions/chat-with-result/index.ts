@@ -7,6 +7,9 @@ import { resolveProviders, resolveAgentProviders } from "./providers.ts";
 import { resolveSavedWorkflowAgent, resolveWorkflowResultContext } from "./workflowAgent.ts";
 import { assertProviderSuccess, readProviderStream } from "./providerStream.ts";
 import { runRequiredWebSearch } from "./webSearch.ts";
+import { ensureOperationExecution, recordUsageAndValuation } from "../_shared/costService.ts";
+import { verifyCostExecutionToken } from "../_shared/costExecutionToken.ts";
+import type { ProviderUsage } from "../_shared/costTypes.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -196,6 +199,10 @@ interface ChatRequest {
   attachment?: LlmAttachment;
   /** Multiple original file bytes for provider-native document input. */
   attachments?: LlmAttachment[];
+  /** Durable cost/trace context supplied by browser orchestration. */
+  executionId?: string;
+  executionToken?: string;
+  executionStepId?: string;
 }
 
 interface ExecutionTokenPayload {
@@ -313,6 +320,34 @@ const providerFamily = (provider: LlmProvider): NonNullable<LlmProvider["provide
   return "openai_compatible";
 };
 
+interface LlmObservation {
+  provider: LlmProvider;
+  family: string;
+  modelRequested: string;
+  modelActual?: string;
+  providerRequestId?: string;
+  usage?: ProviderUsage;
+  status: "succeeded" | "failed";
+  startedAt: string;
+  finishedAt: string;
+  error?: string;
+}
+
+const providerUsage = (family: string, payload: Record<string, unknown>): ProviderUsage => {
+  const response = payload.response && typeof payload.response === "object" ? payload.response as Record<string, unknown> : payload;
+  const usage = (response.usage ?? payload.usage ?? payload.usageMetadata) as Record<string, unknown> | undefined;
+  if (!usage) return {};
+  const details = (usage.prompt_tokens_details ?? usage.input_tokens_details) as Record<string, unknown> | undefined;
+  const completionDetails = usage.completion_tokens_details as Record<string, unknown> | undefined;
+  if (family === "anthropic") {
+    const cachedInputTokens = Number(usage.cache_read_input_tokens || 0);
+    const cacheWriteTokens = Number(usage.cache_creation_input_tokens || 0);
+    return { inputTokens: Number(usage.input_tokens || 0) + cachedInputTokens + cacheWriteTokens, outputTokens: Number(usage.output_tokens || 0), cachedInputTokens, cacheWriteTokens };
+  }
+  if (family === "gemini") return { inputTokens: Number(usage.promptTokenCount || 0), outputTokens: Number(usage.candidatesTokenCount || 0), cachedInputTokens: Number(usage.cachedContentTokenCount || 0), reasoningTokens: Number(usage.thoughtsTokenCount || 0) };
+  return { inputTokens: Number(usage.input_tokens ?? usage.prompt_tokens ?? 0), outputTokens: Number(usage.output_tokens ?? usage.completion_tokens ?? 0), cachedInputTokens: Number(details?.cached_tokens || 0), reasoningTokens: Number(completionDetails?.reasoning_tokens || 0) };
+};
+
 const conversationText = (messages: ChatMessage[]): string => messages
   .filter((message) => message.role !== "system")
   .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
@@ -323,15 +358,19 @@ const callLlmOnce = async (
   providers: LlmProvider[],
   messages: ChatMessage[],
   tools?: OpenAITool[],
-  jsonMode?: boolean
+  jsonMode?: boolean,
+  observe: (observation: LlmObservation) => void | Promise<void> = () => {},
 ): Promise<{ message: ChatMessage; providerName: string }> => {
   const errors: string[] = [];
   for (const p of providers) {
+    const startedAt = new Date().toISOString();
     const apiKey = p.apiKey?.trim() ?? "";
     const model = p.model?.trim();
     const family = providerFamily(p);
     const baseUrl = (p.apiBaseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
     if ((!apiKey && family !== "openai_compatible") || !model) continue;
+    const observeFailure = async (error: string) => observe({ provider: p, family, modelRequested: model,
+      status: "failed", startedAt, finishedAt: new Date().toISOString(), error });
     const url = baseUrl.endsWith("/chat/completions")
       ? baseUrl
       : `${baseUrl}/chat/completions`;
@@ -368,7 +407,7 @@ const callLlmOnce = async (
           signal: AbortSignal.timeout(90_000),
         });
         const raw = await resp.text();
-        if (!resp.ok) { errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        if (!resp.ok) { const detail = `${resp.status} — ${providerErrorDetail(raw)}`; await observeFailure(detail); errors.push(`${p.name || model}: ${detail}`); continue; }
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         assertProviderSuccess(parsed);
         const blocks = Array.isArray(parsed.content) ? parsed.content as Array<Record<string, unknown>> : [];
@@ -379,6 +418,7 @@ const callLlmOnce = async (
           function: { name: String(block.name || ""), arguments: JSON.stringify(block.input ?? {}) },
         }));
         if (!text && !toolCalls.length) throw new Error("Provider returned an empty response");
+        await observe({ provider: p, family, modelRequested: model, modelActual: String(parsed.model || model), providerRequestId: String(parsed.id || "") || undefined, usage: providerUsage(family, parsed), status: "succeeded", startedAt, finishedAt: new Date().toISOString() });
         return { message: { role: "assistant", content: text, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }, providerName: p.name || model };
       }
 
@@ -414,7 +454,7 @@ const callLlmOnce = async (
           signal: AbortSignal.timeout(90_000),
         });
         const raw = await resp.text();
-        if (!resp.ok) { errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        if (!resp.ok) { const detail = `${resp.status} — ${providerErrorDetail(raw)}`; await observeFailure(detail); errors.push(`${p.name || model}: ${detail}`); continue; }
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         assertProviderSuccess(parsed);
         const candidates = parsed.candidates as Array<Record<string, unknown>> | undefined;
@@ -426,6 +466,7 @@ const callLlmOnce = async (
           return { id: crypto.randomUUID(), type: "function" as const, function: { name: String(call.name || ""), arguments: JSON.stringify(call.args ?? {}) } };
         });
         if (!text && !toolCalls.length) throw new Error("Provider returned an empty response");
+        await observe({ provider: p, family, modelRequested: model, modelActual: model, usage: providerUsage(family, parsed), status: "succeeded", startedAt, finishedAt: new Date().toISOString() });
         return { message: { role: "assistant", content: text, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }, providerName: p.name || model };
       }
 
@@ -441,16 +482,20 @@ const callLlmOnce = async (
       const raw = await resp.text();
       if (!resp.ok) {
         const detail = providerErrorDetail(raw);
-        errors.push(`${p.name || model}: ${resp.status}${detail ? ` — ${detail}` : ""}`);
+        const failure = `${resp.status}${detail ? ` — ${detail}` : ""}`;
+        await observeFailure(failure);
+        errors.push(`${p.name || model}: ${failure}`);
         continue;
       }
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       assertProviderSuccess(parsed);
       const choice = (parsed.choices as Array<Record<string, unknown>> | undefined)?.[0];
       const msg = choice?.message as ChatMessage | undefined;
-      if (!msg || (!msg.content && !msg.tool_calls?.length)) { errors.push(`${p.name || model}: empty response`); continue; }
+      if (!msg || (!msg.content && !msg.tool_calls?.length)) { await observeFailure("empty response"); errors.push(`${p.name || model}: empty response`); continue; }
+      await observe({ provider: p, family, modelRequested: model, modelActual: String(parsed.model || model), providerRequestId: String(parsed.id || "") || undefined, usage: providerUsage(family, parsed), status: "succeeded", startedAt, finishedAt: new Date().toISOString() });
       return { message: msg, providerName: p.name || model };
     } catch (e) {
+      await observeFailure(String(e));
       errors.push(`${p.name || model}: ${String(e)}`);
     }
   }
@@ -463,20 +508,35 @@ async function* streamLlm(
   messages: ChatMessage[],
   attachments: LlmAttachment[] = [],
   resetText: () => void = () => {},
+  observe: (observation: LlmObservation) => void | Promise<void> = () => {},
 ): AsyncGenerator<string> {
   const errors: string[] = [];
   for (const p of providers) {
+    const startedAt = new Date().toISOString();
     const apiKey = p.apiKey?.trim() ?? "";
     const model = p.model?.trim();
     const family = providerFamily(p);
     const baseUrl = (p.apiBaseUrl?.trim() || "https://api.openai.com/v1").replace(/\/+$/, "");
     if ((!apiKey && family !== "openai_compatible") || !model) continue;
+    const observeFailure = async (error: string) => observe({ provider: p, family, modelRequested: model,
+      status: "failed", startedAt, finishedAt: new Date().toISOString(), error });
     const url = baseUrl.endsWith("/chat/completions")
       ? baseUrl
       : `${baseUrl}/chat/completions`;
     let emittedText = false;
+    let finalEvent: Record<string, unknown> = {};
+    const observedUsage: ProviderUsage = {};
     const emitStream = async function* (body: ReadableStream<Uint8Array>, format: Parameters<typeof readProviderStream>[1]) {
-      for await (const token of readProviderStream(body, format)) {
+      for await (const token of readProviderStream(body, format, (event) => {
+        finalEvent = event;
+        const usage = providerUsage(family, event);
+        // Provider stream usage is usually cumulative, while Anthropic splits
+        // input and output usage across different event types. Keep the latest
+        // non-empty value for each counter instead of losing earlier counters.
+        for (const [key, value] of Object.entries(usage)) {
+          if (value !== undefined && value !== null && value !== "") observedUsage[key as keyof ProviderUsage] = value as never;
+        }
+      })) {
         emittedText = true;
         yield token;
       }
@@ -508,8 +568,9 @@ async function* streamLlm(
           body: JSON.stringify({ model, max_tokens: 4096, stream: true, system, messages: [{ role: "user", content }] }),
           signal: AbortSignal.timeout(90_000),
         });
-        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); const detail = `${resp.status} — ${providerErrorDetail(raw)}`; await observeFailure(detail); errors.push(`${p.name || model}: ${detail}`); continue; }
         yield* emitStream(resp.body, "anthropic");
+        await observe({ provider: p, family, modelRequested: model, modelActual: String(finalEvent.model || model), providerRequestId: String(finalEvent.id || "") || undefined, usage: observedUsage, status: "succeeded", startedAt, finishedAt: new Date().toISOString() });
         return;
       }
 
@@ -521,8 +582,9 @@ async function* streamLlm(
           body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts: [...attachments.map((attachment) => ({ inlineData: { mimeType: attachment.mimeType, data: attachment.base64 } })), { text: conversationText(messages) || "Respond to the user." }] }] }),
           signal: AbortSignal.timeout(90_000),
         });
-        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); const detail = `${resp.status} — ${providerErrorDetail(raw)}`; await observeFailure(detail); errors.push(`${p.name || model}: ${detail}`); continue; }
         yield* emitStream(resp.body, "gemini");
+        await observe({ provider: p, family, modelRequested: model, modelActual: model, usage: observedUsage, status: "succeeded", startedAt, finishedAt: new Date().toISOString() });
         return;
       }
 
@@ -535,27 +597,32 @@ async function* streamLlm(
           body: JSON.stringify({ model, instructions, stream: true, input: [{ role: "user", content: [...fileParts, { type: "input_text", text: conversationText(messages) || "Analyze the attached documents." }] }] }),
           signal: AbortSignal.timeout(90_000),
         });
-        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); errors.push(`${p.name || model}: ${resp.status} — ${providerErrorDetail(raw)}`); continue; }
+        if (!resp.ok || !resp.body) { const raw = await resp.text().catch(() => ""); const detail = `${resp.status} — ${providerErrorDetail(raw)}`; await observeFailure(detail); errors.push(`${p.name || model}: ${detail}`); continue; }
         yield* emitStream(resp.body, "responses");
+        await observe({ provider: p, family, modelRequested: model, modelActual: String((finalEvent.response as Record<string, unknown> | undefined)?.model || model), providerRequestId: String((finalEvent.response as Record<string, unknown> | undefined)?.id || "") || undefined, usage: observedUsage, status: "succeeded", startedAt, finishedAt: new Date().toISOString() });
         return;
       }
 
       const resp = await fetch(url, {
         method: "POST",
         headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), "Content-Type": "application/json" },
-        body: JSON.stringify({ model, temperature: 0.7, messages, stream: true }),
+        body: JSON.stringify({ model, temperature: 0.7, messages, stream: true, stream_options: { include_usage: true } }),
         signal: AbortSignal.timeout(90_000),
       });
       if (!resp.ok || !resp.body) {
         const raw = await resp.text().catch(() => "");
         const detail = providerErrorDetail(raw);
-        errors.push(`${p.name || model}: ${resp.status}${detail ? ` — ${detail}` : ""}`);
+        const failure = `${resp.status}${detail ? ` — ${detail}` : ""}`;
+        await observeFailure(failure);
+        errors.push(`${p.name || model}: ${failure}`);
         continue;
       }
       yield* emitStream(resp.body, "chat");
+      await observe({ provider: p, family, modelRequested: model, modelActual: String(finalEvent.model || model), providerRequestId: String(finalEvent.id || "") || undefined, usage: observedUsage, status: "succeeded", startedAt, finishedAt: new Date().toISOString() });
       return; // success — don't try next provider
     } catch (e) {
       if (emittedText) resetText();
+      await observeFailure(String(e));
       errors.push(`${p.name || model}: ${String(e)}`);
     }
   }
@@ -708,10 +775,12 @@ const providerToolName = (
 const callMcpTool = async (
   bindings: Map<string, McpToolBinding>,
   providerName: string,
-  args: unknown
+  args: unknown,
+  observe: (value: { binding: McpToolBinding; status: "succeeded" | "failed"; startedAt: string; finishedAt: string; error?: string }) => void | Promise<void> = () => {},
 ): Promise<string> => {
   const binding = bindings.get(providerName);
   if (!binding) return `Tool binding "${providerName}" not found`;
+  const startedAt = new Date().toISOString();
   try {
     const response = await mcpPost(
       binding.server,
@@ -734,10 +803,12 @@ const callMcpTool = async (
       result = JSON.stringify(response.json.result ?? response.json);
     }
     const maxResultChars = 60_000;
+    await observe({ binding, status: "succeeded", startedAt, finishedAt: new Date().toISOString() });
     return result.length > maxResultChars
       ? `${result.slice(0, maxResultChars)}\n...[MCP result truncated]`
       : result;
   } catch (e) {
+    await observe({ binding, status: "failed", startedAt, finishedAt: new Date().toISOString(), error: String(e) });
     return `Tool call failed: ${String(e)}`;
   }
 };
@@ -1041,10 +1112,12 @@ serve(async (req: Request) => {
   const admin = createClient(supabaseUrl, supabaseServiceKey);
   let workerSnapshot: { llm: LlmInsightsConfig } | null = null;
   let workerOrgId: string | null = null;
+  let workerRun: Awaited<ReturnType<typeof authenticatedWorkerRun>> = null;
   if (req.headers.has("x-workflow-run-id")) {
     try {
       const run = await authenticatedWorkerRun(req, admin);
       if (!run || body.workflowId !== run.workflow_id) return sendError("Workflow mismatch", 403);
+      workerRun = run;
       workerOrgId = run.organization_id;
       workerSnapshot = await decryptForOrganization(admin, run.organization_id, run.snapshot.ciphertext);
     } catch (error) { return sendError(error instanceof Error ? error.message : "Worker authentication failed", 401); }
@@ -1077,6 +1150,54 @@ serve(async (req: Request) => {
 
   const features = toObject(gc.features);
   const llmConfig = workerSnapshot?.llm ?? toObject(features.llmInsights) as LlmInsightsConfig;
+
+  let costExecution: { id: string } | null = null;
+  let costStepId: string | undefined = body.executionStepId;
+  let costWorkflowStepId: string | undefined;
+  let ownsCostExecution = false;
+  try {
+    if (workerRun) {
+      costExecution = await ensureOperationExecution(admin, {
+        organization_id: orgContext.orgId, execution_kind: "workflow", execution_mode: "backend",
+        execution_source: workerRun.trigger_source === "webhook" ? "webhook" : workerRun.trigger_source === "api" ? "api" : "dashboard",
+        workflow_run_id: workerRun.id, workflow_id: workerRun.workflow_id,
+        workflow_revision: workerRun.snapshot?.revision ?? null, actor_user_id: workerRun.caller_user_id ?? null,
+        metadata: { callerId: workerRun.caller_id },
+      });
+      const workflowStepId = req.headers.get("x-workflow-step-id");
+      if (workflowStepId) {
+        costWorkflowStepId = workflowStepId;
+        const { data: linked } = await admin.from("operation_execution_steps").select("id")
+          .eq("organization_id", orgContext.orgId).eq("workflow_step_id", workflowStepId).maybeSingle();
+        costStepId = linked?.id;
+      }
+    } else if (body.executionId) {
+      await verifyCostExecutionToken(body.executionToken, body.executionId, orgContext.orgId);
+      const { data } = await admin.from("operation_executions").select("*").eq("organization_id", orgContext.orgId).eq("id", body.executionId).maybeSingle();
+      costExecution = data;
+    } else {
+      costExecution = await ensureOperationExecution(admin, {
+        organization_id: orgContext.orgId, execution_kind: body.workflowId ? "workflow" : "direct_agent", execution_mode: "browser",
+        execution_source: body.mode === "test" ? "builder_test" : "result_chat", workflow_id: body.workflowId ?? null,
+        agent_id: body.agentId ?? null, metadata: { automaticallyCreated: true },
+      });
+      ownsCostExecution = true;
+    }
+    if (costExecution && !costStepId) {
+      const { count } = await admin.from("operation_execution_steps").select("id", { count: "exact", head: true }).eq("execution_id", costExecution.id);
+      const { data: step } = await admin.from("operation_execution_steps").insert({
+        organization_id: orgContext.orgId, execution_id: costExecution.id, node_id: body.nodeId ?? null, node_type: "agent",
+        workflow_step_id: costWorkflowStepId ?? null,
+        node_name: body.nodeId ?? body.agentId ?? "Agent", agent_id: body.agentId ?? null,
+        agent_kind: body.systemPrompt ? "inline" : body.agentId ? "saved" : null,
+        sequence: (count ?? 0) + 1, attempt: 1, status: "running",
+      }).select("id").single();
+      costStepId = step?.id;
+    }
+  } catch (error) {
+    console.error("cost_context_failed", error);
+    costExecution = null; costStepId = undefined;
+  }
 
   // A verified worker lease authorizes the saved workflow independently of chat.
   if (!workerSnapshot && !llmConfig.enabled) return sendError("LLM insights are disabled", 400);
@@ -1352,6 +1473,51 @@ serve(async (req: Request) => {
       };
 
       try {
+        let llmAttempt = 0;
+        let mcpAttempt = 0;
+        const observeLlm = async (observation: LlmObservation) => {
+          if (!costExecution) return;
+          const attempt = ++llmAttempt;
+          try {
+            const reported = Boolean(observation.usage && Object.values(observation.usage).some(Boolean));
+            await recordUsageAndValuation(admin, orgContext!.orgId, {
+              executionId: costExecution.id, stepId: costStepId, eventKind: "llm_request",
+              providerType: observation.family, providerId: observation.provider.id, providerName: observation.provider.name,
+              modelRequested: observation.modelRequested, modelActual: observation.modelActual,
+              providerRequestId: observation.providerRequestId, attempt, status: observation.status,
+              startedAt: observation.startedAt, finishedAt: observation.finishedAt,
+              durationMs: Math.max(0, Date.parse(observation.finishedAt) - Date.parse(observation.startedAt)),
+              usage: observation.usage, usageSource: reported ? "provider_reported" : "estimated",
+              confidence: reported ? "exact" : "unknown",
+              idempotencyKey: `${costExecution.id}:${costStepId || "root"}:llm:${attempt}`,
+              metadata: observation.error ? { error: observation.error } : {},
+            }, {
+              organizationId: orgContext!.orgId, workflowId: body.workflowId,
+              agentId: body.agentId, providerId: observation.provider.id,
+              model: observation.modelActual || observation.modelRequested,
+            });
+          } catch (error) { console.error("llm_cost_record_failed", error); }
+        };
+        const observeMcp = async (observation: { binding: McpToolBinding; status: "succeeded" | "failed"; startedAt: string; finishedAt: string; error?: string }) => {
+          if (!costExecution) return;
+          const attempt = ++mcpAttempt;
+          try {
+            await recordUsageAndValuation(admin, orgContext!.orgId, {
+              executionId: costExecution.id, stepId: costStepId, eventKind: "mcp_tool_call",
+              providerId: observation.binding.server.id, providerName: observation.binding.server.name,
+              mcpServerId: observation.binding.server.id, mcpToolName: observation.binding.rawName,
+              attempt, status: observation.status, startedAt: observation.startedAt, finishedAt: observation.finishedAt,
+              durationMs: Math.max(0, Date.parse(observation.finishedAt) - Date.parse(observation.startedAt)),
+              quantity: "1", unit: "call", usageSource: "configured_fixed", confidence: "exact",
+              idempotencyKey: `${costExecution.id}:${costStepId || "root"}:mcp:${attempt}`,
+              metadata: observation.error ? { error: observation.error } : {},
+            }, {
+              organizationId: orgContext!.orgId, workflowId: body.workflowId,
+              agentId: body.agentId, mcpServerId: observation.binding.server.id,
+              mcpToolName: observation.binding.rawName,
+            });
+          } catch (error) { console.error("mcp_cost_record_failed", error); }
+        };
         const sendText = (text: string) => {
           const chunkSize = 24;
           for (let offset = 0; offset < text.length; offset += chunkSize) {
@@ -1373,7 +1539,7 @@ serve(async (req: Request) => {
         // Without MCP tools, stream once. The previous implementation first made
         // a discarded non-streaming call and then repeated it as a stream.
         if (!completed && allTools.length === 0) {
-          for await (const token of streamLlm(providers, loopMessages, attachments, () => send({ type: "reset" }))) {
+          for await (const token of streamLlm(providers, loopMessages, attachments, () => send({ type: "reset" }), observeLlm)) {
             send({ type: "token", content: token });
           }
           completed = true;
@@ -1386,12 +1552,13 @@ serve(async (req: Request) => {
             loopMessages,
             allTools,
             false,
+            observeLlm,
           );
 
           // No tool calls — final text response, stream it
           if (!message.tool_calls || message.tool_calls.length === 0) {
             if (attachments.length > 0) {
-              for await (const token of streamLlm(providers, loopMessages, attachments, () => send({ type: "reset" }))) {
+              for await (const token of streamLlm(providers, loopMessages, attachments, () => send({ type: "reset" }), observeLlm)) {
                 send({ type: "token", content: token });
               }
             } else {
@@ -1435,7 +1602,7 @@ serve(async (req: Request) => {
                     ? formatAgentSkill(requestedSkill)
                     : `Assigned skill "${requestedSkillId}" was not found or is disabled.`;
                 })()
-              : await callMcpTool(mcpToolBindings, toolName, args);
+              : await callMcpTool(mcpToolBindings, toolName, args, observeMcp);
             send({ type: "tool_result", name: toolName, result: result.slice(0, 500) });
 
             loopMessages.push({
@@ -1455,12 +1622,17 @@ serve(async (req: Request) => {
             loopMessages,
             undefined,
             activeOutputType === "json",
+            observeLlm,
           );
           sendText(message.content || "MCP processing completed without a final response.");
         }
 
-        send({ type: "done" });
+        if (costStepId) await admin.from("operation_execution_steps").update({ status: "succeeded", finished_at: new Date().toISOString() }).eq("id", costStepId).eq("status", "running");
+        if (ownsCostExecution && costExecution) await admin.from("operation_executions").update({ status: "succeeded", finished_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", costExecution.id).eq("status", "running");
+        send({ type: "done", executionId: costExecution?.id });
       } catch (e) {
+        if (costStepId) await admin.from("operation_execution_steps").update({ status: "failed", finished_at: new Date().toISOString(), metadata: { error: String(e) } }).eq("id", costStepId).eq("status", "running");
+        if (ownsCostExecution && costExecution) await admin.from("operation_executions").update({ status: "failed", finished_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", costExecution.id).eq("status", "running");
         send({ type: "error", message: String(e) });
       } finally {
         controller.close();

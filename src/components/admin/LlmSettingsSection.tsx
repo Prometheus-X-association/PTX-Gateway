@@ -21,12 +21,14 @@ import {
   Loader2, Brain, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Eye, EyeOff, Server, Zap, RotateCcw, Bot, MessageSquarePlus,
   Pencil, X, ChevronsUpDown, Info, Link2, FlaskConical,
-  CheckCircle2, XCircle, ChevronRight, Wrench, Workflow, BookOpen, Copy,
+  CheckCircle2, XCircle, ChevronRight, Wrench, Workflow, BookOpen, Copy, CircleDollarSign,
 } from "lucide-react";
 import { GlobalProviderPriority } from "@/components/admin/GlobalProviderPriority";
 import { WorkflowsManagement } from "@/components/admin/WorkflowsManagement";
 import { EXAMPLE_WORKFLOWS } from "@/components/admin/WorkflowBuilder";
 import { AgentSkillsManagement } from "@/components/admin/AgentSkillsManagement";
+import { CostManagementSection } from "@/components/admin/CostManagementSection";
+import { ProviderCostDialog } from "@/components/admin/ProviderCostDialog";
 import { ConfirmRecycleButton, RecycleBinPanel } from "@/components/admin/RecycleBinControls";
 import { RECYCLE_RETENTION_MS, recycleExpiry } from "@/components/admin/recycleBin";
 import {
@@ -528,6 +530,12 @@ const emptyProvider = (): LlmProvider => ({
   id: uid(), name: "", providerType: "openai", apiBaseUrl: "https://api.openai.com/v1",
   apiKey: "", model: "gpt-4o-mini", enabled: true,
 });
+
+const DUMMY_PROVIDER_EXAMPLES: Array<Omit<LlmProvider, "id">> = [
+  { name: "[Demo] OpenAI GPT", providerType: "openai", apiBaseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4.1-mini", enabled: false },
+  { name: "[Demo] Anthropic Claude", providerType: "anthropic", apiBaseUrl: "https://api.anthropic.com/v1", apiKey: "", model: "claude-sonnet-4-5", enabled: false },
+  { name: "[Demo] Google Gemini", providerType: "gemini", apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta", apiKey: "", model: "gemini-2.5-flash", enabled: false },
+];
 
 const emptyMcpServer = (): McpServer => ({
   id: uid(), name: "", url: "", apiKey: "", enabled: true,
@@ -1994,6 +2002,7 @@ const LlmSettingsSection = () => {
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [availabilityTargets, setAvailabilityTargets] = useState<ChatAvailabilityTarget[]>([]);
   const [providerEditor, setProviderEditor] = useState<{ mode: "create" | "edit"; draft: LlmProvider } | null>(null);
+  const [providerCostEditor, setProviderCostEditor] = useState<{ type: "llm_provider" | "mcp_server"; id: string; name: string; model?: string } | null>(null);
   const [mcpEditor, setMcpEditor] = useState<{ mode: "create" | "edit"; draft: McpServer } | null>(null);
   const [showProviderRecycle, setShowProviderRecycle] = useState(false);
   const [showMcpRecycle, setShowMcpRecycle] = useState(false);
@@ -2145,6 +2154,13 @@ const LlmSettingsSection = () => {
   const restoreProvider = (id: string) => patchLlm({ providers: llm.providers.map((item) => item.id === id ? { ...item, enabled: item.deletedPreviousEnabled === true, deletedAt: undefined, deletedPreviousEnabled: undefined } : item) });
   const permanentlyDeleteProvider = (id: string) => patchLlm({ providers: llm.providers.filter((item) => item.id !== id) });
   const duplicateProvider = (provider: LlmProvider) => patchLlm({ providers: [...llm.providers, { ...structuredClone(provider), id: uid(), name: `${provider.name} (copy)`, enabled: false, deletedAt: undefined, deletedPreviousEnabled: undefined }] });
+  const importProviderExamples = async (providerTypes?: LlmProvider["providerType"][]) => {
+    const selected = DUMMY_PROVIDER_EXAMPLES.filter((example) => !providerTypes || providerTypes.includes(example.providerType));
+    const missing = selected.filter((example) => !llm.providers.some((provider) => !provider.deletedAt && provider.name === example.name));
+    if (!missing.length) { toast.info("The selected demo provider examples are already imported"); return; }
+    const nextLlm = { ...llm, providers: [...llm.providers, ...missing.map((example) => ({ ...example, id: uid() }))] };
+    await persistLlmConfig(nextLlm, `${missing.length} disabled demo provider${missing.length === 1 ? "" : "s"} imported`);
+  };
   const moveProvider = async (from: number, to: number) => {
     await persistLlmConfig({ ...llm, providers: [...moveItem(activeProviders, from, to), ...recycledProviders] }, "Provider priority updated and saved");
   };
@@ -2311,7 +2327,7 @@ const LlmSettingsSection = () => {
         </div>
 
         <Tabs defaultValue="providers" className="space-y-5">
-          <TabsList className="grid h-auto w-full grid-cols-1 gap-1 rounded-xl bg-muted/60 p-1 sm:grid-cols-2 lg:grid-cols-4">
+          <TabsList className="grid h-auto w-full grid-cols-1 gap-1 rounded-xl bg-muted/60 p-1 sm:grid-cols-2 lg:grid-cols-5">
             <TabsTrigger value="providers" className="gap-2 rounded-lg py-2.5">
               <Server className="h-4 w-4" />
               Providers &amp; MCP
@@ -2334,6 +2350,7 @@ const LlmSettingsSection = () => {
               Agent Workflows
               <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.workflows.filter((workflow) => !workflow.deletedAt).length}</Badge>
             </TabsTrigger>
+            <TabsTrigger value="costs" className="gap-2 rounded-lg py-2.5"><Zap className="h-4 w-4" />Costs &amp; Usage</TabsTrigger>
           </TabsList>
 
           <TabsContent value="providers" className="mt-0 space-y-6 rounded-xl border bg-muted/10 p-4 sm:p-5">
@@ -2343,16 +2360,16 @@ const LlmSettingsSection = () => {
                   <Zap className="h-4 w-4 text-muted-foreground" />
                   <h3 className="text-sm font-semibold">LLM Providers</h3>
                 </div>
-                <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setProviderEditor({ mode: "create", draft: emptyProvider() })}>
+                <div className="flex gap-2"><DropdownMenu><DropdownMenuTrigger asChild><Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 text-xs" disabled={isSaving}><Copy className="h-3.5 w-3.5" />Import examples<ChevronDown className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>Disabled demo configurations</DropdownMenuLabel><DropdownMenuItem onSelect={() => void importProviderExamples()}>Import GPT, Claude and Gemini</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => void importProviderExamples(["openai"])}>OpenAI GPT example</DropdownMenuItem><DropdownMenuItem onSelect={() => void importProviderExamples(["anthropic"])}>Anthropic Claude example</DropdownMenuItem><DropdownMenuItem onSelect={() => void importProviderExamples(["gemini"])}>Google Gemini example</DropdownMenuItem></DropdownMenuContent></DropdownMenu><Button type="button" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setProviderEditor({ mode: "create", draft: emptyProvider() })}>
                   <Plus className="h-3.5 w-3.5" /> Add provider
-                </Button>
+                </Button></div>
               </div>
               <p className="text-xs text-muted-foreground">
-                Providers are tried in priority order. Edits and priority changes save immediately and apply to agents and workflow nodes using global defaults on their next request.
+                Providers are tried in priority order. Imported examples are disabled and contain no API keys; review the model, credentials, and pricing before enabling them.
               </p>
               <div className="overflow-x-auto rounded-md border bg-background">
                 <div className="min-w-[820px]">
-                  <div className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_132px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                  <div className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_196px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
                     <span>Priority</span>
                     <span>Name</span>
                     <span>Family</span>
@@ -2364,7 +2381,7 @@ const LlmSettingsSection = () => {
                   {activeProviders.length === 0 ? (
                     <div className="px-4 py-8 text-center text-sm text-muted-foreground">No providers configured.</div>
                   ) : activeProviders.map((provider, index) => (
-                    <div key={provider.id} className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_132px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+                    <div key={provider.id} className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_196px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
                       <Badge variant={provider.enabled && activeProviders.find((item) => item.enabled)?.id === provider.id ? "default" : "secondary"} className="w-fit text-[10px]">{provider.enabled && activeProviders.find((item) => item.enabled)?.id === provider.id ? "Primary" : `#${index + 1}`}</Badge>
                       <span className="truncate text-sm font-medium" title={provider.name}>{provider.name || "Unnamed provider"}</span>
                       <span className="truncate text-xs text-muted-foreground">{provider.providerType === "openai_compatible" ? "OpenAI compatible" : provider.providerType}</span>
@@ -2372,6 +2389,7 @@ const LlmSettingsSection = () => {
                       <span className="truncate font-mono text-xs text-muted-foreground" title={provider.apiBaseUrl}>{provider.apiBaseUrl || "Not set"}</span>
                       <Badge variant={provider.enabled ? "outline" : "secondary"} className="w-fit text-[10px]">{provider.enabled ? "Enabled" : "Off"}</Badge>
                       <div className="flex justify-end gap-1">
+                        <Button type="button" variant="outline" size="sm" className="h-7 gap-1 px-2 text-[10px]" title="Configure provider cost" onClick={() => setProviderCostEditor({ type: "llm_provider", id: provider.id, name: provider.name || provider.model || "LLM provider", model: provider.model })}><CircleDollarSign className="h-3.5 w-3.5" />Cost</Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider up" disabled={isSaving || index === 0} onClick={() => moveProvider(index, index - 1)}><ChevronUp className="h-3.5 w-3.5" /></Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider down" disabled={isSaving || index === activeProviders.length - 1} onClick={() => moveProvider(index, index + 1)}><ChevronDown className="h-3.5 w-3.5" /></Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Edit provider" onClick={() => setProviderEditor({ mode: "edit", draft: { ...provider } })}><Pencil className="h-3.5 w-3.5" /></Button>
@@ -2403,7 +2421,7 @@ const LlmSettingsSection = () => {
               <McpGuide />
               <div className="overflow-x-auto rounded-md border bg-background">
                 <div className="min-w-[700px]">
-                  <div className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_88px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                  <div className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_150px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
                     <span>Name</span>
                     <span>Endpoint</span>
                     <span>Authentication</span>
@@ -2413,12 +2431,13 @@ const LlmSettingsSection = () => {
                   {activeMcpServers.length === 0 ? (
                     <div className="px-4 py-8 text-center text-sm text-muted-foreground">No MCP servers configured.</div>
                   ) : activeMcpServers.map((server) => (
-                    <div key={server.id} className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_88px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+                    <div key={server.id} className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_150px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
                       <span className="truncate text-sm font-medium" title={server.name}>{server.name || "Unnamed server"}</span>
                       <span className="truncate font-mono text-xs text-muted-foreground" title={server.url}>{server.url || "Not set"}</span>
                       <span className="text-xs text-muted-foreground">{server.apiKey ? "API key" : "None"}</span>
                       <Badge variant={server.enabled ? "outline" : "secondary"} className="w-fit text-[10px]">{server.enabled ? "Enabled" : "Off"}</Badge>
                       <div className="flex justify-end gap-1">
+                        <Button type="button" variant="outline" size="sm" className="h-7 gap-1 px-2 text-[10px]" title="Configure MCP cost" onClick={() => setProviderCostEditor({ type: "mcp_server", id: server.id, name: server.name || "MCP server" })}><CircleDollarSign className="h-3.5 w-3.5" />Cost</Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Edit MCP server" onClick={() => setMcpEditor({ mode: "edit", draft: { ...server } })}><Pencil className="h-3.5 w-3.5" /></Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Duplicate MCP server" onClick={() => duplicateMcp(server)}><Copy className="h-3.5 w-3.5" /></Button>
                         <ConfirmRecycleButton name={server.name || "Unnamed MCP server"} itemLabel="MCP server" onConfirm={() => recycleMcp(server.id)} />
@@ -2621,6 +2640,10 @@ const LlmSettingsSection = () => {
           />
             </div>
           </TabsContent>
+          <TabsContent value="costs" className="mt-0 rounded-xl border bg-muted/10 p-4 sm:p-5">
+            <CostManagementSection organizationId={user?.organization?.id} providers={activeProviders} mcpServers={activeMcpServers}
+              workflows={llm.workflows.filter((item) => !item.deletedAt)} agents={activeAgents} />
+          </TabsContent>
         </Tabs>
 
         <Dialog open={providerEditor !== null} onOpenChange={(open) => { if (!open) setProviderEditor(null); }}>
@@ -2674,6 +2697,8 @@ const LlmSettingsSection = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <ProviderCostDialog organizationId={user?.organization?.id} target={providerCostEditor} onClose={() => setProviderCostEditor(null)} />
 
         <Separator />
 

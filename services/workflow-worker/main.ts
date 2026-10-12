@@ -3,6 +3,7 @@ import { collectSecrets, decryptForOrganization, encryptForOrganization, hash, h
 import { executeWorkflow, type ParallelBranchResult } from "../../supabase/functions/_shared/workflowExecutor.ts";
 import { runRequest } from "../../supabase/functions/_shared/workflowHttp.ts";
 import { waitPolicy } from "../../supabase/functions/_shared/workflowInteraction.ts";
+import { ensureOperationExecution, recordNodeUsageAndValuation } from "../../supabase/functions/_shared/costService.ts";
 import { maintainInteractions, maintainRetention } from "./interactions.ts";
 import { executeJavascript } from "./sandbox.ts";
 
@@ -21,6 +22,14 @@ let stopping = false;
 Deno.addSignalListener("SIGTERM", () => { stopping = true; });
 Deno.addSignalListener("SIGINT", () => { stopping = true; });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const readPath = (value: unknown, path: string): unknown => {
+  let current = value;
+  for (const part of path.trim().replace(/^\$\.?/, "").replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean)) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+};
 
 async function executeRun(run: any) {
   const decryptOrganization = (value: string) => decryptForOrganization(admin, run.organization_id, value);
@@ -32,6 +41,8 @@ async function executeRun(run: any) {
   let secrets: string[] = [];
   let sequence = 0;
   let stepId: string | null = null;
+  let costExecution: { id: string } | null = null;
+  let costStepId: string | null = null;
   let pendingStep: { status: string; output: unknown; finalOutput: unknown; error: unknown; durationMs: number; attemptCount: number; nodeType: string; renderAs?: string } | null = null;
   let terminalCommitted = false;
   let latestRunState: Record<string, unknown> = {};
@@ -68,6 +79,13 @@ async function executeRun(run: any) {
     Math.max(1, run.timeout_seconds * 1000 - Number(run.execution_ms ?? 0)));
   try {
     const { workflow, llm } = await decryptOrganization(run.snapshot.ciphertext);
+    try {
+      costExecution = await ensureOperationExecution(admin, { organization_id: run.organization_id, execution_kind: "workflow", execution_mode: "backend",
+        execution_source: run.trigger_source === "webhook" ? "webhook" : run.trigger_source === "api" ? "api" : "dashboard",
+        workflow_run_id: run.id, workflow_id: run.workflow_id, workflow_revision: workflow.revision ?? null,
+        actor_user_id: run.caller_user_id ?? null, metadata: { callerId: run.caller_id, workflowName: run.workflow_name } });
+      await admin.from("operation_executions").update({ status: "running", updated_at: new Date().toISOString(), finished_at: null }).eq("id", costExecution.id);
+    } catch (error) { console.error(JSON.stringify({ event: "cost_execution_create_failed", runId: run.id, error: String(error) })); }
     const { data: durableBranches, error: durableBranchError } = await admin.from("workflow_parallel_branches").select("activation_id,branch_id,status,result_ciphertext").eq("organization_id", run.organization_id).eq("run_id", run.id).in("status", ["succeeded", "failed"]);
     if (durableBranchError) throw durableBranchError;
     for (const branch of durableBranches ?? []) if (branch.result_ciphertext) parallelBranchResults[`${branch.activation_id}:${branch.branch_id}`] = await decryptOrganization(branch.result_ciphertext) as ParallelBranchResult;
@@ -109,6 +127,16 @@ async function executeRun(run: any) {
           state_read_keys: [...new Set([...(node.stateReads ?? []).map((read: any) => read.key), ...(node.type === "event" && node.data.eventType === "state_changed" ? [node.data.stateKey] : [])])], attempt: execution.attempt, operation_id: execution.operationId, side_effect_class: execution.sideEffectClass }).select("id").single();
         if (error) throw error;
         stepId = data.id;
+        if (costExecution) {
+          try {
+            const { data: costStep, error: costError } = await admin.from("operation_execution_steps").insert({ organization_id: run.organization_id,
+              execution_id: costExecution.id, workflow_step_id: stepId, node_id: nodeId, node_name: node.data.label || node.type, node_type: node.type,
+              agent_id: node.type === "agent" && node.data.mode === "existing" ? node.data.agentId ?? null : null,
+              agent_kind: node.type === "agent" ? node.data.mode === "inline" ? "inline" : "saved" : null,
+              sequence, attempt: execution.attempt, operation_id: execution.operationId, status: "running" }).select("id").single();
+            if (costError) throw costError; costStepId = costStep.id;
+          } catch (costError) { console.error(JSON.stringify({ event: "cost_step_create_failed", runId: run.id, nodeId, error: String(costError) })); }
+        }
       },
       onStepDone: async (step) => {
         const waiting = ["user_input", "event"].includes(step.nodeType) && step.output && typeof step.output === "object" && (step.output as any).waiting;
@@ -116,6 +144,21 @@ async function executeRun(run: any) {
         pendingStep = { status: step.error ? "failed" : waiting ? "waiting" : "succeeded", output: redact(step.output, redactionSecrets), finalOutput: sanitizeOutput(step.output, redactionSecrets),
           error: step.error ? redact(step.error, redactionSecrets) : null, durationMs: Math.max(0, Math.round(step.durationMs ?? 0)), attemptCount: step.attemptCount ?? 1,
           nodeType: step.nodeType, renderAs: step.renderAs };
+        if (costExecution) {
+          try {
+            // API nodes are valued by onApiRequest with response metadata.
+            if (step.nodeType !== "api") {
+              const node = workflow.graph.nodes.find((item) => item.id === step.nodeId);
+              await recordNodeUsageAndValuation(admin, run.organization_id, { executionId: costExecution.id, stepId: costStepId ?? undefined,
+                eventKind: "node_execution", attempt: step.attemptCount ?? 1, status: step.error ? "failed" : waiting ? "attempted" : "succeeded",
+                startedAt: new Date(Date.now() - Math.max(0, step.durationMs ?? 0)).toISOString(), finishedAt: new Date().toISOString(),
+                durationMs: Math.max(0, Math.round(step.durationMs ?? 0)), quantity: "1", unit: "execution", usageSource: "configured_fixed", confidence: "exact",
+                idempotencyKey: `${costExecution.id}:${costStepId ?? step.nodeId}:${step.attemptCount ?? 1}:node`, metadata: { nodeType: step.nodeType } },
+                { organizationId: run.organization_id, workflowId: run.workflow_id, nodeId: step.nodeId }, node?.cost);
+            }
+            if (costStepId) await admin.from("operation_execution_steps").update({ status: step.error ? "failed" : waiting ? "waiting" : "succeeded", finished_at: new Date().toISOString(), duration_ms: Math.max(0, Math.round(step.durationMs ?? 0)) }).eq("id", costStepId).eq("status", "running");
+          } catch (costError) { console.error(JSON.stringify({ event: "node_cost_record_failed", runId: run.id, nodeId: step.nodeId, error: String(costError) })); }
+        }
       },
       onArtifactCreate: async (nodeId, stateKey, value) => {
         const serialized = JSON.stringify(value); const size = new TextEncoder().encode(serialized).byteLength;
@@ -164,11 +207,31 @@ async function executeRun(run: any) {
           p_render_as: terminalOutput ? pendingStep.renderAs ?? "auto" : null,
           p_stop_reason: terminalOutput ? `Workflow completed at output node "${currentNode}".` : null });
         if (error) throw error;
-        if (terminalOutput) terminalCommitted = true;
+        if (terminalOutput) {
+          terminalCommitted = true;
+          if (costExecution) await admin.from("operation_executions").update({ status: "succeeded", finished_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", costExecution.id);
+        }
         stateVersion = Number(data); stateDirty = false; pendingChangedKeys = []; consumedSignalIds = []; pendingStep = null;
       },
-      onApiRequest: async (_nodeId, config, value, execution, state) => {
+      onApiRequest: async (nodeId, config, value, execution, state) => {
+        const startedAt = new Date().toISOString();
         const response = await runRequest(config, value, input.resultData, input.userMessage, abort.signal, execution as unknown as Record<string, unknown>, workflow.execution?.allowedOutboundHosts, state);
+        if (costExecution) {
+          try {
+            const node = workflow.graph.nodes.find((item) => item.id === nodeId);
+            const quantitySource = node?.cost?.quantitySource;
+            const quantityValue = quantitySource === "response_body" ? readPath(response.data, node?.cost?.quantityPath ?? "")
+              : quantitySource === "response_header" ? response.headers[node?.cost?.quantityHeader?.toLowerCase() ?? ""] : 1;
+            const numericQuantity = Number(quantityValue);
+            await recordNodeUsageAndValuation(admin, run.organization_id, { executionId: costExecution.id, stepId: costStepId ?? undefined,
+              eventKind: "api_request", apiNodeId: nodeId, attempt: Number(execution.attempt) || 1,
+              status: response.ok ? "succeeded" : "failed", startedAt, finishedAt: new Date().toISOString(), durationMs: response.durationMs,
+              quantity: Number.isFinite(numericQuantity) ? String(numericQuantity) : "1", unit: node?.cost?.unit ?? "request",
+              usageSource: quantitySource === "response_body" ? "response_body" : quantitySource === "response_header" ? "response_header" : "configured_fixed", confidence: "exact",
+              idempotencyKey: `${costExecution.id}:${execution.operationId || nodeId}:api`, metadata: { httpStatus: response.status } },
+              { organizationId: run.organization_id, workflowId: run.workflow_id, nodeId }, node?.cost);
+          } catch (costError) { console.error(JSON.stringify({ event: "api_cost_record_failed", runId: run.id, nodeId, error: String(costError) })); }
+        }
         if (!response.ok) throw Object.assign(new Error(response.error || "API node failed."), { status: response.status, retryAfterMs: response.retryAfterMs });
         return response.output;
       },
@@ -183,7 +246,7 @@ async function executeRun(run: any) {
         try {
           response = await fetch(`${functionsUrl}/chat-with-result`, { method: "POST", signal: AbortSignal.any([abort.signal, AbortSignal.timeout(timeoutSeconds * 1000)]),
           headers: { "Content-Type": "application/json", apikey: anonKey!, "x-organization-id": run.organization_id,
-            "x-workflow-run-id": run.id, "x-workflow-lease": run.lease_token, "x-workflow-signature": await hmac(internalSecret!, `${run.id}.${run.lease_token}`) },
+            "x-workflow-run-id": run.id, "x-workflow-step-id": stepId!, "x-workflow-lease": run.lease_token, "x-workflow-signature": await hmac(internalSecret!, `${run.id}.${run.lease_token}`) },
           body: JSON.stringify({ messages: [{ role: "user", content: prompt }], workflowId: run.workflow_id, nodeId, mode: "run", result: context,
             inputData: previous && typeof previous === "object" && !Array.isArray(previous) ? rest : previous,
             attachments: config.includeDocument && config.documentDelivery !== "text" ? input.attachments : [],
@@ -222,10 +285,12 @@ async function executeRun(run: any) {
     if (result.aborted || abort.signal.aborted) throw new DOMException("Execution interrupted", "AbortError");
     if (result.error) throw new Error(result.error);
     if (result.waiting) {
+      if (costExecution) await admin.from("operation_executions").update({ status: "waiting", updated_at: new Date().toISOString() }).eq("id", costExecution.id);
       await patch({ status: "waiting_for_input", execution_ms: elapsed(), waiting: { ...result.waiting, policy: waitPolicy(workflow.graph.nodes.find((node: any) => node.id === result.waiting!.nodeId).data), question: sanitizeOutput(result.waiting.question, secrets), options: sanitizeOutput(result.waiting.options, secrets) }, resume_answer: null, stop_reason: redact(result.stopReason, secrets), lease_token: null, lease_expires_at: null });
       return;
     }
     if (result.eventWait) {
+      if (costExecution) await admin.from("operation_executions").update({ status: "waiting", updated_at: new Date().toISOString() }).eq("id", costExecution.id);
       await patch({ status: "waiting_for_event", execution_ms: elapsed(), event_wait: result.eventWait, stop_reason: redact(result.stopReason, secrets), lease_token: null, lease_expires_at: null });
       return;
     }
@@ -235,6 +300,7 @@ async function executeRun(run: any) {
     await patch({ status: endedAtOutput ? "succeeded" : "incomplete", output: sanitizeOutput(output?.output ?? null, secrets), render_as: output?.renderAs ?? "auto",
       stop_reason: redact(result.stopReason, secrets), current_node_id: null, waiting: null, event_wait: null, resume_answer: null,
       execution_ms: elapsed(), finished_at: new Date().toISOString(), lease_token: null, lease_expires_at: null });
+    if (costExecution) await admin.from("operation_executions").update({ status: endedAtOutput ? "succeeded" : "incomplete", finished_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", costExecution.id);
   } catch (error) {
     if (leaseLost) return;
     const status = timedOut ? "timed_out" : cancelled ? "cancelled" : "failed";
@@ -242,6 +308,7 @@ async function executeRun(run: any) {
     try {
       if (stepId) await admin.from("workflow_run_steps").update({ status: status === "failed" ? "failed" : status, error: redact(reason, secrets), finished_at: new Date().toISOString() }).eq("id", stepId).eq("organization_id", run.organization_id).eq("status", "running");
       await patch({ status, execution_ms: elapsed(), failed_node_id: status === "cancelled" ? null : currentNode, stop_reason: redact(reason, secrets), finished_at: new Date().toISOString(), lease_token: null, lease_expires_at: null });
+      if (costExecution) await admin.from("operation_executions").update({ status, finished_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", costExecution.id);
     } catch (persistError) { console.error(JSON.stringify({ event: "workflow_finalize_failed", runId: run.id, organizationId: run.organization_id, error: String(persistError) })); }
   } finally { clearInterval(heartbeat); clearTimeout(deadline); }
 }

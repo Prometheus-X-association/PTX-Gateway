@@ -1,5 +1,7 @@
 // Agentic workflow graph — persisted inside llmInsights.workflows[] in global_configs.
 
+import type { NodeCostConfiguration } from "./costTypes.ts";
+
 export type NodeType = "trigger" | "document_context" | "retrieval" | "user_input" | "event" | "agent" | "api" | "plugin" | "condition" | "router" | "parallel" | "join" | "output";
 
 // ─── Node data payloads ───────────────────────────────────────────────────────
@@ -290,6 +292,8 @@ export interface WorkflowNode {
   data: AnyNodeData;
   stateReads?: WorkflowStateRead[];
   stateWrites?: WorkflowStateWrite[];
+  /** Optional organization-admin configured cost applied in addition to provider costs unless inclusive is true. */
+  cost?: NodeCostConfiguration;
 }
 
 export interface WorkflowStateRead {

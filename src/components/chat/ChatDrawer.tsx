@@ -1,4 +1,5 @@
 import { executeBackendWorkflow, backendRunStorageKey, storedBackendRun } from "@/lib/workflowBackend";
+import { costControl, type BrowserCostExecution } from "@/lib/costControl";
 import { buildChunkedResultPayload } from "../../../supabase/functions/chat-with-result/resultContext";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink, GripVertical, BookOpen } from "lucide-react";
@@ -883,6 +884,7 @@ const ChatDrawer = ({
   const [showDocPopover, setShowDocPopover] = useState(false);
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false);
   const [pausedWorkflow, setPausedWorkflow] = useState<{ workflowId: string; config: WorkflowConfig; waiting: WorkflowWaitingState } | null>(null);
+  const [browserCostExecution, setBrowserCostExecution] = useState<BrowserCostExecution | null>(null);
   const workflowRunningRef = useRef(false);
   // Compact progress summary updated in chatbox text only
   const [workflowProgress, setWorkflowProgress] = useState<{
@@ -1132,7 +1134,18 @@ const ChatDrawer = ({
         .slice(-10)
         .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
         .join("\n\n");
-      const executor = workflowConfig.execution?.backendEnabled
+      const backendExecution = Boolean(workflowConfig.execution?.backendEnabled);
+      let costExecution = backendExecution ? null : resumeWaiting ? browserCostExecution : null;
+      if (!backendExecution && !costExecution) {
+        try {
+          const started = await costControl("start_execution", organizationId, { executionKind: "workflow", executionSource: "result_chat", workflowId: workflowConfig.id }, orgExecutionToken);
+          costExecution = { executionId: started.execution.id, executionToken: started.executionToken };
+          setBrowserCostExecution(costExecution);
+        } catch (error) { console.warn("Browser cost execution could not be started", error); }
+      }
+      const stepByOperation = new Map<string, string>();
+      const stepQueueByNode = new Map<string, string[]>();
+      const executor = backendExecution
         ? (_graph: AgentWorkflow, context: Parameters<typeof executeWorkflow>[1]) => executeBackendWorkflow(workflowConfig, context, localAttachments, targetResourceId, processSessionId)
         : executeWorkflow;
       const { results, aborted, error: workflowError, waiting } = await executor(workflow, {
@@ -1148,7 +1161,20 @@ const ChatDrawer = ({
         signal: abortRef.current.signal,
         resume: resumeWaiting ? { waiting: resumeWaiting, answer: userMsg } : undefined,
 
-        onApiRequest: async (nodeId, _config, input) => {
+        onStepStart: async (nodeId, _input, execution) => {
+          if (!costExecution) return;
+          try {
+            const node = workflow.nodes.find((item) => item.id === nodeId);
+            const result = await costControl("step_start", organizationId, { ...costExecution, nodeId, nodeType: node?.type,
+              nodeName: String(node?.data?.label || nodeId), agentId: node?.type === "agent" && node.data.mode === "existing" ? node.data.agentId : undefined,
+              agentKind: node?.type === "agent" ? node.data.mode === "inline" ? "inline" : "saved" : undefined,
+              sequence: stepByOperation.size + 1, attempt: execution.attempt, operationId: execution.operationId }, orgExecutionToken);
+            stepByOperation.set(execution.operationId, result.step.id);
+            stepQueueByNode.set(nodeId, [...(stepQueueByNode.get(nodeId) ?? []), result.step.id]);
+          } catch (error) { console.warn("Browser cost step could not be started", error); }
+        },
+
+        onApiRequest: async (nodeId, _config, input, execution) => {
           const { data: sessionData } = await supabase.auth.getSession();
           const token = sessionData?.session?.access_token;
           const response = await fetch(`${supabaseUrl}/functions/v1/workflow-api-request`, {
@@ -1168,6 +1194,8 @@ const ChatDrawer = ({
               result: resultData,
               userMessage: userMsg,
               org_execution_token: orgExecutionToken,
+              ...(costExecution ? { executionId: costExecution.executionId, executionToken: costExecution.executionToken,
+                executionStepId: execution?.operationId ? stepByOperation.get(execution.operationId) : undefined } : {}),
             }),
           });
           const payload = await response.json().catch(() => ({}));
@@ -1239,6 +1267,8 @@ const ChatDrawer = ({
               agentProviders,
               attachment: attachedDocument[0] ?? null,
               attachments: attachedDocument,
+              ...(costExecution ? { executionId: costExecution.executionId, executionToken: costExecution.executionToken,
+                executionStepId: agentConfig.operationId ? stepByOperation.get(agentConfig.operationId) : undefined } : {}),
             }),
           });
 
@@ -1285,7 +1315,17 @@ const ChatDrawer = ({
           return text;
         },
 
-        onStepDone: (step) => {
+        onStepDone: async (step) => {
+          if (costExecution) {
+            const queue = stepQueueByNode.get(step.nodeId) ?? [];
+            const executionStepId = queue.shift(); stepQueueByNode.set(step.nodeId, queue);
+            if (executionStepId) {
+              try { await costControl("step_complete", organizationId, { ...costExecution, stepId: executionStepId,
+                status: step.error ? "failed" : step.output && typeof step.output === "object" && (step.output as Record<string, unknown>).waiting ? "waiting" : "succeeded",
+                durationMs: step.durationMs ?? 0 }, orgExecutionToken); }
+              catch (error) { console.warn("Browser cost step could not be completed", error); }
+            }
+          }
           const label = progressMap.get(step.nodeId) ?? step.nodeType;
           partialResultsRef.current = [...partialResultsRef.current, step];
           if (step.nodeType === "agent" && step.error) throw new Error(step.error);
@@ -1337,6 +1377,8 @@ const ChatDrawer = ({
       });
 
       if (aborted) {
+        if (costExecution) void costControl("finish_execution", organizationId, { ...costExecution, status: "cancelled" }, orgExecutionToken).catch(() => {});
+        setBrowserCostExecution(null);
         exitWorkflowMode();
         // Extract partial accumulated results from collected steps
         const partialSteps = partialResultsRef.current;
@@ -1364,12 +1406,15 @@ const ChatDrawer = ({
           : m
         ));
       } else if (workflowError) {
+        if (costExecution) void costControl("finish_execution", organizationId, { ...costExecution, status: "failed" }, orgExecutionToken).catch(() => {});
+        setBrowserCostExecution(null);
         exitWorkflowMode();
         setMessages((prev) => prev.map((m) => m.id === statusId
           ? { ...m, content: `*Workflow error: ${workflowError}*`, streaming: false }
           : m
         ));
       } else if (waiting) {
+        if (costExecution) void costControl("pause_execution", organizationId, costExecution, orgExecutionToken).catch(() => {});
         setPausedWorkflow({ workflowId: workflowConfig.id, config: workflowConfig, waiting });
         const waitingInput = waiting.input && typeof waiting.input === "object"
           ? waiting.input as Record<string, unknown>
@@ -1398,6 +1443,8 @@ const ChatDrawer = ({
           },
         ]);
       } else {
+        if (costExecution) void costControl("finish_execution", organizationId, { ...costExecution, status: "succeeded" }, orgExecutionToken).catch(() => {});
+        setBrowserCostExecution(null);
         const { text: finalText, renderAs } = getWorkflowFinalOutput(results);
         const outputFormat = renderAs === "update_result" ? "json"
           : renderAs === "auto" ? "mixed"
@@ -1432,6 +1479,8 @@ const ChatDrawer = ({
         ));
       }
     } catch (e) {
+      if (browserCostExecution) void costControl("finish_execution", organizationId, { ...browserCostExecution, status: "failed" }, orgExecutionToken).catch(() => {});
+      setBrowserCostExecution(null);
       exitWorkflowMode();
       setMessages((prev) => prev.map((m) => m.id === statusId
         ? { ...m, content: `*Workflow failed: ${String(e)}*`, streaming: false }
@@ -1442,7 +1491,7 @@ const ChatDrawer = ({
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange, targetResourceId, processSessionId]);
+  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange, targetResourceId, processSessionId, browserCostExecution]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents

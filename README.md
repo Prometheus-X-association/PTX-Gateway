@@ -185,6 +185,7 @@ cp supabase/functions/.env.example supabase/functions/.env
 | `SUPABASE_ANON_KEY` | Supabase anon key (auto-set in edge function environment) |
 | `EMBED_TOKEN_SECRET` | HMAC secret used to sign/verify embed tokens (used by `embed-auth`) |
 | `PDC_EXECUTE_TOKEN_SECRET` | HMAC secret used to sign/verify org-bound execution tokens for public/embed flows |
+| `COST_EXECUTION_SECRET` | Optional HMAC secret for browser cost-execution tokens; falls back to `WORKFLOW_INTERNAL_SECRET` |
 
 ---
 
