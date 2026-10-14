@@ -15,6 +15,7 @@ export const assertProviderSuccess = (event: Record<string, unknown>): void => {
 export async function* readProviderStream(
   body: ReadableStream<Uint8Array>,
   format: StreamFormat,
+  onEvent: (event: Record<string, unknown>) => void = () => {},
 ): AsyncGenerator<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -31,6 +32,7 @@ export async function* readProviderStream(
     }
     const event = JSON.parse(raw) as Record<string, unknown>;
     assertProviderSuccess(event);
+    onEvent(event);
     if (format === "anthropic") {
       if (event.type === "message_stop") completed = true;
       const delta = event.delta as Record<string, unknown> | undefined;

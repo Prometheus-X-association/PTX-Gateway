@@ -5,6 +5,7 @@ interface Provider {
   apiKey?: string;
   model?: string;
   enabled?: boolean;
+  deletedAt?: string;
   providerType?: "openai" | "anthropic" | "gemini" | "openai_compatible";
 }
 
@@ -23,7 +24,7 @@ interface AgentProviders {
 // Resolve from the configuration loaded for this request; never copy defaults into agents.
 export const resolveProviders = (cfg: ProviderConfig): Provider[] => {
   if (Array.isArray(cfg.providers) && cfg.providers.length > 0) {
-    return cfg.providers.filter((p) => p.enabled !== false);
+    return cfg.providers.filter((p) => p.enabled !== false && !p.deletedAt);
   }
   if (cfg.apiKey?.trim()) {
     return [{
@@ -41,7 +42,7 @@ export const resolveProviders = (cfg: ProviderConfig): Provider[] => {
 //   2. Then global providers filtered to agent's providerIds selection
 //   3. If no providerIds set, all global providers are used as fallback
 export const resolveAgentProviders = (agent: AgentProviders, cfg: ProviderConfig): Provider[] => {
-  const agentSpecific = (agent.agentProviders ?? []).filter((p) => p.enabled !== false);
+  const agentSpecific = (agent.agentProviders ?? []).filter((p) => p.enabled !== false && !p.deletedAt);
   const globalAll = resolveProviders(cfg);
   const globalSelected = (agent.providerIds ?? []).length > 0
     ? (agent.providerIds ?? [])
@@ -50,4 +51,3 @@ export const resolveAgentProviders = (agent: AgentProviders, cfg: ProviderConfig
     : globalAll;
   return [...agentSpecific, ...globalSelected];
 };
-

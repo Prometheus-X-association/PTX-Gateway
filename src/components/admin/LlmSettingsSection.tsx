@@ -21,22 +21,28 @@ import {
   Loader2, Brain, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Eye, EyeOff, Server, Zap, RotateCcw, Bot, MessageSquarePlus,
   Pencil, X, ChevronsUpDown, Info, Link2, FlaskConical,
-  CheckCircle2, XCircle, ChevronRight, Wrench, Workflow, BookOpen,
+  CheckCircle2, XCircle, ChevronRight, Wrench, Workflow, BookOpen, Copy, CircleDollarSign,
 } from "lucide-react";
 import { GlobalProviderPriority } from "@/components/admin/GlobalProviderPriority";
 import { WorkflowsManagement } from "@/components/admin/WorkflowsManagement";
 import { EXAMPLE_WORKFLOWS } from "@/components/admin/WorkflowBuilder";
 import { AgentSkillsManagement } from "@/components/admin/AgentSkillsManagement";
+import { CostManagementSection } from "@/components/admin/CostManagementSection";
+import { ProviderCostDialog } from "@/components/admin/ProviderCostDialog";
+import { ConfirmRecycleButton, RecycleBinPanel } from "@/components/admin/RecycleBinControls";
+import { RECYCLE_RETENTION_MS, recycleExpiry } from "@/components/admin/recycleBin";
 import {
   ChatAvailabilitySelector,
   type ChatAvailabilityTarget,
 } from "@/components/admin/ChatAvailabilitySelector";
-import type { WorkflowConfig } from "@/types/workflow";
+import type { WorkflowConfig, WorkflowRevision, WorkflowRevisionActor } from "@/types/workflow";
 import type { AgentSkill } from "@/types/agentSkill";
 import {
   DOCUMENT_BASED_SKILL_DESCRIPTION_SKILL_ID,
+  ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID,
   SKILLS_FRAMEWORK_DESCRIPTION_SKILL_ID,
   createDocumentBasedSkillDescriptionTemplate,
+  createEscoSkillDescriptionLookupTemplate,
   createSkillsFrameworkDescriptionTemplate,
   createSkillsFrameworkMapperTemplate,
 } from "@/types/agentSkill";
@@ -55,6 +61,8 @@ interface LlmProvider {
   apiKey: string;
   model: string;
   enabled: boolean;
+  deletedAt?: string;
+  deletedPreviousEnabled?: boolean;
 }
 
 interface McpServer {
@@ -63,6 +71,8 @@ interface McpServer {
   url: string;
   apiKey: string;
   enabled: boolean;
+  deletedAt?: string;
+  deletedPreviousEnabled?: boolean;
 }
 
 interface LlmAgent {
@@ -88,6 +98,8 @@ interface LlmAgent {
   ragTopK: number;
   resultContextMode: "full" | "chunked";
   resultChunkSize: number;
+  deletedAt?: string;
+  deletedPreviousEnabled?: boolean;
 }
 
 interface LlmInsightsConfig {
@@ -403,6 +415,59 @@ const DEFAULT_GLOBAL_SNAPSHOT: GlobalConfigSnapshot = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const uid = () => crypto.randomUUID();
+const keepWithinRecycleRetention = (item: { deletedAt?: string }) => {
+  if (!item.deletedAt) return true;
+  const deletedAt = Date.parse(item.deletedAt);
+  return !Number.isFinite(deletedAt) || deletedAt + RECYCLE_RETENTION_MS > Date.now();
+};
+
+const workflowContent = (workflow: WorkflowConfig) => {
+  const { revision: _revision, revisionHistory: _history, lastSavedAt: _savedAt, lastSavedBy: _savedBy, ...content } = workflow;
+  return content;
+};
+
+const workflowSnapshot = (workflow: WorkflowConfig): WorkflowRevision["snapshot"] => {
+  const { revisionHistory: _history, ...snapshot } = structuredClone(workflow);
+  return snapshot;
+};
+
+const summarizeWorkflowChanges = (previous: WorkflowConfig | undefined, next: WorkflowConfig): string[] => {
+  if (!previous) return ["Workflow created"];
+  const changes: string[] = [];
+  if (previous.name !== next.name) changes.push(`Renamed from “${previous.name}” to “${next.name}”`);
+  if (previous.description !== next.description) changes.push("Description changed");
+  if (previous.enabled !== next.enabled) changes.push(next.enabled ? "Workflow enabled" : "Workflow disabled");
+  if (previous.deletedAt !== next.deletedAt) changes.push(next.deletedAt ? "Moved to recycle bin" : "Restored from recycle bin");
+  if (JSON.stringify(previous.targetResources ?? []) !== JSON.stringify(next.targetResources ?? [])) changes.push("Availability assignments changed");
+  if (JSON.stringify(previous.execution ?? {}) !== JSON.stringify(next.execution ?? {})) changes.push("Execution and integration settings changed");
+  if (JSON.stringify(previous.state ?? {}) !== JSON.stringify(next.state ?? {})) changes.push("Execution state schema changed");
+  if (JSON.stringify(previous.graph) !== JSON.stringify(next.graph)) {
+    const nodeDelta = next.graph.nodes.length - previous.graph.nodes.length;
+    const edgeDelta = next.graph.edges.length - previous.graph.edges.length;
+    const details = [nodeDelta ? `${nodeDelta > 0 ? "+" : ""}${nodeDelta} nodes` : "", edgeDelta ? `${edgeDelta > 0 ? "+" : ""}${edgeDelta} connections` : ""].filter(Boolean);
+    changes.push(details.length ? `Workflow graph changed (${details.join(", ")})` : "Workflow nodes or connections changed");
+  }
+  return changes.length > 0 ? changes : ["Workflow configuration changed"];
+};
+
+const addWorkflowRevisions = (nextWorkflows: WorkflowConfig[], savedWorkflows: WorkflowConfig[], actor: WorkflowRevisionActor, savedAt: string): WorkflowConfig[] => nextWorkflows.map((nextWorkflow) => {
+  const previous = savedWorkflows.find((workflow) => workflow.id === nextWorkflow.id);
+  if (previous && JSON.stringify(workflowContent(previous)) === JSON.stringify(workflowContent(nextWorkflow))) {
+    return { ...nextWorkflow, revision: previous.revision, revisionHistory: previous.revisionHistory, lastSavedAt: previous.lastSavedAt, lastSavedBy: previous.lastSavedBy };
+  }
+  const history = [...(previous?.revisionHistory ?? [])];
+  let previousVersion = previous?.revision ?? 0;
+  if (previous && history.length === 0) {
+    previousVersion = 1;
+    const baselineActor = previous.lastSavedBy ?? { name: "Saved before version tracking" };
+    const baseline: WorkflowConfig = { ...previous, revision: 1, lastSavedAt: previous.lastSavedAt ?? previous.createdAt ?? savedAt, lastSavedBy: baselineActor };
+    history.push({ id: crypto.randomUUID(), version: 1, savedAt: baseline.lastSavedAt!, savedBy: baselineActor, changes: ["Initial saved version"], snapshot: workflowSnapshot(baseline) });
+  }
+  const revision = previousVersion + 1 || 1;
+  const audited: WorkflowConfig = { ...nextWorkflow, revision, lastSavedAt: savedAt, lastSavedBy: actor };
+  history.push({ id: crypto.randomUUID(), version: revision, savedAt, savedBy: actor, changes: summarizeWorkflowChanges(previous, nextWorkflow), snapshot: workflowSnapshot(audited) });
+  return { ...audited, revisionHistory: history };
+});
 
 type AgentInputSource = LlmAgent["inputSources"][number];
 
@@ -466,6 +531,12 @@ const emptyProvider = (): LlmProvider => ({
   apiKey: "", model: "gpt-4o-mini", enabled: true,
 });
 
+const DUMMY_PROVIDER_EXAMPLES: Array<Omit<LlmProvider, "id">> = [
+  { name: "[Demo] OpenAI GPT", providerType: "openai", apiBaseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4.1-mini", enabled: false },
+  { name: "[Demo] Anthropic Claude", providerType: "anthropic", apiBaseUrl: "https://api.anthropic.com/v1", apiKey: "", model: "claude-sonnet-4-5", enabled: false },
+  { name: "[Demo] Google Gemini", providerType: "gemini", apiBaseUrl: "https://generativelanguage.googleapis.com/v1beta", apiKey: "", model: "gemini-2.5-flash", enabled: false },
+];
+
 const emptyMcpServer = (): McpServer => ({
   id: uid(), name: "", url: "", apiKey: "", enabled: true,
 });
@@ -501,7 +572,9 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         apiBaseUrl: String(p.apiBaseUrl || "https://api.openai.com/v1"),
         apiKey: String(p.apiKey || ""), model: String(p.model || "gpt-4o-mini"),
         enabled: p.enabled !== false,
-      }))
+        deletedAt: typeof p.deletedAt === "string" && p.deletedAt ? p.deletedAt : undefined,
+        deletedPreviousEnabled: typeof p.deletedPreviousEnabled === "boolean" ? p.deletedPreviousEnabled : undefined,
+      })).filter(keepWithinRecycleRetention)
     : typeof raw.apiKey === "string" && raw.apiKey
     ? [{ id: uid(), name: "Default", providerType: "openai" as const, apiBaseUrl: String(raw.apiBaseUrl || "https://api.openai.com/v1"),
         apiKey: String(raw.apiKey), model: String(raw.model || "gpt-4o-mini"), enabled: true }]
@@ -512,7 +585,9 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         id: String(s.id || uid()), name: String(s.name || ""),
         url: String(s.url || ""), apiKey: String(s.apiKey || ""),
         enabled: s.enabled !== false,
-      }))
+        deletedAt: typeof s.deletedAt === "string" && s.deletedAt ? s.deletedAt : undefined,
+        deletedPreviousEnabled: typeof s.deletedPreviousEnabled === "boolean" ? s.deletedPreviousEnabled : undefined,
+      })).filter(keepWithinRecycleRetention)
     : [];
 
   // Migrate agents or use defaults
@@ -576,7 +651,9 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         ((a as LlmAgent & { resultChunkSize?: number }).resultChunkSize ?? 0) > 0
           ? Math.min(Math.max(Math.round((a as LlmAgent & { resultChunkSize?: number }).resultChunkSize ?? 12000), 2000), 50000)
           : 12000,
-    })).map((agent) => agent.skillIds.length > 0 && agent.expectedOutput !== "auto"
+      deletedAt: typeof a.deletedAt === "string" && a.deletedAt ? a.deletedAt : undefined,
+      deletedPreviousEnabled: typeof a.deletedPreviousEnabled === "boolean" ? a.deletedPreviousEnabled : undefined,
+    })).filter(keepWithinRecycleRetention).map((agent) => agent.skillIds.length > 0 && agent.expectedOutput !== "auto"
       ? { ...agent, fallbackOutput: agent.expectedOutput, expectedOutput: "auto" as const }
       : agent);
   } else {
@@ -635,7 +712,9 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
         })) : [],
         enabled: skill.enabled !== false,
         version: typeof skill.version === "number" && skill.version > 0 ? skill.version : 1,
-      }))
+        deletedAt: typeof skill.deletedAt === "string" && skill.deletedAt ? skill.deletedAt : undefined,
+        deletedPreviousEnabled: typeof skill.deletedPreviousEnabled === "boolean" ? skill.deletedPreviousEnabled : undefined,
+      })).filter(keepWithinRecycleRetention)
     : [
         createSkillsFrameworkMapperTemplate(),
         createDocumentBasedSkillDescriptionTemplate(),
@@ -650,10 +729,21 @@ const migrateFromLegacy = (raw: Record<string, unknown>): LlmInsightsConfig => {
       name: String(w.name || "Workflow"),
       description: String(w.description || ""),
       enabled: w.enabled !== false,
+      execution: w.execution && typeof w.execution === "object" ? w.execution : undefined,
       targetResources: Array.isArray(w.targetResources) ? w.targetResources.map(String) : [],
       graph: (w.graph && typeof w.graph === "object") ? w.graph : { nodes: [], edges: [] },
       createdAt: String(w.createdAt || new Date().toISOString()),
-    }));
+      deletedAt: typeof w.deletedAt === "string" && w.deletedAt ? w.deletedAt : undefined,
+      deletedPreviousEnabled: typeof w.deletedPreviousEnabled === "boolean" ? w.deletedPreviousEnabled : undefined,
+      revision: typeof w.revision === "number" && w.revision > 0 ? w.revision : undefined,
+      revisionHistory: Array.isArray(w.revisionHistory) ? w.revisionHistory : [],
+      lastSavedAt: typeof w.lastSavedAt === "string" ? w.lastSavedAt : undefined,
+      lastSavedBy: w.lastSavedBy && typeof w.lastSavedBy === "object" ? w.lastSavedBy : undefined,
+    })).filter((workflow) => {
+      if (!workflow.deletedAt) return true;
+      const deletedAt = Date.parse(workflow.deletedAt);
+      return !Number.isFinite(deletedAt) || deletedAt + RECYCLE_RETENTION_MS > Date.now();
+    });
   } else if (raw.workflow && typeof raw.workflow === "object") {
     // Migrate legacy single workflow
     const legacyGraph = raw.workflow as { nodes?: unknown[]; edges?: unknown[] };
@@ -1100,9 +1190,10 @@ interface AgentTableRowProps {
   onChange: (updated: LlmAgent) => void;
   onMove: (from: number, to: number) => void;
   onRemove: () => void;
+  onDuplicate: () => void;
 }
 
-const AgentTableRow = ({ agent, index, total, isEditing, mcpServers, onToggleEdit, onChange, onMove, onRemove }: AgentTableRowProps) => {
+const AgentTableRow = ({ agent, index, total, isEditing, mcpServers, onToggleEdit, onChange, onMove, onRemove, onDuplicate }: AgentTableRowProps) => {
   const outputOption = OUTPUT_OPTIONS.find((o) => o.value === agent.expectedOutput);
   const mcpLabel = agent.mcpServerIds.length === 0
     ? (mcpServers.length > 0 ? "All" : "—")
@@ -1149,10 +1240,8 @@ const AgentTableRow = ({ agent, index, total, isEditing, mcpServers, onToggleEdi
           onClick={onToggleEdit}>
           {isEditing ? <ChevronsUpDown className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
         </Button>
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Delete agent"
-          onClick={onRemove}>
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
+        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Duplicate agent" onClick={onDuplicate}><Copy className="h-3.5 w-3.5" /></Button>
+        <ConfirmRecycleButton name={agent.name || "Unnamed agent"} itemLabel="agent" onConfirm={onRemove} />
       </div>
     </div>
   );
@@ -1913,7 +2002,41 @@ const LlmSettingsSection = () => {
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [availabilityTargets, setAvailabilityTargets] = useState<ChatAvailabilityTarget[]>([]);
   const [providerEditor, setProviderEditor] = useState<{ mode: "create" | "edit"; draft: LlmProvider } | null>(null);
+  const [providerCostEditor, setProviderCostEditor] = useState<{ type: "llm_provider" | "mcp_server"; id: string; name: string; model?: string } | null>(null);
   const [mcpEditor, setMcpEditor] = useState<{ mode: "create" | "edit"; draft: McpServer } | null>(null);
+  const [showProviderRecycle, setShowProviderRecycle] = useState(false);
+  const [showMcpRecycle, setShowMcpRecycle] = useState(false);
+  const [showAgentRecycle, setShowAgentRecycle] = useState(false);
+  const activeProviders = llm.providers.filter((item) => !item.deletedAt);
+  const recycledProviders = llm.providers.filter((item) => Boolean(item.deletedAt));
+  const activeMcpServers = llm.mcpServers.filter((item) => !item.deletedAt);
+  const recycledMcpServers = llm.mcpServers.filter((item) => Boolean(item.deletedAt));
+  const activeAgents = llm.agents.filter((item) => !item.deletedAt);
+  const recycledAgents = llm.agents.filter((item) => Boolean(item.deletedAt));
+  const activeSkills = llm.skills.filter((item) => !item.deletedAt);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const cleanAndSchedule = () => {
+      const now = Date.now();
+      const collections = [llm.providers, llm.mcpServers, llm.agents, llm.skills];
+      const hasExpired = collections.some((items) => items.some((item) => item.deletedAt && recycleExpiry(item) <= now));
+      if (hasExpired) {
+        setLlm((current) => ({
+          ...current,
+          providers: current.providers.filter((item) => !item.deletedAt || recycleExpiry(item) > now),
+          mcpServers: current.mcpServers.filter((item) => !item.deletedAt || recycleExpiry(item) > now),
+          agents: current.agents.filter((item) => !item.deletedAt || recycleExpiry(item) > now),
+          skills: current.skills.filter((item) => !item.deletedAt || recycleExpiry(item) > now),
+        }));
+        return;
+      }
+      const nextExpiry = Math.min(...collections.flatMap((items) => items.filter((item) => item.deletedAt).map(recycleExpiry)));
+      if (Number.isFinite(nextExpiry)) timer = window.setTimeout(cleanAndSchedule, Math.max(1_000, Math.min(nextExpiry - now, 2_000_000_000)));
+    };
+    cleanAndSchedule();
+    return () => { if (timer !== undefined) window.clearTimeout(timer); };
+  }, [llm.providers, llm.mcpServers, llm.agents, llm.skills]);
 
   useEffect(() => {
     const fetchConfig = async () => {
@@ -2027,21 +2150,33 @@ const LlmSettingsSection = () => {
     }));
   };
 
-  const removeProvider = (i: number) =>
-    patchLlm({ providers: llm.providers.filter((_, j) => j !== i) });
+  const recycleProvider = (id: string) => patchLlm({ providers: llm.providers.map((item) => item.id === id ? { ...item, enabled: false, deletedAt: new Date().toISOString(), deletedPreviousEnabled: item.enabled } : item) });
+  const restoreProvider = (id: string) => patchLlm({ providers: llm.providers.map((item) => item.id === id ? { ...item, enabled: item.deletedPreviousEnabled === true, deletedAt: undefined, deletedPreviousEnabled: undefined } : item) });
+  const permanentlyDeleteProvider = (id: string) => patchLlm({ providers: llm.providers.filter((item) => item.id !== id) });
+  const duplicateProvider = (provider: LlmProvider) => patchLlm({ providers: [...llm.providers, { ...structuredClone(provider), id: uid(), name: `${provider.name} (copy)`, enabled: false, deletedAt: undefined, deletedPreviousEnabled: undefined }] });
+  const importProviderExamples = async (providerTypes?: LlmProvider["providerType"][]) => {
+    const selected = DUMMY_PROVIDER_EXAMPLES.filter((example) => !providerTypes || providerTypes.includes(example.providerType));
+    const missing = selected.filter((example) => !llm.providers.some((provider) => !provider.deletedAt && provider.name === example.name));
+    if (!missing.length) { toast.info("The selected demo provider examples are already imported"); return; }
+    const nextLlm = { ...llm, providers: [...llm.providers, ...missing.map((example) => ({ ...example, id: uid() }))] };
+    await persistLlmConfig(nextLlm, `${missing.length} disabled demo provider${missing.length === 1 ? "" : "s"} imported`);
+  };
   const moveProvider = async (from: number, to: number) => {
-    await persistLlmConfig({ ...llm, providers: moveItem(llm.providers, from, to) }, "Provider priority updated and saved");
+    await persistLlmConfig({ ...llm, providers: [...moveItem(activeProviders, from, to), ...recycledProviders] }, "Provider priority updated and saved");
   };
 
-  const removeMcp = (i: number) =>
-    patchLlm({ mcpServers: llm.mcpServers.filter((_, j) => j !== i) });
+  const recycleMcp = (id: string) => patchLlm({ mcpServers: llm.mcpServers.map((item) => item.id === id ? { ...item, enabled: false, deletedAt: new Date().toISOString(), deletedPreviousEnabled: item.enabled } : item) });
+  const restoreMcp = (id: string) => patchLlm({ mcpServers: llm.mcpServers.map((item) => item.id === id ? { ...item, enabled: item.deletedPreviousEnabled === true, deletedAt: undefined, deletedPreviousEnabled: undefined } : item) });
+  const permanentlyDeleteMcp = (id: string) => patchLlm({ mcpServers: llm.mcpServers.filter((item) => item.id !== id) });
+  const duplicateMcp = (server: McpServer) => patchLlm({ mcpServers: [...llm.mcpServers, { ...structuredClone(server), id: uid(), name: `${server.name} (copy)`, enabled: false, deletedAt: undefined, deletedPreviousEnabled: undefined }] });
 
-  const updateAgent = (i: number, updated: LlmAgent) =>
-    patchLlm({ agents: llm.agents.map((a, j) => (j === i ? updated : a)) });
-  const removeAgent = (i: number) =>
-    patchLlm({ agents: llm.agents.filter((_, j) => j !== i) });
+  const updateAgent = (id: string, updated: LlmAgent) => patchLlm({ agents: llm.agents.map((agent) => agent.id === id ? updated : agent) });
+  const recycleAgent = (id: string) => patchLlm({ agents: llm.agents.map((item) => item.id === id ? { ...item, enabled: false, deletedAt: new Date().toISOString(), deletedPreviousEnabled: item.enabled } : item) });
+  const restoreAgent = (id: string) => patchLlm({ agents: llm.agents.map((item) => item.id === id ? { ...item, enabled: item.deletedPreviousEnabled === true, deletedAt: undefined, deletedPreviousEnabled: undefined } : item) });
+  const permanentlyDeleteAgent = (id: string) => patchLlm({ agents: llm.agents.filter((item) => item.id !== id) });
+  const duplicateAgent = (agent: LlmAgent) => patchLlm({ agents: [...llm.agents, { ...structuredClone(agent), id: uid(), name: `${agent.name} (copy)`, enabled: false, deletedAt: undefined, deletedPreviousEnabled: undefined }] });
   const moveAgent = (from: number, to: number) =>
-    patchLlm({ agents: moveItem(llm.agents, from, to) });
+    patchLlm({ agents: [...moveItem(activeAgents, from, to), ...recycledAgents] });
 
   const updateGlobalPrompt = (i: number, val: string) =>
     patchLlm({ predefinedPrompts: llm.predefinedPrompts.map((p, j) => (j === i ? val : p)) });
@@ -2077,11 +2212,22 @@ const LlmSettingsSection = () => {
     try {
       const currentFeatures = await readGlobalFeatures(user.organization.id);
       const { llmInsights: _drop, ...currentFeaturesRest } = currentFeatures;
+      const savedLlm = migrateFromLegacy((currentFeatures.llmInsights as Record<string, unknown> | undefined) ?? {});
+      const savedAt = new Date().toISOString();
+      const actor: WorkflowRevisionActor = {
+        userId: user.id,
+        email: user.email || undefined,
+        name: user.profile?.full_name || undefined,
+      };
+      const auditedLlm: LlmInsightsConfig = {
+        ...nextLlm,
+        workflows: addWorkflowRevisions(nextLlm.workflows, savedLlm.workflows, actor, savedAt),
+      };
       const payload = {
         ...(configId ? { id: configId } : {}),
         organization_id: user.organization.id,
         ...globalSnapshot,
-        features: { ...featuresRest, ...currentFeaturesRest, llmInsights: nextLlm },
+        features: { ...featuresRest, ...currentFeaturesRest, llmInsights: auditedLlm },
       };
       const { data, error } = await supabase
         .from("global_configs")
@@ -2091,7 +2237,7 @@ const LlmSettingsSection = () => {
       if (error) throw error;
       setConfigId(data.id);
       setFeaturesRest(currentFeaturesRest);
-      setLlm(nextLlm);
+      setLlm(auditedLlm);
       toast.success(successMessage);
       return true;
     } catch (error) {
@@ -2163,10 +2309,10 @@ const LlmSettingsSection = () => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Brain className="h-5 w-5" />
-          Result Page Agent Operations
+          Agent Operations
         </CardTitle>
         <CardDescription>
-          Configure the LLM providers, MCP servers, agents, skills, and workflows that power the agentic experience on the result page.
+          Configure LLM providers, MCP servers, agents, skills, and workflows for result-page chat and standalone API or webhook execution.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -2174,36 +2320,37 @@ const LlmSettingsSection = () => {
         {/* Enable toggle */}
         <div className="flex items-center justify-between p-4 border rounded-lg">
           <div>
-            <p className="font-medium">Enable Agent Operations</p>
-            <p className="text-sm text-muted-foreground">Activate the result-page agent chat, including configured agents, skills, MCP tools, and workflows.</p>
+            <p className="font-medium">Enable result-page agent chat</p>
+            <p className="text-sm text-muted-foreground">Activate result-page agent chat. Standalone workflows remain available through their enabled API and webhook integrations.</p>
           </div>
           <Switch checked={llm.enabled} onCheckedChange={(v) => patchLlm({ enabled: v })} />
         </div>
 
         <Tabs defaultValue="providers" className="space-y-5">
-          <TabsList className="grid h-auto w-full grid-cols-1 gap-1 rounded-xl bg-muted/60 p-1 sm:grid-cols-2 lg:grid-cols-4">
+          <TabsList className="grid h-auto w-full grid-cols-1 gap-1 rounded-xl bg-muted/60 p-1 sm:grid-cols-2 lg:grid-cols-5">
             <TabsTrigger value="providers" className="gap-2 rounded-lg py-2.5">
               <Server className="h-4 w-4" />
               Providers &amp; MCP
               <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">
-                {llm.providers.length + llm.mcpServers.length}
+                {activeProviders.length + activeMcpServers.length}
               </Badge>
             </TabsTrigger>
             <TabsTrigger value="skills" className="gap-2 rounded-lg py-2.5">
               <BookOpen className="h-4 w-4" />
               Agent Skills
-              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.skills.length}</Badge>
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{activeSkills.length}</Badge>
             </TabsTrigger>
             <TabsTrigger value="agents" className="gap-2 rounded-lg py-2.5">
               <Bot className="h-4 w-4" />
               AI Agents
-              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.agents.length}</Badge>
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{activeAgents.length}</Badge>
             </TabsTrigger>
             <TabsTrigger value="workflows" className="gap-2 rounded-lg py-2.5">
               <Workflow className="h-4 w-4" />
               Agent Workflows
-              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.workflows.length}</Badge>
+              <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">{llm.workflows.filter((workflow) => !workflow.deletedAt).length}</Badge>
             </TabsTrigger>
+            <TabsTrigger value="costs" className="gap-2 rounded-lg py-2.5"><Zap className="h-4 w-4" />Costs &amp; Usage</TabsTrigger>
           </TabsList>
 
           <TabsContent value="providers" className="mt-0 space-y-6 rounded-xl border bg-muted/10 p-4 sm:p-5">
@@ -2213,16 +2360,16 @@ const LlmSettingsSection = () => {
                   <Zap className="h-4 w-4 text-muted-foreground" />
                   <h3 className="text-sm font-semibold">LLM Providers</h3>
                 </div>
-                <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setProviderEditor({ mode: "create", draft: emptyProvider() })}>
+                <div className="flex gap-2"><DropdownMenu><DropdownMenuTrigger asChild><Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 text-xs" disabled={isSaving}><Copy className="h-3.5 w-3.5" />Import examples<ChevronDown className="h-3.5 w-3.5" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>Disabled demo configurations</DropdownMenuLabel><DropdownMenuItem onSelect={() => void importProviderExamples()}>Import GPT, Claude and Gemini</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem onSelect={() => void importProviderExamples(["openai"])}>OpenAI GPT example</DropdownMenuItem><DropdownMenuItem onSelect={() => void importProviderExamples(["anthropic"])}>Anthropic Claude example</DropdownMenuItem><DropdownMenuItem onSelect={() => void importProviderExamples(["gemini"])}>Google Gemini example</DropdownMenuItem></DropdownMenuContent></DropdownMenu><Button type="button" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setProviderEditor({ mode: "create", draft: emptyProvider() })}>
                   <Plus className="h-3.5 w-3.5" /> Add provider
-                </Button>
+                </Button></div>
               </div>
               <p className="text-xs text-muted-foreground">
-                Providers are tried in priority order. Edits and priority changes save immediately and apply to agents and workflow nodes using global defaults on their next request.
+                Providers are tried in priority order. Imported examples are disabled and contain no API keys; review the model, credentials, and pricing before enabling them.
               </p>
               <div className="overflow-x-auto rounded-md border bg-background">
                 <div className="min-w-[820px]">
-                  <div className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_132px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                  <div className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_196px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
                     <span>Priority</span>
                     <span>Name</span>
                     <span>Family</span>
@@ -2231,26 +2378,29 @@ const LlmSettingsSection = () => {
                     <span>Status</span>
                     <span className="text-right">Actions</span>
                   </div>
-                  {llm.providers.length === 0 ? (
+                  {activeProviders.length === 0 ? (
                     <div className="px-4 py-8 text-center text-sm text-muted-foreground">No providers configured.</div>
-                  ) : llm.providers.map((provider, index) => (
-                    <div key={provider.id} className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_132px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
-                      <Badge variant={provider.enabled && llm.providers.find((item) => item.enabled)?.id === provider.id ? "default" : "secondary"} className="w-fit text-[10px]">{provider.enabled && llm.providers.find((item) => item.enabled)?.id === provider.id ? "Primary" : `#${index + 1}`}</Badge>
+                  ) : activeProviders.map((provider, index) => (
+                    <div key={provider.id} className="grid grid-cols-[76px_minmax(150px,1fr)_130px_150px_minmax(180px,1.2fr)_76px_196px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+                      <Badge variant={provider.enabled && activeProviders.find((item) => item.enabled)?.id === provider.id ? "default" : "secondary"} className="w-fit text-[10px]">{provider.enabled && activeProviders.find((item) => item.enabled)?.id === provider.id ? "Primary" : `#${index + 1}`}</Badge>
                       <span className="truncate text-sm font-medium" title={provider.name}>{provider.name || "Unnamed provider"}</span>
                       <span className="truncate text-xs text-muted-foreground">{provider.providerType === "openai_compatible" ? "OpenAI compatible" : provider.providerType}</span>
                       <span className="truncate font-mono text-xs text-muted-foreground" title={provider.model}>{provider.model || "Not set"}</span>
                       <span className="truncate font-mono text-xs text-muted-foreground" title={provider.apiBaseUrl}>{provider.apiBaseUrl || "Not set"}</span>
                       <Badge variant={provider.enabled ? "outline" : "secondary"} className="w-fit text-[10px]">{provider.enabled ? "Enabled" : "Off"}</Badge>
                       <div className="flex justify-end gap-1">
+                        <Button type="button" variant="outline" size="sm" className="h-7 gap-1 px-2 text-[10px]" title="Configure provider cost" onClick={() => setProviderCostEditor({ type: "llm_provider", id: provider.id, name: provider.name || provider.model || "LLM provider", model: provider.model })}><CircleDollarSign className="h-3.5 w-3.5" />Cost</Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider up" disabled={isSaving || index === 0} onClick={() => moveProvider(index, index - 1)}><ChevronUp className="h-3.5 w-3.5" /></Button>
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider down" disabled={isSaving || index === llm.providers.length - 1} onClick={() => moveProvider(index, index + 1)}><ChevronDown className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Move provider down" disabled={isSaving || index === activeProviders.length - 1} onClick={() => moveProvider(index, index + 1)}><ChevronDown className="h-3.5 w-3.5" /></Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Edit provider" onClick={() => setProviderEditor({ mode: "edit", draft: { ...provider } })}><Pencil className="h-3.5 w-3.5" /></Button>
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Delete provider" onClick={() => removeProvider(index)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Duplicate provider" onClick={() => duplicateProvider(provider)}><Copy className="h-3.5 w-3.5" /></Button>
+                        <ConfirmRecycleButton name={provider.name || "Unnamed provider"} itemLabel="provider" onConfirm={() => recycleProvider(provider.id)} />
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
+              <RecycleBinPanel title="Provider recycle bin" itemLabel="provider" items={recycledProviders} open={showProviderRecycle} onToggle={() => setShowProviderRecycle((value) => !value)} onRestore={restoreProvider} onDelete={permanentlyDeleteProvider} />
             </section>
 
             <Separator />
@@ -2271,29 +2421,32 @@ const LlmSettingsSection = () => {
               <McpGuide />
               <div className="overflow-x-auto rounded-md border bg-background">
                 <div className="min-w-[700px]">
-                  <div className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_88px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
+                  <div className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_150px] items-center gap-3 border-b bg-muted/50 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground">
                     <span>Name</span>
                     <span>Endpoint</span>
                     <span>Authentication</span>
                     <span>Status</span>
                     <span className="text-right">Actions</span>
                   </div>
-                  {llm.mcpServers.length === 0 ? (
+                  {activeMcpServers.length === 0 ? (
                     <div className="px-4 py-8 text-center text-sm text-muted-foreground">No MCP servers configured.</div>
-                  ) : llm.mcpServers.map((server, index) => (
-                    <div key={server.id} className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_88px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+                  ) : activeMcpServers.map((server) => (
+                    <div key={server.id} className="grid grid-cols-[minmax(160px,1fr)_minmax(260px,1.8fr)_100px_80px_150px] items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
                       <span className="truncate text-sm font-medium" title={server.name}>{server.name || "Unnamed server"}</span>
                       <span className="truncate font-mono text-xs text-muted-foreground" title={server.url}>{server.url || "Not set"}</span>
                       <span className="text-xs text-muted-foreground">{server.apiKey ? "API key" : "None"}</span>
                       <Badge variant={server.enabled ? "outline" : "secondary"} className="w-fit text-[10px]">{server.enabled ? "Enabled" : "Off"}</Badge>
                       <div className="flex justify-end gap-1">
+                        <Button type="button" variant="outline" size="sm" className="h-7 gap-1 px-2 text-[10px]" title="Configure MCP cost" onClick={() => setProviderCostEditor({ type: "mcp_server", id: server.id, name: server.name || "MCP server" })}><CircleDollarSign className="h-3.5 w-3.5" />Cost</Button>
                         <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Edit MCP server" onClick={() => setMcpEditor({ mode: "edit", draft: { ...server } })}><Pencil className="h-3.5 w-3.5" /></Button>
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="Delete MCP server" onClick={() => removeMcp(index)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" title="Duplicate MCP server" onClick={() => duplicateMcp(server)}><Copy className="h-3.5 w-3.5" /></Button>
+                        <ConfirmRecycleButton name={server.name || "Unnamed MCP server"} itemLabel="MCP server" onConfirm={() => recycleMcp(server.id)} />
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
+              <RecycleBinPanel title="MCP recycle bin" itemLabel="MCP server" items={recycledMcpServers} open={showMcpRecycle} onToggle={() => setShowMcpRecycle((value) => !value)} onRestore={restoreMcp} onDelete={permanentlyDeleteMcp} />
             </section>
           </TabsContent>
 
@@ -2319,7 +2472,7 @@ const LlmSettingsSection = () => {
             The first enabled agent is the default.
           </p>
 
-          {llm.agents.length === 0 ? (
+          {activeAgents.length === 0 ? (
             <p className="text-sm text-muted-foreground border border-dashed rounded-lg p-4 text-center">
               No agents configured. Add one below or reset to defaults.
             </p>
@@ -2337,21 +2490,21 @@ const LlmSettingsSection = () => {
               </div>
 
               {/* Table rows + inline edit panels */}
-              {llm.agents.map((agent, i) => (
+              {activeAgents.map((agent, i) => (
                 <div key={agent.id}>
                   <AgentTableRow
-                    agent={agent} index={i} total={llm.agents.length}
+                    agent={agent} index={i} total={activeAgents.length}
                     isEditing={editingAgentId === agent.id}
-                    mcpServers={llm.mcpServers}
+                    mcpServers={activeMcpServers}
                     onToggleEdit={() => setEditingAgentId(editingAgentId === agent.id ? null : agent.id)}
-                    onChange={(updated) => updateAgent(i, updated)}
-                    onMove={moveAgent} onRemove={() => { removeAgent(i); if (editingAgentId === agent.id) setEditingAgentId(null); }}
+                    onChange={(updated) => updateAgent(agent.id, updated)}
+                    onMove={moveAgent} onDuplicate={() => duplicateAgent(agent)} onRemove={() => { recycleAgent(agent.id); if (editingAgentId === agent.id) setEditingAgentId(null); }}
                   />
                   {editingAgentId === agent.id && (
                     <AgentEditPanel
-                      agent={agent} availabilityTargets={availabilityTargets} skills={llm.skills} mcpServers={llm.mcpServers} globalProviders={llm.providers}
+                      agent={agent} availabilityTargets={availabilityTargets} skills={activeSkills} mcpServers={activeMcpServers} globalProviders={activeProviders}
                       supabaseClient={supabase} organizationId={user?.organization?.id}
-                      onChange={(updated) => updateAgent(i, updated)}
+                      onChange={(updated) => updateAgent(agent.id, updated)}
                       onClose={() => setEditingAgentId(null)}
                     />
                   )}
@@ -2391,6 +2544,7 @@ const LlmSettingsSection = () => {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          <RecycleBinPanel title="Agent recycle bin" itemLabel="agent" items={recycledAgents} open={showAgentRecycle} onToggle={() => setShowAgentRecycle((value) => !value)} onRestore={restoreAgent} onDelete={permanentlyDeleteAgent} />
             </div>
 
             <Separator />
@@ -2459,17 +2613,36 @@ const LlmSettingsSection = () => {
             workflows={llm.workflows ?? []}
             availabilityTargets={availabilityTargets}
             organizationId={user?.organization?.id}
-            skills={llm.skills.filter((skill) => skill.enabled)}
-            globalProviders={llm.providers.filter((provider) => provider.enabled)}
-            agents={llm.agents.filter((a) => a.enabled).map((a) => ({
+            skills={activeSkills.filter((skill) => skill.enabled)}
+            globalProviders={activeProviders.filter((provider) => provider.enabled)}
+            mcpServers={activeMcpServers.filter((server) => server.enabled)}
+            agents={activeAgents.filter((a) => a.enabled).map((a) => ({
               id: a.id,
               name: a.name,
               description: a.description,
               expectedOutput: a.expectedOutput,
             }))}
+            onEnsureSkillTemplate={(skillTemplateId) => {
+              if (skillTemplateId !== ESCO_SKILL_DESCRIPTION_LOOKUP_SKILL_ID) return;
+              setLlm((previous) => {
+                const existing = previous.skills.find((skill) => skill.id === skillTemplateId);
+                if (!existing) return { ...previous, skills: [...previous.skills, createEscoSkillDescriptionLookupTemplate()] };
+                if (existing.enabled && !existing.deletedAt) return previous;
+                return {
+                  ...previous,
+                  skills: previous.skills.map((skill) => skill.id === skillTemplateId
+                    ? { ...skill, enabled: true, deletedAt: undefined, deletedPreviousEnabled: undefined }
+                    : skill),
+                };
+              });
+            }}
             onChange={(workflows) => patchLlm({ workflows })}
           />
             </div>
+          </TabsContent>
+          <TabsContent value="costs" className="mt-0 rounded-xl border bg-muted/10 p-4 sm:p-5">
+            <CostManagementSection organizationId={user?.organization?.id} providers={activeProviders} mcpServers={activeMcpServers}
+              workflows={llm.workflows.filter((item) => !item.deletedAt)} agents={activeAgents} />
           </TabsContent>
         </Tabs>
 
@@ -2524,6 +2697,8 @@ const LlmSettingsSection = () => {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <ProviderCostDialog organizationId={user?.organization?.id} target={providerCostEditor} onClose={() => setProviderCostEditor(null)} />
 
         <Separator />
 

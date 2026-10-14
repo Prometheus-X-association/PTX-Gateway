@@ -1,0 +1,8 @@
+{
+  "unstable": ["worker-options"],
+  "tasks": {
+    "start": "deno run --no-prompt --allow-net --allow-env --v8-flags=--max-old-space-size=256 main.ts",
+    "test": "deno test --no-prompt --allow-env workflow.test.ts",
+    "check": "deno check main.ts workflow.test.ts"
+  }
+}

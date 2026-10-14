@@ -4223,6 +4223,7 @@ const ResultsView = ({
             docText={docText}
             processSessionId={processSessionId}
             uploadConfig={uploadConfig}
+            targetResourceId={selectedTargetId}
             workflows={compatibleLlmWorkflows}
             loadLatestWorkflow={loadLatestWorkflow}
             onDocUploaded={(text) => {

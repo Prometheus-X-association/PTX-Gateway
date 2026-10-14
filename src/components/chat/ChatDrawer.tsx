@@ -1,3 +1,5 @@
+import { executeBackendWorkflow, backendRunStorageKey, storedBackendRun } from "@/lib/workflowBackend";
+import { costControl, type BrowserCostExecution } from "@/lib/costControl";
 import { buildChunkedResultPayload } from "../../../supabase/functions/chat-with-result/resultContext";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Send, MessageSquareDot, Loader2, Wrench, Zap, Bot, ChevronDown, MessageCircle, Maximize2, Paperclip, Square, Download, ExternalLink, GripVertical, BookOpen } from "lucide-react";
@@ -89,6 +91,7 @@ interface ChatDrawerProps {
   onDocUploaded?: (text: string) => void;
   /** Named workflow configs — active ones can be selected and run from the chat */
   workflows?: WorkflowConfig[];
+  targetResourceId?: string | null;
   loadLatestWorkflow: (workflowId: string) => Promise<WorkflowConfig>;
 }
 
@@ -143,6 +146,25 @@ const normalizeAgentInputSources = (agent: LlmAgentInfo | null, freeChat: boolea
     default:
       return ["result", "document", "user_upload"];
   }
+};
+
+const workflowInputRequirements = (workflow: WorkflowConfig) => {
+  const triggerNode = workflow.graph.nodes.find((node) => node.type === "trigger");
+  const triggerSources = triggerNode
+    ? (triggerNode.data as import("@/types/workflow").TriggerNodeData).inputSources ?? ["result", "document"]
+    : ["result", "document"];
+  const legacyWorkflowNeedsDocument = workflow.graph.nodes.some((node) => {
+    if (node.type !== "agent") return false;
+    const data = node.data as import("@/types/workflow").AgentNodeData;
+    return data.requiresDocument === true || /uploaded document|attached document|document text/i.test(
+      `${data.mode === "inline" ? data.inlineSystemPrompt || "" : ""}\n${data.promptOverride || ""}`
+    );
+  });
+  return {
+    requiresResult: triggerSources.includes("result"),
+    requiresDocument: triggerSources.includes("document") || triggerSources.includes("user_upload") || legacyWorkflowNeedsDocument,
+    requestsChatUpload: triggerSources.includes("user_upload"),
+  };
 };
 
 // Tags that indicate an HTML document or renderable fragment. Keep this explicit
@@ -845,6 +867,7 @@ const ChatDrawer = ({
   onDocUploaded,
   workflows = [],
   loadLatestWorkflow,
+  targetResourceId,
 }: ChatDrawerProps) => {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [input, setInput] = useState("");
@@ -863,6 +886,7 @@ const ChatDrawer = ({
   const [showDocPopover, setShowDocPopover] = useState(false);
   const [isWorkflowRunning, setIsWorkflowRunning] = useState(false);
   const [pausedWorkflow, setPausedWorkflow] = useState<{ workflowId: string; config: WorkflowConfig; waiting: WorkflowWaitingState } | null>(null);
+  const [browserCostExecution, setBrowserCostExecution] = useState<BrowserCostExecution | null>(null);
   const workflowRunningRef = useRef(false);
   // Compact progress summary updated in chatbox text only
   const [workflowProgress, setWorkflowProgress] = useState<{
@@ -894,6 +918,10 @@ const ChatDrawer = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // A failed reconnect must not be retried on every render. A newly stored run
+  // ID can still be attempted immediately, and a full page load gets one fresh
+  // attempt for an interrupted run.
+  const backendReconnectAttemptsRef = useRef<Set<string>>(new Set());
   const isFreeChatMode = activeAgentId === "__free__";
   const activeAgent = isFreeChatMode ? null : (agents.find((a) => a.id === activeAgentId) ?? agents[0] ?? null);
 
@@ -1049,22 +1077,7 @@ const ChatDrawer = ({
     const triggerNode = workflow.nodes.find((node) => node.type === "trigger");
     // Resolve preset/automatic prompts from the freshly loaded graph too.
     userMsg ??= (triggerNode?.data as import("@/types/workflow").TriggerNodeData | undefined)?.defaultPrompt || "Run workflow";
-    const configuredTriggerSources = triggerNode
-      ? (triggerNode.data as import("@/types/workflow").TriggerNodeData).inputSources
-      : undefined;
-    const triggerSources = configuredTriggerSources ?? ["result", "document"];
-    const requiresResult = triggerSources.includes("result");
-    const legacyWorkflowNeedsDocument = workflow.nodes.some((node) => {
-      if (node.type !== "agent") return false;
-      const data = node.data as import("@/types/workflow").AgentNodeData;
-      return data.requiresDocument === true || /uploaded document|attached document|document text/i.test(
-        `${data.mode === "inline" ? data.inlineSystemPrompt || "" : ""}\n${data.promptOverride || ""}`
-      );
-    });
-    // A node may independently make a document mandatory even if the trigger
-    // normally starts from result data alone.
-    const requestsChatUpload = triggerSources.includes("user_upload");
-    const requiresDocumentSource = triggerSources.includes("document") || requestsChatUpload || legacyWorkflowNeedsDocument;
+    const { requiresResult, requiresDocument: requiresDocumentSource, requestsChatUpload } = workflowInputRequirements(workflowConfig);
     const hasResult = resultData !== null && resultData !== undefined;
     const hasDoc = !!docText?.trim() || localAttachments.length > 0;
     const needsDoc = requiresDocumentSource;
@@ -1123,7 +1136,21 @@ const ChatDrawer = ({
         .slice(-10)
         .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
         .join("\n\n");
-      const { results, aborted, error: workflowError, waiting } = await executeWorkflow(workflow, {
+      const backendExecution = Boolean(workflowConfig.execution?.backendEnabled);
+      let costExecution = backendExecution ? null : resumeWaiting ? browserCostExecution : null;
+      if (!backendExecution && !costExecution) {
+        try {
+          const started = await costControl("start_execution", organizationId, { executionKind: "workflow", executionSource: "result_chat", workflowId: workflowConfig.id }, orgExecutionToken);
+          costExecution = { executionId: started.execution.id, executionToken: started.executionToken };
+          setBrowserCostExecution(costExecution);
+        } catch (error) { console.warn("Browser cost execution could not be started", error); }
+      }
+      const stepByOperation = new Map<string, string>();
+      const stepQueueByNode = new Map<string, string[]>();
+      const executor = backendExecution
+        ? (_graph: AgentWorkflow, context: Parameters<typeof executeWorkflow>[1]) => executeBackendWorkflow(workflowConfig, context, localAttachments, targetResourceId, processSessionId)
+        : executeWorkflow;
+      const { results, aborted, error: workflowError, waiting } = await executor(workflow, {
         workflowId: workflowConfig.id,
         resultData,
         docText,
@@ -1136,7 +1163,20 @@ const ChatDrawer = ({
         signal: abortRef.current.signal,
         resume: resumeWaiting ? { waiting: resumeWaiting, answer: userMsg } : undefined,
 
-        onApiRequest: async (nodeId, _config, input) => {
+        onStepStart: async (nodeId, _input, execution) => {
+          if (!costExecution) return;
+          try {
+            const node = workflow.nodes.find((item) => item.id === nodeId);
+            const result = await costControl("step_start", organizationId, { ...costExecution, nodeId, nodeType: node?.type,
+              nodeName: String(node?.data?.label || nodeId), agentId: node?.type === "agent" && node.data.mode === "existing" ? node.data.agentId : undefined,
+              agentKind: node?.type === "agent" ? node.data.mode === "inline" ? "inline" : "saved" : undefined,
+              sequence: stepByOperation.size + 1, attempt: execution.attempt, operationId: execution.operationId }, orgExecutionToken);
+            stepByOperation.set(execution.operationId, result.step.id);
+            stepQueueByNode.set(nodeId, [...(stepQueueByNode.get(nodeId) ?? []), result.step.id]);
+          } catch (error) { console.warn("Browser cost step could not be started", error); }
+        },
+
+        onApiRequest: async (nodeId, _config, input, execution) => {
           const { data: sessionData } = await supabase.auth.getSession();
           const token = sessionData?.session?.access_token;
           const response = await fetch(`${supabaseUrl}/functions/v1/workflow-api-request`, {
@@ -1156,6 +1196,8 @@ const ChatDrawer = ({
               result: resultData,
               userMessage: userMsg,
               org_execution_token: orgExecutionToken,
+              ...(costExecution ? { executionId: costExecution.executionId, executionToken: costExecution.executionToken,
+                executionStepId: execution?.operationId ? stepByOperation.get(execution.operationId) : undefined } : {}),
             }),
           });
           const payload = await response.json().catch(() => ({}));
@@ -1227,6 +1269,8 @@ const ChatDrawer = ({
               agentProviders,
               attachment: attachedDocument[0] ?? null,
               attachments: attachedDocument,
+              ...(costExecution ? { executionId: costExecution.executionId, executionToken: costExecution.executionToken,
+                executionStepId: agentConfig.operationId ? stepByOperation.get(agentConfig.operationId) : undefined } : {}),
             }),
           });
 
@@ -1273,7 +1317,17 @@ const ChatDrawer = ({
           return text;
         },
 
-        onStepDone: (step) => {
+        onStepDone: async (step) => {
+          if (costExecution) {
+            const queue = stepQueueByNode.get(step.nodeId) ?? [];
+            const executionStepId = queue.shift(); stepQueueByNode.set(step.nodeId, queue);
+            if (executionStepId) {
+              try { await costControl("step_complete", organizationId, { ...costExecution, stepId: executionStepId,
+                status: step.error ? "failed" : step.output && typeof step.output === "object" && (step.output as Record<string, unknown>).waiting ? "waiting" : "succeeded",
+                durationMs: step.durationMs ?? 0 }, orgExecutionToken); }
+              catch (error) { console.warn("Browser cost step could not be completed", error); }
+            }
+          }
           const label = progressMap.get(step.nodeId) ?? step.nodeType;
           partialResultsRef.current = [...partialResultsRef.current, step];
           if (step.nodeType === "agent" && step.error) throw new Error(step.error);
@@ -1325,6 +1379,8 @@ const ChatDrawer = ({
       });
 
       if (aborted) {
+        if (costExecution) void costControl("finish_execution", organizationId, { ...costExecution, status: "cancelled" }, orgExecutionToken).catch(() => {});
+        setBrowserCostExecution(null);
         exitWorkflowMode();
         // Extract partial accumulated results from collected steps
         const partialSteps = partialResultsRef.current;
@@ -1352,12 +1408,15 @@ const ChatDrawer = ({
           : m
         ));
       } else if (workflowError) {
+        if (costExecution) void costControl("finish_execution", organizationId, { ...costExecution, status: "failed" }, orgExecutionToken).catch(() => {});
+        setBrowserCostExecution(null);
         exitWorkflowMode();
         setMessages((prev) => prev.map((m) => m.id === statusId
           ? { ...m, content: `*Workflow error: ${workflowError}*`, streaming: false }
           : m
         ));
       } else if (waiting) {
+        if (costExecution) void costControl("pause_execution", organizationId, costExecution, orgExecutionToken).catch(() => {});
         setPausedWorkflow({ workflowId: workflowConfig.id, config: workflowConfig, waiting });
         const waitingInput = waiting.input && typeof waiting.input === "object"
           ? waiting.input as Record<string, unknown>
@@ -1386,6 +1445,8 @@ const ChatDrawer = ({
           },
         ]);
       } else {
+        if (costExecution) void costControl("finish_execution", organizationId, { ...costExecution, status: "succeeded" }, orgExecutionToken).catch(() => {});
+        setBrowserCostExecution(null);
         const { text: finalText, renderAs } = getWorkflowFinalOutput(results);
         const outputFormat = renderAs === "update_result" ? "json"
           : renderAs === "auto" ? "mixed"
@@ -1420,6 +1481,8 @@ const ChatDrawer = ({
         ));
       }
     } catch (e) {
+      if (browserCostExecution) void costControl("finish_execution", organizationId, { ...browserCostExecution, status: "failed" }, orgExecutionToken).catch(() => {});
+      setBrowserCostExecution(null);
       exitWorkflowMode();
       setMessages((prev) => prev.map((m) => m.id === statusId
         ? { ...m, content: `*Workflow failed: ${String(e)}*`, streaming: false }
@@ -1430,7 +1493,7 @@ const ChatDrawer = ({
       setIsWorkflowRunning(false);
       setWorkflowProgress(null);
     }
-  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange]);
+  }, [selectedWorkflow, workflows, loadLatestWorkflow, messages, resultData, docText, localAttachments, organizationId, orgExecutionToken, onResultDataChange, targetResourceId, processSessionId, browserCostExecution]);
 
   // One entry per agent: agent name + its top (first) prompt
   const agentMenuItems = agents
@@ -1524,6 +1587,20 @@ const ChatDrawer = ({
     if (container) container.scrollTop = container.scrollHeight;
   }, [isOpen]);
 
+  // Reconnect to a backend run after a refresh, including paused runs.
+  useEffect(() => {
+    if (!isOpen || workflowRunningRef.current || pausedWorkflow) return;
+    const pending = workflows.map((workflow) => ({
+      workflow,
+      runId: workflow.execution?.backendEnabled
+        ? storedBackendRun(backendRunStorageKey(organizationId, workflow.id, processSessionId))
+        : null,
+    })).find((item) => item.runId);
+    if (!pending?.runId || backendReconnectAttemptsRef.current.has(pending.runId)) return;
+    backendReconnectAttemptsRef.current.add(pending.runId);
+    void runWorkflow(undefined, pending.workflow);
+  }, [isOpen, workflows, organizationId, processSessionId, runWorkflow, pausedWorkflow]);
+
   // Auto-run on_load workflows when chat first opens (only once per session)
   const autoFiredRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -1531,7 +1608,11 @@ const ChatDrawer = ({
     const pending = activeWorkflows.filter((wf) => {
       if (autoFiredRef.current.has(wf.id)) return false;
       const trigger = wf.graph.nodes.find((n) => n.type === "trigger");
-      return (trigger?.data as { triggerType?: string } | undefined)?.triggerType === "on_load";
+      if ((trigger?.data as { triggerType?: string } | undefined)?.triggerType !== "on_load") return false;
+      const requirements = workflowInputRequirements(wf);
+      if (requirements.requiresResult && (resultData === null || resultData === undefined)) return false;
+      if (requirements.requiresDocument && !hasDocument) return false;
+      return true;
     });
     for (const wf of pending) {
       autoFiredRef.current.add(wf.id);
@@ -1547,7 +1628,7 @@ const ChatDrawer = ({
     return () => window.clearTimeout(timer);
   // Only fire when isOpen changes or activeWorkflows list changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, activeWorkflows.map((w) => w.id).join(",")]);
+  }, [isOpen, hasDocument, resultData === null || resultData === undefined, activeWorkflows.map((w) => w.id).join(",")]);
 
   // Close both agent pickers when clicking outside
   useEffect(() => {

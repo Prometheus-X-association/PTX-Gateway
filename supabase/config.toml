@@ -47,3 +47,15 @@ verify_jwt = false
 
 [functions.workflow-api-request]
 verify_jwt = false
+
+[functions.workflow-runs]
+verify_jwt = false
+
+[functions.workflow-webhook]
+verify_jwt = false
+
+[functions.workflow-interaction]
+verify_jwt = false
+
+[functions.cost-control]
+verify_jwt = false
