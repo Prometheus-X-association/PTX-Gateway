@@ -177,10 +177,14 @@ const AnalyticsSelection = ({
       };
     }
     // For service chains, show name and description from basis_information
+    // The gateway details dialog renders embedded resources, which include
+    // prerequisite nodes that are nested under a top-level service's `pre`
+    // array. Count the same collection so the badge and dialog stay aligned.
+    const serviceCount = option.data.embedded_resources?.length || option.data.services.length;
     return {
       name: option.data.basis_information?.name || option.data.catalog_id,
       description: option.data.basis_information?.description || "Service chain analytics workflow",
-      provider: `${option.data.services.length} services`,
+      provider: `${serviceCount} service${serviceCount === 1 ? "" : "s"}`,
       queryParams: [] as string[],
       isServiceChain: true
     };
