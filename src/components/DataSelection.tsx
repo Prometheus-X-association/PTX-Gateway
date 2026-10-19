@@ -120,9 +120,12 @@ const DataSelection = ({
       const embeddedResources = [...(selectedAnalytics.data.embedded_resources || [])]
         .sort((a, b) => a.service_index - b.service_index);
       const firstSoftwareIndex = embeddedResources.findIndex((resource) => resource.resource_type === "software");
-      const inputCandidates = firstSoftwareIndex > 0
-        ? embeddedResources.slice(0, firstSoftwareIndex)
-        : embeddedResources;
+      const explicitlyClassifiedInputs = embeddedResources.filter((resource) => resource.chain_role === "input");
+      const inputCandidates = explicitlyClassifiedInputs.length > 0
+        ? explicitlyClassifiedInputs
+        : firstSoftwareIndex > 0
+          ? embeddedResources.slice(0, firstSoftwareIndex)
+          : embeddedResources;
       return inputCandidates
         .filter((r) => r.resource_type === "data")
         .map((r) => embeddedToDataResource(r));

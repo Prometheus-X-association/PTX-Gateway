@@ -42,6 +42,7 @@ interface ResourceParam {
   custom_result_url: string | null;
   result_authorization: string | null;
   result_query_params: Array<{ paramName: string; paramValue: string }>;
+  chain_role?: 'input' | 'intermediate' | 'purpose';
   visible_for_software_ids: string[];
 }
 
@@ -156,6 +157,9 @@ const normalizeEmbeddedResources = (value: unknown): EmbeddedResource[] => {
               })
               .filter((p): p is { paramName: string; paramValue: string } => !!p)
           : [],
+        chain_role: obj.chain_role
+          ? (String(obj.chain_role) as 'input' | 'intermediate' | 'purpose')
+          : undefined,
       };
     })
     .filter((r): r is NonNullable<typeof r> => !!r);
@@ -184,7 +188,7 @@ interface ServiceChainData {
   status: string | null;
   basis_information: Record<string, unknown> | null;
   llm_context?: string | null;
-  services: Array<{ participant: string; service: string; params: string; configuration: string; pre: string[] }> | null;
+  services: Array<{ participant: string; service: string; params: string; configuration: string; pre: unknown[] }> | null;
   is_visible: boolean;
   visualization_type?: VisualizationType | null;
   embedded_resources: EmbeddedResource[];
@@ -285,7 +289,7 @@ const ResourcesConfigSection = () => {
         status: c.status,
         basis_information: c.basis_information as Record<string, unknown> | null,
         llm_context: (c as unknown as { llm_context?: string | null }).llm_context ?? null,
-        services: (c.services as Array<{ participant: string; service: string; params: string; configuration: string; pre: string[] }>) || [],
+        services: (c.services as Array<{ participant: string; service: string; params: string; configuration: string; pre: unknown[] }>) || [],
         is_visible: c.is_visible ?? true,
         visualization_type: c.visualization_type as VisualizationType | null,
         embedded_resources: normalizeEmbeddedResources((c as unknown as { embedded_resources?: unknown }).embedded_resources),

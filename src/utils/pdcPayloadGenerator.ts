@@ -209,9 +209,12 @@ const generateServiceChainPayload = (
   // All leading data nodes are independent inputs. This supports fan-in chains
   // such as data A + data B -> software -> terminal software.
   const firstSoftwareIndex = sortedResources.findIndex((resource) => resource.resource_type === "software");
-  const inputResources = firstSoftwareIndex > 0
-    ? sortedResources.slice(0, firstSoftwareIndex).filter((resource) => resource.resource_type === "data")
-    : [sortedResources[0]];
+  const explicitlyClassifiedInputs = sortedResources.filter((resource) => resource.chain_role === "input");
+  const inputResources = explicitlyClassifiedInputs.length > 0
+    ? explicitlyClassifiedInputs
+    : firstSoftwareIndex > 0
+      ? sortedResources.slice(0, firstSoftwareIndex).filter((resource) => resource.resource_type === "data")
+      : [sortedResources[0]];
   const inputResourceSet = new Set(inputResources);
   const resourcesArray = inputResources.map((resource) => {
     const paramActions = getParamActionsMap(resource.parameters);
@@ -220,7 +223,9 @@ const generateServiceChainPayload = (
   });
 
   // The terminal node remains the purpose/result-producing resource.
-  const lastResource = sortedResources[sortedResources.length - 1];
+  const explicitlyClassifiedPurposes = sortedResources.filter((resource) => resource.chain_role === "purpose");
+  const lastResource = explicitlyClassifiedPurposes[explicitlyClassifiedPurposes.length - 1]
+    ?? sortedResources[sortedResources.length - 1];
   const lastParamActions = getParamActionsMap(lastResource.parameters);
   const lastParams = resourceParams[lastResource.resource_url] || {};
   const purposesArray = sortedResources.length > 1 

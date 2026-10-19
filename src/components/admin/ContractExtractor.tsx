@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { Loader2, Search, Globe, CheckCircle2, AlertCircle, Link2 } from "lucide-react";
 import { Label } from "@/components/ui/label";
+import { ContractChainService, flattenChainServices } from "@/utils/serviceChainGraph";
 
 interface BasisInformation {
   ecosystem: string;
@@ -45,6 +46,7 @@ interface EmbeddedResource {
   result_url_source: 'contract' | 'fallback' | 'custom';
   custom_result_url: string | null;
   result_authorization: string | null;
+  chain_role?: 'input' | 'intermediate' | 'purpose';
 }
 
 interface ExtractedServiceChain {
@@ -114,7 +116,7 @@ const ContractExtractor = ({ onResourcesExtracted, isLoading, existingContractUr
     const contractServiceChains = (contractData.serviceChains || []) as Array<{ 
       catalogId?: string; 
       status?: string; 
-      services?: Array<{ participant?: string; service?: string; params?: string; configuration?: string; pre?: string[] }> 
+      services?: ContractChainService[]
     }>;
     
     for (const chain of contractServiceChains) {
@@ -122,7 +124,7 @@ const ContractExtractor = ({ onResourcesExtracted, isLoading, existingContractUr
         const embeddedResources: EmbeddedResource[] = [];
         
         // Extract resource details for each service in the chain
-        const services = chain.services || [];
+        const services = flattenChainServices(chain.services || []);
         for (let serviceIndex = 0; serviceIndex < services.length; serviceIndex++) {
           const service = services[serviceIndex];
           const serviceOfferingUrl = service.service;
@@ -204,6 +206,11 @@ const ContractExtractor = ({ onResourcesExtracted, isLoading, existingContractUr
                 // Classify by type
                 const typeLower = resourceType.toLowerCase();
                 const isSoftware = typeLower.includes("software") || typeLower.includes("service") || typeLower.includes("application");
+                const chainRole: EmbeddedResource['chain_role'] = !isSoftware
+                  ? 'input'
+                  : serviceIndex === services.length - 1
+                    ? 'purpose'
+                    : 'intermediate';
                 
                 embeddedResources.push({
                   service_index: serviceIndex,
@@ -222,6 +229,7 @@ const ContractExtractor = ({ onResourcesExtracted, isLoading, existingContractUr
                   result_url_source: 'contract',
                   custom_result_url: null,
                   result_authorization: null,
+                  chain_role: chainRole,
                 });
                 } catch (err) {
                   console.warn("Could not fetch resource in service chain:", resourceUrl, err);

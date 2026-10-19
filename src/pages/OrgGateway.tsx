@@ -154,7 +154,7 @@ const parseServices = (data: Json | null): ServiceChain['services'] => {
         service: String(obj.service || ''),
         params: String(obj.params || ''),
         configuration: String(obj.configuration || ''),
-        pre: Array.isArray(obj.pre) ? obj.pre.map(String) : [],
+        pre: Array.isArray(obj.pre) ? (obj.pre as unknown[]) : [],
       };
     }
     return { participant: '', service: '', params: '', configuration: '', pre: [] };
@@ -198,6 +198,9 @@ const parseEmbeddedResources = (data: Json | null): ServiceChain['embedded_resou
               })
               .filter((p) => p.paramName)
           : [],
+        chain_role: obj.chain_role
+          ? (String(obj.chain_role) as 'input' | 'intermediate' | 'purpose')
+          : undefined,
       };
     }
     return {
@@ -218,6 +221,7 @@ const parseEmbeddedResources = (data: Json | null): ServiceChain['embedded_resou
       custom_result_url: null,
       result_authorization: null,
       result_query_params: [],
+      chain_role: undefined,
     };
   }).filter(r => r.resource_url);
 };

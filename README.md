@@ -741,6 +741,10 @@ For standalone software analytics, users may select multiple resources of the sa
 visualization type (for example, two independent upload resources); parameters and
 upload state are retained per resource.
 
+Service-chain extraction recursively expands service objects nested inside `pre`
+prerequisite groups. Data resources discovered there are stored with an explicit
+`input` role, displayed as mandatory data selections, and emitted in `resources`.
+
 ### Flow
 
 ```

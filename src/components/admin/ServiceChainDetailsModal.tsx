@@ -21,7 +21,7 @@ interface ServiceChainService {
   service: string;
   params: string;
   configuration: string;
-  pre: string[];
+  pre: unknown[];
 }
 
 interface EmbeddedResource {
@@ -42,6 +42,7 @@ interface EmbeddedResource {
   custom_result_url: string | null;
   result_authorization: string | null;
   result_query_params: ResultQueryParam[];
+  chain_role?: 'input' | 'intermediate' | 'purpose';
 }
 
 interface ResultQueryParam {
@@ -553,6 +554,11 @@ const ServiceChainDetailsModal = ({ chain, open, onOpenChange, onSave, isSaving 
                                   <Badge variant="outline" className="text-xs">
                                     Step {resource.service_index + 1}
                                   </Badge>
+                                  {resource.chain_role && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {resource.chain_role}
+                                    </Badge>
+                                  )}
                                   {resource.visualization_type && (
                                     <Badge variant="outline" className="text-xs">
                                       {resource.visualization_type}
@@ -566,11 +572,11 @@ const ServiceChainDetailsModal = ({ chain, open, onOpenChange, onSave, isSaving 
                           <CollapsibleContent>
                             <CardContent className="pt-0 pb-4 px-4 space-y-4">
                               {/* Service Reference */}
-                              {service && (
+                              {(resource.service_offering || service) && (
                                 <div className="p-3 rounded-lg bg-muted/50 text-xs">
                                   <p className="text-muted-foreground">
                                     <span className="font-medium">Service URL:</span>{' '}
-                                    <span className="font-mono">{service.service}</span>
+                                    <span className="font-mono">{resource.service_offering || service?.service}</span>
                                   </p>
                                 </div>
                               )}

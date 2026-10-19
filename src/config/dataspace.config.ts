@@ -79,7 +79,7 @@ export interface ServiceChainService {
   service: string;
   params: string;
   configuration: string;
-  pre: string[];
+  pre: unknown[];
 }
 
 // Service Chain extracted from contract

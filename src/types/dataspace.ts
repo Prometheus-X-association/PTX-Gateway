@@ -253,6 +253,7 @@ export interface ServiceChainEmbeddedResource {
   custom_result_url: string | null;
   result_authorization: string | null;
   result_query_params?: ResultQueryParam[];
+  chain_role?: 'input' | 'intermediate' | 'purpose';
 }
 
 // Service Chain Service (from services JSONB array)
@@ -261,7 +262,7 @@ export interface ServiceChainService {
   service: string;
   params: string;
   configuration: string;
-  pre: string[];
+  pre: unknown[];
 }
 
 // Basis Information for service chains
