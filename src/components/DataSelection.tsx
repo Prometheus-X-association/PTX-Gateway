@@ -38,6 +38,8 @@ interface DataSelectionProps {
     selectedDataResources: DataResource[];
     uploadConfig?: UploadConfig;
     uploadResourceParams?: Record<string, string>;
+    resourceParams?: Record<string, Record<string, string>>;
+    uploadConfigs?: Record<string, UploadConfig>;
     manualJsonData?: string;
     serviceChainResourceParams?: Record<string, Record<string, string>>;
     processSessionId?: string;
@@ -112,10 +114,16 @@ const DataSelection = ({
   
   // Determine which data resources to use based on selected analytics
   const effectiveDataResources = useMemo(() => {
-    // Service-chain flow: always expose all embedded data resources directly.
+    // Service-chain flow: expose every leading data input before execution
+    // reaches the first software node.
     if (selectedAnalytics?.type === "serviceChain") {
-      const embeddedResources = selectedAnalytics.data.embedded_resources || [];
-      return embeddedResources
+      const embeddedResources = [...(selectedAnalytics.data.embedded_resources || [])]
+        .sort((a, b) => a.service_index - b.service_index);
+      const firstSoftwareIndex = embeddedResources.findIndex((resource) => resource.resource_type === "software");
+      const inputCandidates = firstSoftwareIndex > 0
+        ? embeddedResources.slice(0, firstSoftwareIndex)
+        : embeddedResources;
+      return inputCandidates
         .filter((r) => r.resource_type === "data")
         .map((r) => embeddedToDataResource(r));
     }
@@ -166,25 +174,18 @@ const DataSelection = ({
     return { uploadResources: uploads, apiResources: apis, manualJsonResources: manualJson };
   }, [effectiveDataResources]);
 
-  // State for selected upload resource
-  const [selectedUploadResource, setSelectedUploadResource] = useState<UploadResource | null>(null);
-  const [files, setFiles] = useState<File[]>([]);
-  const [uploadConfig, setUploadConfig] = useState<UploadConfig | null>(null);
-  const [uploadSuccessful, setUploadSuccessful] = useState(false);
-  
-  // Cache for upload state per resource (preserves data when deselecting/reselecting)
-  const [uploadStateCache, setUploadStateCache] = useState<Record<string, {
-    files: File[];
-    uploadConfig: UploadConfig | null;
-    uploadSuccessful: boolean;
-    params: Record<string, string>;
-  }>>({});
-  
-  // State for upload resource query params (from dataResource config)
-  const [uploadResourceParams, setUploadResourceParams] = useState<Record<string, string>>({});
+  // Upload resources are independent selections. State is keyed by the resource
+  // instance id so two uploads (including repeated URLs in a chain) do not overwrite
+  // one another.
+  const [selectedUploadIds, setSelectedUploadIds] = useState<string[]>([]);
+  const [uploadFiles, setUploadFiles] = useState<Record<string, File[]>>({});
+  const [uploadConfigs, setUploadConfigs] = useState<Record<string, UploadConfig>>({});
+  const [uploadSuccessfulById, setUploadSuccessfulById] = useState<Record<string, boolean>>({});
+  const [uploadParamsById, setUploadParamsById] = useState<Record<string, Record<string, string>>>({});
+  const extractedContentByIdRef = useRef<Record<string, string>>({});
   const [hasUploadAttempted, setHasUploadAttempted] = useState(false);
   const [latestUploadSessionId, setLatestUploadSessionId] = useState<string | null>(null);
-  const [latestUploadParams, setLatestUploadParams] = useState<Record<string, string> | null>(null);
+  const [latestUploadParamsById, setLatestUploadParamsById] = useState<Record<string, Record<string, string>>>({});
   const [showUploadParamsDialog, setShowUploadParamsDialog] = useState(false);
   const [pendingUploadResource, setPendingUploadResource] = useState<UploadResource | null>(null);
   const [isEditingParams, setIsEditingParams] = useState(false);
@@ -250,10 +251,23 @@ const DataSelection = ({
         });
         setApiParams(initialParams);
       }
+
+      // Every data input in a service chain is mandatory, regardless of its
+      // visualization type.
+      setSelectedUploadIds(uploadResources.map(resourceStateKey));
+      setSelectedManualJsonIds(manualJsonResources.map(resourceStateKey));
+      setUploadParamsById((prev) => {
+        const next = { ...prev };
+        uploadResources.forEach((resource) => {
+          const key = resourceStateKey(resource);
+          next[key] = next[key] || getPrefillParamsResolved(resource);
+        });
+        return next;
+      });
       
       setServiceChainInitialized(true);
     }
-  }, [selectedAnalytics, apiResources, serviceChainInitialized, sessionId]);
+  }, [selectedAnalytics, apiResources, uploadResources, manualJsonResources, serviceChainInitialized, sessionId]);
 
   // Reset initialization flag and service chain params when analytics selection changes
   useEffect(() => {
@@ -264,8 +278,8 @@ const DataSelection = ({
   }, [selectedAnalytics]);
 
   // State for manual JSON input
-  const [selectedManualJsonResource, setSelectedManualJsonResource] = useState<ManualJsonResource | null>(null);
-  const [manualJsonData, setManualJsonData] = useState<string>("");
+  const [selectedManualJsonIds, setSelectedManualJsonIds] = useState<string[]>([]);
+  const [manualJsonDataById, setManualJsonDataById] = useState<Record<string, string>>({});
 
   // State for description dialog (custom modal)
   const [descriptionDialog, setDescriptionDialog] = useState<{ open: boolean; title: string; description: string }>({
@@ -314,10 +328,7 @@ const DataSelection = ({
     setDescriptionDialog({ open: true, title, description });
   };
 
-  // Upload config handler (for representation-based config)
-  const handleUploadConfigChange = useCallback((config: UploadConfig) => {
-    setUploadConfig(config);
-  }, []);
+  const resourceStateKey = (resource: { id: string; fullData: DataResource }) => resource.fullData.id || resource.id;
 
   // Get pre-filled params for a resource
   const getPrefillParamsResolved = (resource: UploadResource): Record<string, string> => {
@@ -337,39 +348,14 @@ const DataSelection = ({
 
   // Handle upload resource selection - toggle selection
   const selectUploadResource = (resource: UploadResource) => {
-    // If clicking on already selected resource, deselect it (but cache current state)
-    if (selectedUploadResource?.id === resource.id) {
-      // Cache current state before deselecting
-      setUploadStateCache(prev => ({
-        ...prev,
-        [resource.id]: {
-          files,
-          uploadConfig,
-          uploadSuccessful,
-          params: uploadResourceParams,
-        }
-      }));
-      setSelectedUploadResource(null);
-      setFiles([]);
-      setUploadConfig(null);
-      setUploadResourceParams({});
-      setUploadSuccessful(false);
+    const key = resourceStateKey(resource);
+    if (selectedUploadIds.includes(key)) {
+      // Embedded service-chain inputs are mandatory.
+      if (selectedAnalytics?.type === "serviceChain") return;
+      setSelectedUploadIds((prev) => prev.filter((id) => id !== key));
       return;
     }
-    
-    // Check if we have cached state for this resource
-    const cachedState = uploadStateCache[resource.id];
-    
-    if (cachedState) {
-      // Restore cached state directly
-      setSelectedUploadResource(resource);
-      setFiles(cachedState.files);
-      setUploadConfig(cachedState.uploadConfig);
-      setUploadSuccessful(cachedState.uploadSuccessful);
-      setUploadResourceParams(cachedState.params);
-      return;
-    }
-    
+
     if (resource.queryParams.length > 0 && isDebugMode) {
       // Has queryParams and debug mode - show dialog first (new selection)
       setPendingUploadResource(resource);
@@ -377,12 +363,11 @@ const DataSelection = ({
       
       // Get pre-filled params
       const prefillParams = getPrefillParamsResolved(resource);
-      setUploadResourceParams(prefillParams);
+      setUploadParamsById((prev) => ({ ...prev, [key]: prefillParams }));
       setShowUploadParamsDialog(true);
     } else if (resource.queryParams.length > 0) {
       // Has queryParams but public mode - just pre-fill and select directly
       const prefillParams = getPrefillParamsResolved(resource);
-      setUploadResourceParams(prefillParams);
       confirmUploadResourceSelection(resource, prefillParams);
     } else {
       // No queryParams - select directly
@@ -392,20 +377,19 @@ const DataSelection = ({
 
   // Open params dialog for editing existing selection
   const openParamsForEditing = (resource: UploadResource) => {
+    const key = resourceStateKey(resource);
     setPendingUploadResource(resource);
     setIsEditingParams(true);
-    setPreviousParams({ ...uploadResourceParams });
+    setPreviousParams({ ...(uploadParamsById[key] || {}) });
     setShowUploadParamsDialog(true);
   };
 
   const confirmUploadResourceSelection = (resource: UploadResource, params?: Record<string, string>) => {
-    setSelectedUploadResource(resource);
+    const key = resourceStateKey(resource);
+    setSelectedUploadIds((prev) => prev.includes(key) ? prev : [...prev, key]);
     if (params !== undefined) {
-      setUploadResourceParams(params);
+      setUploadParamsById((prev) => ({ ...prev, [key]: params }));
     }
-    setFiles([]);
-    setUploadConfig(null);
-    setUploadSuccessful(false);
     setShowUploadParamsDialog(false);
     setPendingUploadResource(null);
     setIsEditingParams(false);
@@ -417,7 +401,7 @@ const DataSelection = ({
     const totalOptions = uploadResources.length + apiResources.length + manualJsonResources.length;
     if (totalOptions !== 1) return;
 
-    if (uploadResources.length === 1 && !selectedUploadResource) {
+    if (uploadResources.length === 1 && selectedUploadIds.length === 0) {
       const resource = uploadResources[0];
       const prefillParams = resource.queryParams.length > 0 ? getPrefillParamsResolved(resource) : undefined;
       confirmUploadResourceSelection(resource, prefillParams);
@@ -439,18 +423,17 @@ const DataSelection = ({
       return;
     }
 
-    if (manualJsonResources.length === 1 && !selectedManualJsonResource) {
-      setSelectedManualJsonResource(manualJsonResources[0]);
-      setManualJsonData("");
+    if (manualJsonResources.length === 1 && selectedManualJsonIds.length === 0) {
+      setSelectedManualJsonIds([resourceStateKey(manualJsonResources[0])]);
     }
   }, [
     isDebugMode,
     uploadResources,
     apiResources,
     manualJsonResources,
-    selectedUploadResource,
+    selectedUploadIds.length,
     selectedApis.length,
-    selectedManualJsonResource,
+    selectedManualJsonIds.length,
     sessionId,
   ]);
 
@@ -461,7 +444,8 @@ const DataSelection = ({
         setPendingUploadResource(null);
         setIsEditingParams(false);
       } else {
-        confirmUploadResourceSelection(pendingUploadResource, uploadResourceParams);
+        const key = resourceStateKey(pendingUploadResource);
+        confirmUploadResourceSelection(pendingUploadResource, uploadParamsById[key] || {});
       }
     }
   };
@@ -470,9 +454,10 @@ const DataSelection = ({
     setShowUploadParamsDialog(false);
     setPendingUploadResource(null);
     if (isEditingParams) {
-      setUploadResourceParams(previousParams);
-    } else {
-      setUploadResourceParams({});
+      if (pendingUploadResource) {
+        const key = resourceStateKey(pendingUploadResource);
+        setUploadParamsById((prev) => ({ ...prev, [key]: previousParams }));
+      }
     }
     setIsEditingParams(false);
   };
@@ -483,10 +468,20 @@ const DataSelection = ({
     }
   }, []);
 
-  const handleUploadSessionResolved = useCallback((resolvedSessionId: string, params: Record<string, string>) => {
+  const handleUploadSessionResolved = useCallback((resourceKey: string, resolvedSessionId: string, params: Record<string, string>, regenerated: boolean) => {
     setLatestUploadSessionId(resolvedSessionId);
-    setLatestUploadParams(params);
+    setLatestUploadParamsById((prev) => ({ ...prev, [resourceKey]: params }));
+    if (regenerated) {
+      // Other completed uploads belong to the previous generated session and
+      // must be uploaded again before a mandatory multi-input flow can run.
+      setUploadSuccessfulById({});
+    }
   }, []);
+
+  const handleExtractedContent = useCallback((resourceKey: string, content: string) => {
+    extractedContentByIdRef.current = { ...extractedContentByIdRef.current, [resourceKey]: content };
+    onExtractedContent?.(Object.values(extractedContentByIdRef.current).filter(Boolean).join("\n\n"));
+  }, [onExtractedContent]);
 
   const handleBack = useCallback(() => {
     if (hasUploadAttempted) {
@@ -496,56 +491,68 @@ const DataSelection = ({
   }, [hasUploadAttempted, onBack, resetSession]);
 
   const handleContinue = useCallback(() => {
-    if (selectedUploadResource && hasUploadAttempted && latestUploadSessionId) {
-      const sessionParamNames = (selectedUploadResource.fullData.parameters || [])
-        .filter((param) => param.paramValue === "#genSessionId")
-        .map((param) => param.paramName);
-
-      const paramsToCheck = latestUploadParams ?? uploadResourceParams;
-      const hasMismatch = sessionParamNames.some(
-        (paramName) => paramsToCheck[paramName] !== latestUploadSessionId
-      );
-
-      if (hasMismatch) {
-        toast({
-          title: "Session mismatch detected",
-          description: "Upload session parameter does not match the active generated session. Please try Convert again.",
-          variant: "destructive",
-        });
-        return;
+    const effectiveResourceParams: Record<string, Record<string, string>> = { ...apiParams };
+    uploadResources.forEach((resource) => {
+      const key = resourceStateKey(resource);
+      if (!selectedUploadIds.includes(key)) return;
+      effectiveResourceParams[key] = latestUploadParamsById[key] || uploadParamsById[key] || {};
+    });
+    manualJsonResources.forEach((resource) => {
+      const key = resourceStateKey(resource);
+      if (selectedManualJsonIds.includes(key)) {
+        effectiveResourceParams[key] = getPrefillParamsResolved(resource);
       }
-    }
+    });
 
-    const effectiveUploadParams = latestUploadParams && Object.keys(latestUploadParams).length > 0
-      ? latestUploadParams
-      : uploadResourceParams;
+    const selectedUploads = uploadResources.filter((resource) => selectedUploadIds.includes(resourceStateKey(resource)));
+    const allFiles = selectedUploads.flatMap((resource) => uploadFiles[resourceStateKey(resource)] || []);
+    const firstUpload = selectedUploads[0];
+    const firstUploadKey = firstUpload ? resourceStateKey(firstUpload) : undefined;
+    const selectedManualData = manualJsonResources
+      .filter((resource) => selectedManualJsonIds.includes(resourceStateKey(resource)))
+      .map((resource) => manualJsonDataById[resourceStateKey(resource)] || "")
+      .filter(Boolean)
+      .join("\n\n");
 
     onNext({ 
-      files, 
+      files: allFiles,
       apis: selectedApis, 
-      textData: manualJsonData,
+      textData: selectedManualData,
       customApiUrl, 
       apiParams,
       selectedDataResources: getSelectedDataResources(),
-      uploadConfig: uploadConfig || undefined,
-      uploadResourceParams: Object.keys(effectiveUploadParams).length > 0 ? effectiveUploadParams : undefined,
-      manualJsonData: manualJsonData || undefined,
-      serviceChainResourceParams: Object.keys(serviceChainResourceParams).length > 0 ? serviceChainResourceParams : undefined,
+      uploadConfig: firstUploadKey ? uploadConfigs[firstUploadKey] : undefined,
+      uploadConfigs,
+      uploadResourceParams: firstUploadKey ? effectiveResourceParams[firstUploadKey] : undefined,
+      resourceParams: effectiveResourceParams,
+      manualJsonData: selectedManualData || undefined,
+      serviceChainResourceParams: selectedAnalytics?.type === "serviceChain"
+        ? { ...serviceChainResourceParams, ...Object.fromEntries(
+            [...selectedUploads, ...apiResources].map((resource) => {
+              const key = resourceStateKey(resource);
+              return [resource.id, effectiveResourceParams[key] || effectiveResourceParams[resource.id] || {}];
+            })
+          ) }
+        : undefined,
       processSessionId: latestUploadSessionId ?? sessionId,
     });
   }, [
-    selectedUploadResource,
-    hasUploadAttempted,
     latestUploadSessionId,
-    latestUploadParams,
-    uploadResourceParams,
-    files,
+    latestUploadParamsById,
+    uploadParamsById,
+    uploadFiles,
+    uploadConfigs,
+    selectedUploadIds,
+    selectedManualJsonIds,
+    manualJsonDataById,
+    uploadResources,
+    manualJsonResources,
+    apiResources,
     selectedApis,
-    manualJsonData,
     customApiUrl,
     apiParams,
-    uploadConfig,
     serviceChainResourceParams,
+    selectedAnalytics,
     sessionId,
     onNext,
   ]);
@@ -583,14 +590,12 @@ const DataSelection = ({
 
   // Handle manual JSON resource selection - toggle
   const selectManualJsonResource = (resource: ManualJsonResource) => {
-    if (selectedManualJsonResource?.id === resource.id) {
-      // Deselect
-      setSelectedManualJsonResource(null);
-      setManualJsonData("");
+    const key = resourceStateKey(resource);
+    if (selectedManualJsonIds.includes(key)) {
+      if (selectedAnalytics?.type === "serviceChain") return;
+      setSelectedManualJsonIds((prev) => prev.filter((id) => id !== key));
     } else {
-      // Select new resource
-      setSelectedManualJsonResource(resource);
-      setManualJsonData("");
+      setSelectedManualJsonIds((prev) => [...prev, key]);
     }
   };
 
@@ -617,9 +622,12 @@ const DataSelection = ({
       return resource;
     };
     
-    if (selectedUploadResource && files.length > 0) {
-      resources.push(applyOverrides(selectedUploadResource.fullData));
-    }
+    uploadResources.forEach((resource) => {
+      const key = resourceStateKey(resource);
+      if (selectedUploadIds.includes(key) && (uploadFiles[key] || []).length > 0) {
+        resources.push(applyOverrides(resource.fullData));
+      }
+    });
     
     selectedApis.forEach((apiId) => {
       const api = apiResources.find((a) => a.id === apiId);
@@ -629,17 +637,34 @@ const DataSelection = ({
     });
 
     // Include manual JSON resource if selected and has valid data
-    if (selectedManualJsonResource && isManualJsonValid(manualJsonData)) {
-      resources.push(applyOverrides(selectedManualJsonResource.fullData));
-    }
+    manualJsonResources.forEach((resource) => {
+      const key = resourceStateKey(resource);
+      if (selectedManualJsonIds.includes(key) && isManualJsonValid(manualJsonDataById[key] || "")) {
+        resources.push(applyOverrides(resource.fullData));
+      }
+    });
     
     return resources;
   };
 
   // Determine if user can proceed
-  const uploadDataReady = selectedUploadResource ? (files.length > 0 && uploadSuccessful) : false;
-  const manualJsonReady = selectedManualJsonResource ? isManualJsonValid(manualJsonData) : false;
-  const hasData = uploadDataReady || selectedApis.length > 0 || customApiUrl.trim() !== "" || manualJsonReady;
+  const selectedUploadKeys = uploadResources.map(resourceStateKey).filter((key) => selectedUploadIds.includes(key));
+  const selectedManualKeys = manualJsonResources.map(resourceStateKey).filter((key) => selectedManualJsonIds.includes(key));
+  const uploadDataReady = selectedUploadKeys.length > 0 && selectedUploadKeys.every(
+    (key) => (uploadFiles[key] || []).length > 0 && uploadSuccessfulById[key]
+  );
+  const manualJsonReady = selectedManualKeys.length > 0 && selectedManualKeys.every(
+    (key) => isManualJsonValid(manualJsonDataById[key] || "")
+  );
+  const serviceChainDataReady = selectedAnalytics?.type === "serviceChain"
+    ? (uploadResources.length === 0 || uploadDataReady) &&
+      (manualJsonResources.length === 0 || manualJsonReady) &&
+      selectedApis.length === apiResources.length &&
+      effectiveDataResources.length > 0
+    : false;
+  const hasData = selectedAnalytics?.type === "serviceChain"
+    ? serviceChainDataReady
+    : uploadDataReady || selectedApis.length > 0 || customApiUrl.trim() !== "" || manualJsonReady;
   const selectedAnalyticsId = selectedAnalytics?.type === "software"
     ? selectedAnalytics.data.id
     : selectedAnalytics?.type === "serviceChain"
@@ -684,7 +709,8 @@ const DataSelection = ({
               {/* Upload Resource Selection */}
               <div className="space-y-3">
               {uploadResources.map((resource) => {
-                  const isSelected = selectedUploadResource?.id === resource.id;
+                  const resourceKey = resourceStateKey(resource);
+                  const isSelected = selectedUploadIds.includes(resourceKey);
                   const hasParams = resource.queryParams.length > 0;
                   const params = resource.fullData.parameters || [];
                   const paramActionsMap = getParamActionsMapFromParams(params);
@@ -859,21 +885,22 @@ const DataSelection = ({
                         <DocumentUploadZone
                           resource={{
                             ...resource,
+                            id: resourceKey,
                             contract: resource.fullData.contract_url,
                             uploadUrl: resource.fullData.upload_url,
                             uploadAuthorization: resource.fullData.upload_authorization,
                             parameters: resource.fullData.parameters,
                           }}
-                          files={files}
-                          onFilesChange={setFiles}
-                          onUploadConfigChange={handleUploadConfigChange}
-                          paramValues={uploadResourceParams}
-                          onParamValuesChange={setUploadResourceParams}
-                          onUploadSuccess={() => setUploadSuccessful(true)}
-                          onExtractedContent={onExtractedContent}
-                          onUploadReset={() => setUploadSuccessful(false)}
+                          files={uploadFiles[resourceKey] || []}
+                          onFilesChange={(nextFiles) => setUploadFiles((prev) => ({ ...prev, [resourceKey]: nextFiles }))}
+                          onUploadConfigChange={(config) => setUploadConfigs((prev) => ({ ...prev, [resourceKey]: config }))}
+                          paramValues={uploadParamsById[resourceKey] || {}}
+                          onParamValuesChange={(params) => setUploadParamsById((prev) => ({ ...prev, [resourceKey]: params }))}
+                          onUploadSuccess={() => setUploadSuccessfulById((prev) => ({ ...prev, [resourceKey]: true }))}
+                          onExtractedContent={(content) => handleExtractedContent(resourceKey, content)}
+                          onUploadReset={() => setUploadSuccessfulById((prev) => ({ ...prev, [resourceKey]: false }))}
                           onUploadAttempt={handleUploadAttempt}
-                          onUploadSessionResolved={handleUploadSessionResolved}
+                          onUploadSessionResolved={(resolvedSessionId, params, regenerated) => handleUploadSessionResolved(resourceKey, resolvedSessionId, params, regenerated)}
                           isDebugMode={isDebugMode}
                           uploadAllowMultipleFiles={dataSelectionSettings?.uploadAllowMultipleFiles ?? true}
                           uploadMaxFiles={dataSelectionSettings?.uploadMaxFiles ?? 10}
@@ -900,13 +927,14 @@ const DataSelection = ({
             {/* Manual JSON Resource Selection */}
             <div className="space-y-3">
               {manualJsonResources.map((resource) => {
-                const isSelected = selectedManualJsonResource?.id === resource.id;
+                const resourceKey = resourceStateKey(resource);
+                const isSelected = selectedManualJsonIds.includes(resourceKey);
                 const hasParams = resource.queryParams.length > 0;
                 const params = resource.fullData.parameters || [];
                 
                 return (
+                  <div key={resourceKey} className="space-y-3">
                   <div
-                    key={resource.id}
                     onClick={() => selectManualJsonResource(resource)}
                     className={`analytics-card py-4 ${isSelected ? "selected" : ""}`}
                   >
@@ -1035,19 +1063,18 @@ const DataSelection = ({
                       </div>
                     </div>
                   </div>
+                  {isSelected && (
+                    <ManualJsonInput
+                      value={manualJsonDataById[resourceKey] || ""}
+                      onChange={(value) => setManualJsonDataById((prev) => ({ ...prev, [resourceKey]: value }))}
+                      resourceName={resource.name}
+                      resourceDescription={resource.description}
+                    />
+                  )}
+                  </div>
                 );
               })}
             </div>
-
-            {/* Manual JSON Input Component - Only show when resource is selected */}
-            {selectedManualJsonResource && (
-              <ManualJsonInput
-                value={manualJsonData}
-                onChange={setManualJsonData}
-                resourceName={selectedManualJsonResource.name}
-                resourceDescription={selectedManualJsonResource.description}
-              />
-            )}
           </div>
         )}
 
@@ -1183,8 +1210,14 @@ const DataSelection = ({
                   <Input
                     id={`upload-${param}`}
                     placeholder={`Enter ${param}`}
-                    value={uploadResourceParams[param] || ""}
-                    onChange={(e) => setUploadResourceParams(prev => ({ ...prev, [param]: e.target.value }))}
+                    value={uploadParamsById[resourceStateKey(pendingUploadResource)]?.[param] || ""}
+                    onChange={(e) => {
+                      const key = resourceStateKey(pendingUploadResource);
+                      setUploadParamsById((prev) => ({
+                        ...prev,
+                        [key]: { ...(prev[key] || {}), [param]: e.target.value },
+                      }));
+                    }}
                   />
                 </div>
               ))}

@@ -731,10 +731,15 @@ PDF export generates a print-ready report tab containing:
 
 **Software Analytics**: Maps selected analytics to `purposes`, selected data resources to `resources`.
 
-**Service Chain Analytics**: Maps embedded resources by `service_index`:
-- First resource → `resources` array
+**Service Chain Analytics**: Sorts embedded resources by `service_index` and supports fan-in chains:
+- All leading data resources before the first software node → `resources` array
 - Last resource → `purposes` array
-- Middle resources → `serviceChainParams` array
+- Remaining intermediate resources → `serviceChainParams` array
+
+The data-selection page treats all service-chain input data resources as mandatory.
+For standalone software analytics, users may select multiple resources of the same
+visualization type (for example, two independent upload resources); parameters and
+upload state are retained per resource.
 
 ### Flow
 

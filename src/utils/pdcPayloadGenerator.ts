@@ -67,7 +67,8 @@ export const generatePdcPayload = (
   apiParams: Record<string, Record<string, string>>,
   uploadResourceParams: Record<string, string> | undefined,
   sessionId: string,
-  serviceChainResourceParams?: Record<string, Record<string, string>>
+  serviceChainResourceParams?: Record<string, Record<string, string>>,
+  resourceParams?: Record<string, Record<string, string>>
 ): PdcPayload => {
   // Handle service chain analytics
   if (selectedAnalytics.type === "serviceChain") {
@@ -139,18 +140,24 @@ export const generatePdcPayload = (
   selectedDataResources.forEach((dataResource) => {
     let rawParams: Record<string, string> = {};
 
-    if (dataResource.upload_file && uploadResourceParams) {
+    const resourceSpecificParams =
+      resourceParams?.[dataResource.id] ?? resourceParams?.[dataResource.resource_url];
+
+    if (resourceSpecificParams) {
+      rawParams = { ...resourceSpecificParams };
+    } else if (dataResource.upload_file && uploadResourceParams) {
+      // Backwards compatibility for selections created before per-resource params existed.
       rawParams = { ...uploadResourceParams };
     }
 
-    if (!dataResource.upload_file && apiParams[dataResource.resource_url]) {
+    if (!resourceSpecificParams && !dataResource.upload_file && apiParams[dataResource.resource_url]) {
       rawParams = { ...apiParams[dataResource.resource_url] };
     }
 
     const resourceParamActions = getParamActionsMap(dataResource.parameters);
     const resolvedRawParams = forceSessionIdParams(rawParams, dataResource.parameters, sessionId);
     const sanitizedParams = sanitizeParams(resolvedRawParams, sessionId, true, "payload", resourceParamActions);
-    const resourceParams = Object.entries(sanitizedParams).map(([key, value]) => ({
+    const resourceParamEntries = Object.entries(sanitizedParams).map(([key, value]) => ({
       [key]: value,
     }));
 
@@ -161,9 +168,9 @@ export const generatePdcPayload = (
       resource: dataResource.resource_url,
     };
 
-    if (resourceParams.length > 0) {
+    if (resourceParamEntries.length > 0) {
       resourceEntry.params = {
-        query: resourceParams,
+        query: resourceParamEntries,
       };
     }
 
@@ -199,13 +206,20 @@ const generateServiceChainPayload = (
     };
   }
 
-  // First resource goes to resources array
-  const firstResource = sortedResources[0];
-  const firstParamActions = getParamActionsMap(firstResource.parameters);
-  const firstParams = resourceParams[firstResource.resource_url] || {};
-  const resourcesArray = [buildResourceEntry(firstResource.resource_url, firstParams, firstResource.parameters, firstParamActions, sessionId)];
+  // All leading data nodes are independent inputs. This supports fan-in chains
+  // such as data A + data B -> software -> terminal software.
+  const firstSoftwareIndex = sortedResources.findIndex((resource) => resource.resource_type === "software");
+  const inputResources = firstSoftwareIndex > 0
+    ? sortedResources.slice(0, firstSoftwareIndex).filter((resource) => resource.resource_type === "data")
+    : [sortedResources[0]];
+  const inputResourceSet = new Set(inputResources);
+  const resourcesArray = inputResources.map((resource) => {
+    const paramActions = getParamActionsMap(resource.parameters);
+    const params = resourceParams[resource.resource_url] || {};
+    return buildResourceEntry(resource.resource_url, params, resource.parameters, paramActions, sessionId);
+  });
 
-  // Last resource goes to purposes array
+  // The terminal node remains the purpose/result-producing resource.
   const lastResource = sortedResources[sortedResources.length - 1];
   const lastParamActions = getParamActionsMap(lastResource.parameters);
   const lastParams = resourceParams[lastResource.resource_url] || {};
@@ -219,8 +233,8 @@ const generateServiceChainPayload = (
     params?: { query: Array<Record<string, string>> };
   }> = [];
 
-  for (let i = 1; i < sortedResources.length - 1; i++) {
-    const middleResource = sortedResources[i];
+  for (const middleResource of sortedResources) {
+    if (inputResourceSet.has(middleResource) || middleResource === lastResource) continue;
     const middleParamActions = getParamActionsMap(middleResource.parameters);
     const middleParams = resourceParams[middleResource.resource_url] || {};
     serviceChainParams.push(

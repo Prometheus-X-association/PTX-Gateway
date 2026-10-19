@@ -132,9 +132,7 @@ const ContractExtractor = ({ onResourcesExtracted, isLoading, existingContractUr
               const serviceOfferingData = await fetchJson(serviceOfferingUrl) as Record<string, unknown>;
               const aggregationOf = (serviceOfferingData.aggregationOf || []) as string[];
               
-              // Only take the first resource from aggregationOf for service chains
-              const firstResourceUrl = aggregationOf[0];
-              if (!firstResourceUrl) {
+              if (aggregationOf.length === 0) {
                 console.warn("No resources in aggregationOf for service:", serviceOfferingUrl);
                 continue;
               }
@@ -151,9 +149,11 @@ const ContractExtractor = ({ onResourcesExtracted, isLoading, existingContractUr
                 }
               }
               
-              // Extract only the first resource in the service offering
-              try {
-                const resourceData = await fetchJson(firstResourceUrl) as Record<string, unknown>;
+              // A service offering can contribute multiple resources (for example,
+              // two mandatory data inputs feeding the next software node).
+              for (const resourceUrl of aggregationOf) {
+                try {
+                const resourceData = await fetchJson(resourceUrl) as Record<string, unknown>;
                 
                 const name = (resourceData.name as string) || "";
                 const description = (resourceData.description as string) || "";
@@ -208,7 +208,7 @@ const ContractExtractor = ({ onResourcesExtracted, isLoading, existingContractUr
                 embeddedResources.push({
                   service_index: serviceIndex,
                   resource_type: isSoftware ? 'software' : 'data',
-                  resource_url: firstResourceUrl,
+                  resource_url: resourceUrl,
                   contract_url: contractUrl,
                   resource_name: name,
                   resource_description: description,
@@ -223,8 +223,9 @@ const ContractExtractor = ({ onResourcesExtracted, isLoading, existingContractUr
                   custom_result_url: null,
                   result_authorization: null,
                 });
-              } catch (err) {
-                console.warn("Could not fetch resource in service chain:", firstResourceUrl, err);
+                } catch (err) {
+                  console.warn("Could not fetch resource in service chain:", resourceUrl, err);
+                }
               }
             } catch (err) {
               console.warn("Could not fetch service offering in chain:", serviceOfferingUrl, err);

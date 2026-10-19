@@ -52,7 +52,8 @@ export const resolveResultUrl = (
   uploadResourceParams?: Record<string, string>,
   sessionId?: string,
   fallbackResultUrl?: string,
-  fallbackResultAuthorization?: string
+  fallbackResultAuthorization?: string,
+  resourceParams?: Record<string, Record<string, string>>
 ): ResultUrlInfo | null => {
   // Handle service chain analytics
   if (selectedAnalytics.type === "serviceChain") {
@@ -181,8 +182,9 @@ export const resolveResultUrl = (
         });
         
         // Check if this is an upload resource
-        if (dataResource.upload_file && uploadResourceParams) {
-          Object.entries(uploadResourceParams).forEach(([key, value]) => {
+        const selectedResourceParams = resourceParams?.[dataResource.id] ?? resourceParams?.[dataResource.resource_url];
+        if (dataResource.upload_file && (selectedResourceParams || uploadResourceParams)) {
+          Object.entries(selectedResourceParams || uploadResourceParams || {}).forEach(([key, value]) => {
             params[key] = value;
           });
         }

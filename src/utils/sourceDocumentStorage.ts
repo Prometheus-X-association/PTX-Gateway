@@ -4,6 +4,7 @@ export interface StoredSourceDocument {
   size: number;
   base64: string;
   storedAt: string;
+  sourceKey?: string;
 }
 
 interface SourceDocumentRecord {
@@ -159,7 +160,7 @@ const saveLegacyDocuments = (sessionId: string, documents: StoredSourceDocument[
   localStorage.setItem(storageKey(sessionId), JSON.stringify(documents));
 };
 
-export const saveSourceDocuments = async (sessionId: string, files: File[]): Promise<StoredSourceDocument[]> => {
+export const saveSourceDocuments = async (sessionId: string, files: File[], sourceKey?: string): Promise<StoredSourceDocument[]> => {
   if (!sessionId || typeof window === "undefined") return [];
   const supported = files.filter((file) => file.size <= MAX_DOCUMENT_BYTES);
   const documents = await Promise.all(supported.map(async (file) => ({
@@ -168,15 +169,20 @@ export const saveSourceDocuments = async (sessionId: string, files: File[]): Pro
     size: file.size,
     base64: await fileToBase64(file),
     storedAt: new Date().toISOString(),
+    sourceKey,
   })));
   if (documents.length === 0) {
-    await clearSourceDocuments(sessionId);
     return [];
   }
 
+  const existingDocuments = await loadSourceDocuments(sessionId);
+  const retainedDocuments = sourceKey
+    ? existingDocuments.filter((document) => document.sourceKey !== sourceKey)
+    : [];
+
   const record: SourceDocumentRecord = {
     sessionId,
-    documents,
+    documents: [...retainedDocuments, ...documents],
     savedAt: new Date().toISOString(),
   };
 

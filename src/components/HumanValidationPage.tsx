@@ -14,6 +14,7 @@ interface HumanValidationPageProps {
     apiParams: Record<string, Record<string, string>>;
     selectedDataResources: DataResource[];
     uploadResourceParams?: Record<string, string>;
+    resourceParams?: Record<string, Record<string, string>>;
     serviceChainResourceParams?: Record<string, Record<string, string>>;
   };
   selectedAnalytics: AnalyticsOption;
@@ -171,7 +172,10 @@ const HumanValidationPage = ({
       selectedData.selectedDataResources,
       selectedData.apiParams,
       selectedData.uploadResourceParams,
-      sessionId
+      sessionId,
+      undefined,
+      undefined,
+      selectedData.resourceParams
     );
   }, [selectedAnalytics, selectedData, sessionId]);
 
@@ -183,7 +187,8 @@ const HumanValidationPage = ({
       selectedData.apiParams,
       selectedData.uploadResourceParams,
       sessionId,
-      selectedData.serviceChainResourceParams
+      selectedData.serviceChainResourceParams,
+      selectedData.resourceParams
     );
   }, [selectedAnalytics, analyticsQueryParams, selectedData, sessionId]);
 

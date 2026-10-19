@@ -28,6 +28,8 @@ interface SelectedDataType {
   selectedDataResources: DataResource[];
   uploadConfig?: UploadConfig;
   uploadResourceParams?: Record<string, string>;
+  resourceParams?: Record<string, Record<string, string>>;
+  uploadConfigs?: Record<string, UploadConfig>;
   manualJsonData?: string;
   serviceChainResourceParams?: Record<string, Record<string, string>>;
   processSessionId?: string;
@@ -448,7 +450,8 @@ const EmbedGatewayContent = () => {
       selectedData.apiParams,
       selectedData.uploadResourceParams,
       activeProcessSessionId,
-      selectedData.serviceChainResourceParams
+      selectedData.serviceChainResourceParams,
+      selectedData.resourceParams
     );
   }, [selectedAnalytics, selectedData, effectiveAnalyticsQueryParams, activeProcessSessionId]);
 
@@ -461,7 +464,8 @@ const EmbedGatewayContent = () => {
       selectedData.uploadResourceParams,
       activeProcessSessionId,
       pdcConfig?.fallback_result_url || undefined,
-      pdcConfig?.fallback_result_authorization || undefined
+      pdcConfig?.fallback_result_authorization || undefined,
+      selectedData.resourceParams
     );
   }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig]);
 

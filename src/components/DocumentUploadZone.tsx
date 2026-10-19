@@ -10,7 +10,7 @@ import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { getParamActionsMap } from "@/types/dataspace";
 import { sanitizeParams } from "@/utils/paramSanitizer";
 import { extractPdfText } from "@/lib/pdfTextExtractor";
-import { clearSourceDocuments, saveSourceDocuments } from "@/utils/sourceDocumentStorage";
+import { saveSourceDocuments } from "@/utils/sourceDocumentStorage";
 import { clearAllRagDocsFromStorage } from "@/utils/ragDocStorage";
 
 interface DocumentUploadZoneProps {
@@ -233,7 +233,6 @@ const DocumentUploadZone = ({
       uploadAttemptCountRef.current = attemptCount;
       onUploadAttempt?.(attemptCount);
       onUploadSessionResolved?.(effectiveSessionId, effectiveParamValues, shouldRegenerate);
-      await clearSourceDocuments(effectiveSessionId);
       clearAllRagDocsFromStorage();
 
       // Sanitize params - filter out #ignoreFlowData params
@@ -296,7 +295,7 @@ const DocumentUploadZone = ({
         const rawSourceText = await extractRawSourceText(files);
         onExtractedContent?.(rawSourceText);
         try {
-          const storedDocuments = await saveSourceDocuments(effectiveSessionId, files);
+          const storedDocuments = await saveSourceDocuments(effectiveSessionId, files, resource.id);
           if (storedDocuments.length < files.length) {
             toast({
               title: "Some source files were not retained",
