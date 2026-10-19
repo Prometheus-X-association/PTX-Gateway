@@ -14,7 +14,7 @@ import { useDataspaceConfig } from "@/hooks/useDataspaceConfig";
 import { AnalyticsOption, CredentialPluginConfig, DataResource, ServiceChain, SoftwareResource, getParamValuesMap } from "@/types/dataspace";
 import { UploadConfig } from "@/components/DocumentUploadZone";
 import { supabase } from "@/integrations/supabase/client";
-import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { resolveRuntimePlaceholder } from "@/utils/placeholders";
 import { applyOrganizationVisualizationSettings, VisualizationSettings } from "@/utils/visualizationSettings";
 import GatewayHeader from "@/components/GatewayHeader";
 import { resolveChatUploadConfig } from "@/utils/chatUploadConfig";
@@ -80,6 +80,7 @@ const buildPreselectedQueryParams = (
   searchParams: URLSearchParams,
   option: AnalyticsOption,
   sessionId: string,
+  placeholderValues: Record<string, string>,
 ): Record<string, string> => {
   if (option.type !== "software") return {};
 
@@ -87,7 +88,7 @@ const buildPreselectedQueryParams = (
   const next: Record<string, string> = {};
 
   Object.entries(defaults).forEach(([key, value]) => {
-    next[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+    next[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
   });
 
   Object.keys(defaults).forEach((key) => {
@@ -141,6 +142,7 @@ const EmbedGatewayContent = () => {
     serviceChains,
     customVisualizations,
     processingPageSettings,
+    placeholderValues,
     isLoading 
   } = useDataspaceConfig(validatedOrgId, {
     enabled: embedAllowed && !!validatedOrgId,
@@ -465,9 +467,10 @@ const EmbedGatewayContent = () => {
       activeProcessSessionId,
       pdcConfig?.fallback_result_url || undefined,
       pdcConfig?.fallback_result_authorization || undefined,
-      selectedData.resourceParams
+      selectedData.resourceParams,
+      placeholderValues,
     );
-  }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig]);
+  }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig, placeholderValues]);
 
   const llmPromptContext = useMemo(() => {
     if (!selectedAnalytics) return null;
@@ -486,7 +489,7 @@ const EmbedGatewayContent = () => {
     setSessionDocText(null);
     if (preselected) {
       setSelectedAnalytics(preselected);
-      setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
+      setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId, placeholderValues));
       goToStep(getStepIndex("Choose Data"));
       return;
     }
@@ -604,7 +607,7 @@ const EmbedGatewayContent = () => {
 
     resetSession();
     setSelectedAnalytics(preselected);
-    setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
+    setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId, placeholderValues));
     goToStep(getStepIndex("Choose Data"));
   }, [
     skipSelection,
@@ -614,6 +617,7 @@ const EmbedGatewayContent = () => {
     serviceChains,
     resetSession,
     sessionId,
+    placeholderValues,
     goToStep,
   ]);
 
@@ -706,6 +710,7 @@ const EmbedGatewayContent = () => {
               softwareResources={softwareResources}
               serviceChains={serviceChains}
               credentialPlugins={credentialPlugins}
+              placeholderValues={placeholderValues}
             />
           )}
           {getCurrentStepName() === "Choose Data" && (
@@ -714,6 +719,7 @@ const EmbedGatewayContent = () => {
               onBack={() => goToStep(getStepIndex("Select Type"))}
               dataResources={dataResources}
               selectedAnalytics={selectedAnalytics}
+              placeholderValues={placeholderValues}
               onExtractedContent={setSessionDocText}
             />
           )}

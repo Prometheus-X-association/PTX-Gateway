@@ -6,7 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useProcessSession } from "@/contexts/ProcessSessionContext";
 import { ResourceParameter, getParamValuesMap } from "@/types/dataspace";
-import { isSessionIdPlaceholder, resolveParamValue } from "@/utils/paramSanitizer";
+import { resolveParamValue } from "@/utils/paramSanitizer";
+import { resolveRuntimePlaceholder } from "@/utils/placeholders";
 
 interface CarouselItem {
   id: string;
@@ -26,6 +27,7 @@ interface CenterFocusCarouselProps {
   params: Record<string, Record<string, string>>;
   isDebugMode?: boolean;
   disableDeselect?: boolean;
+  placeholderValues?: Record<string, string>;
 }
 
 const CenterFocusCarousel = ({
@@ -36,6 +38,7 @@ const CenterFocusCarousel = ({
   params,
   isDebugMode = false,
   disableDeselect = false,
+  placeholderValues = {},
 }: CenterFocusCarouselProps) => {
   const { sessionId } = useProcessSession();
   const [activeIndex, setActiveIndex] = useState(0);
@@ -101,15 +104,11 @@ const CenterFocusCarousel = ({
     const resolvedParams: Record<string, string> = {};
     
     for (const [key, value] of Object.entries(paramValues)) {
-      if (isSessionIdPlaceholder(value)) {
-        resolvedParams[key] = sessionId;
-      } else {
-        resolvedParams[key] = value;
-      }
+      resolvedParams[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
     }
     
     return resolvedParams;
-  }, [sessionId]);
+  }, [sessionId, placeholderValues]);
 
   const handleItemClick = (item: CarouselItem, index: number) => {
     if (index < activeIndex) {

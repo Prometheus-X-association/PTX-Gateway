@@ -17,7 +17,7 @@ import {
   getQueryParamNames,
   getParamValuesMap,
 } from "@/types/dataspace";
-import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { resolveRuntimePlaceholder } from "@/utils/placeholders";
 import { buildCredentialSrcdoc, createCredentialPngObjectUrl } from "@/utils/credentialPreview";
 
 // Re-export type for backward compatibility
@@ -33,6 +33,7 @@ interface AnalyticsSelectionProps {
   serviceChains: ServiceChain[];
   isDebugMode?: boolean;
   credentialPlugins?: CredentialPluginConfig[];
+  placeholderValues?: Record<string, string>;
 }
 
 const AnalyticsSelection = ({
@@ -45,6 +46,7 @@ const AnalyticsSelection = ({
   serviceChains,
   isDebugMode = false,
   credentialPlugins,
+  placeholderValues = {},
 }: AnalyticsSelectionProps) => {
   const { sessionId } = useProcessSession();
   const [paramsDialogOpen, setParamsDialogOpen] = useState(false);
@@ -232,10 +234,10 @@ const AnalyticsSelection = ({
     const defaults = getParamValuesMap(selected.data.parameters);
     const resolved: Record<string, string> = {};
     Object.entries(defaults).forEach(([key, value]) => {
-      resolved[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+      resolved[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
     });
     return resolved;
-  }, [selected, sessionId]);
+  }, [selected, sessionId, placeholderValues]);
 
   // Handle option selection
   const handleOptionSelect = (option: AnalyticsOption) => {
@@ -245,7 +247,7 @@ const AnalyticsSelection = ({
       const prefillParams = getParamValuesMap(option.data.parameters);
       const resolvedParams: Record<string, string> = {};
       for (const [key, value] of Object.entries(prefillParams)) {
-        resolvedParams[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+        resolvedParams[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
       }
       // Pre-fill first option for option-params that have no value yet
       option.data.parameters.forEach((p) => {
@@ -313,7 +315,7 @@ const AnalyticsSelection = ({
       const paramValues = getParamValuesMap(resource.parameters);
       const resolvedValues: Record<string, string> = {};
       Object.entries(paramValues).forEach(([key, value]) => {
-        resolvedValues[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+        resolvedValues[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
       });
       // Pre-fill first option for option-params that have no value yet
       resource.parameters.forEach((p) => {

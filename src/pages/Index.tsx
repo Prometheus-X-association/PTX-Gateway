@@ -53,9 +53,12 @@ const IndexContent = () => {
     customVisualizations,
     dataSelectionSettings,
     processingPageSettings,
+    placeholderValues,
     isLoading: configLoading, 
     error: configError 
-  } = useDataspaceConfig();
+  } = useDataspaceConfig(user?.organization?.id, {
+    enabled: !authLoading,
+  });
 
   // Check if backend has any configured data
   const hasBackendData = softwareResources.length > 0 || dataResources.length > 0 || serviceChains.length > 0;
@@ -182,9 +185,10 @@ const IndexContent = () => {
       activeProcessSessionId,
       pdcConfig?.fallback_result_url || undefined,
       pdcConfig?.fallback_result_authorization || undefined,
-      selectedData.resourceParams
+      selectedData.resourceParams,
+      placeholderValues,
     );
-  }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig]);
+  }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig, placeholderValues]);
 
   const llmPromptContext = useMemo(() => {
     if (!selectedAnalytics) return null;
@@ -347,6 +351,7 @@ const IndexContent = () => {
                 softwareResources={softwareResources}
                 serviceChains={serviceChains}
                 isDebugMode={isDebugMode}
+                placeholderValues={placeholderValues}
               />
             )}
             {getCurrentStepName() === "Choose Data" && (
@@ -357,6 +362,7 @@ const IndexContent = () => {
                 selectedAnalytics={selectedAnalytics}
                 isDebugMode={isDebugMode}
                 dataSelectionSettings={dataSelectionSettings}
+                placeholderValues={placeholderValues}
                 onExtractedContent={setSessionDocText}
               />
             )}
@@ -367,6 +373,7 @@ const IndexContent = () => {
                 analyticsQueryParams={effectiveAnalyticsQueryParams}
                 sessionId={activeProcessSessionId}
                 pdcUrl={pdcConfig?.pdc_url}
+                placeholderValues={placeholderValues}
                 onApprove={handleValidationApprove}
                 onReject={handleValidationReject}
               />

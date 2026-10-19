@@ -50,11 +50,11 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { placeholder_id, organization_id, test_only } = await req.json();
+    const { placeholder_id, organization_id, test_only, resolve_runtime } = await req.json();
 
-    if (!placeholder_id || !organization_id) {
+    if ((!placeholder_id && !resolve_runtime) || !organization_id) {
       return new Response(
-        JSON.stringify({ error: "placeholder_id and organization_id are required" }),
+        JSON.stringify({ error: "organization_id and placeholder_id or resolve_runtime are required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -63,44 +63,116 @@ Deno.serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Fetch the placeholder definition
-    const { data: placeholder, error: fetchError } = await supabase
+    let runtimeParameterValues: string[] = [];
+    if (resolve_runtime) {
+      const [{ data: resources, error: resourcesError }, { data: chains, error: chainsError }] = await Promise.all([
+        supabase
+          .from("dataspace_params")
+          .select("parameters,result_query_params")
+          .eq("organization_id", organization_id)
+          .eq("is_visible", true),
+        supabase
+          .from("service_chains")
+          .select("embedded_resources,result_query_params")
+          .eq("organization_id", organization_id)
+          .eq("is_visible", true),
+      ]);
+      if (resourcesError || chainsError) {
+        throw new Error(resourcesError?.message || chainsError?.message || "Failed to inspect runtime parameters");
+      }
+
+      const collectParameterValues = (value: unknown): void => {
+        if (typeof value === "string") {
+          if (value.includes("#")) runtimeParameterValues.push(value);
+          return;
+        }
+        if (Array.isArray(value)) {
+          value.forEach(collectParameterValues);
+          return;
+        }
+        if (value && typeof value === "object") {
+          Object.values(value as Record<string, unknown>).forEach(collectParameterValues);
+        }
+      };
+      collectParameterValues(resources || []);
+      collectParameterValues(chains || []);
+
+      if (runtimeParameterValues.length === 0) {
+        return new Response(
+          JSON.stringify({ values: {}, errors: {}, test_only: !!test_only }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    let placeholderQuery = supabase
       .from("param_placeholders")
       .select("*")
-      .eq("id", placeholder_id)
-      .eq("organization_id", organization_id)
-      .single();
+      .eq("organization_id", organization_id);
 
-    if (fetchError || !placeholder) {
+    if (placeholder_id) placeholderQuery = placeholderQuery.eq("id", placeholder_id);
+
+    const { data: fetchedPlaceholders, error: fetchError } = await placeholderQuery;
+
+    if (fetchError) {
+      return new Response(
+        JSON.stringify({ error: fetchError.message }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const placeholders = resolve_runtime
+      ? (fetchedPlaceholders || []).filter((placeholder) =>
+          runtimeParameterValues.some((value) => value.includes(String(placeholder.placeholder_key)))
+        )
+      : fetchedPlaceholders;
+
+    if (!placeholders || placeholders.length === 0) {
+      if (resolve_runtime) {
+        return new Response(
+          JSON.stringify({ values: {}, test_only: !!test_only }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
       return new Response(
         JSON.stringify({ error: "Placeholder not found" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    let resolvedValue: string;
-
-    if (placeholder.placeholder_type === "static") {
-      resolvedValue = placeholder.static_value || "";
-    } else if (placeholder.generator_type === "custom_function") {
-      if (!placeholder.custom_function_code) {
-        return new Response(
-          JSON.stringify({ error: "No custom function code defined" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+    const resolveDefinition = async (placeholder: Record<string, unknown>): Promise<string> => {
+      if (placeholder.placeholder_type === "static") return String(placeholder.static_value || "");
+      if (placeholder.generator_type === "custom_function") {
+        if (!placeholder.custom_function_code) throw new Error("No custom function code defined");
+        return executeCustomFunction(String(placeholder.custom_function_code), {
+          organizationId: organization_id,
+          placeholderKey: placeholder.placeholder_key,
+          timestamp: Date.now(),
+          isoDate: new Date().toISOString(),
+        });
       }
+      return resolveBuiltIn(String(placeholder.generator_type || "uuid"));
+    };
 
-      const context = {
-        organizationId: organization_id,
-        placeholderKey: placeholder.placeholder_key,
-        timestamp: Date.now(),
-        isoDate: new Date().toISOString(),
-      };
-
-      resolvedValue = await executeCustomFunction(placeholder.custom_function_code, context);
-    } else {
-      resolvedValue = resolveBuiltIn(placeholder.generator_type || "uuid");
+    if (resolve_runtime) {
+      const values: Record<string, string> = {};
+      const errors: Record<string, string> = {};
+      for (const placeholder of placeholders) {
+        const key = String(placeholder.placeholder_key);
+        try {
+          values[key] = await resolveDefinition(placeholder);
+        } catch (error: unknown) {
+          errors[key] = error instanceof Error ? error.message : String(error);
+        }
+      }
+      return new Response(
+        JSON.stringify({ values, errors, test_only: !!test_only }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
+
+    const placeholder = placeholders[0];
+    const resolvedValue = await resolveDefinition(placeholder);
 
     return new Response(
       JSON.stringify({

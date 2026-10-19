@@ -312,6 +312,7 @@ export interface DataspaceConfig {
   customVisualizations: CustomVisualizationConfig[];
   dataSelectionSettings?: DataSelectionSettings | null;
   processingPageSettings?: ProcessingPageSettings | null;
+  placeholderValues: Record<string, string>;
   isLoading: boolean;
   error: string | null;
 }

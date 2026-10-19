@@ -1,7 +1,8 @@
 // Utility to resolve the result fetch URL based on selected analytics and data options
 
 import { AnalyticsOption, DataResource, getParamActionsMap, getParamValuesMap, ResultQueryParam } from "@/types/dataspace";
-import { sanitizeParams, shouldIgnoreParam, resolveParamValue, isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { sanitizeParams } from "@/utils/paramSanitizer";
+import { PlaceholderValues, resolveRuntimePlaceholder } from "@/utils/placeholders";
 
 export interface ResultUrlInfo {
   url: string;
@@ -19,14 +20,14 @@ export interface ResultUrlInfo {
  */
 const resolveQueryParams = (
   params: ResultQueryParam[],
-  sessionId?: string
+  sessionId?: string,
+  placeholderValues?: PlaceholderValues,
 ): Record<string, string> => {
   const resolved: Record<string, string> = {};
   for (const p of params) {
-    if (isSessionIdPlaceholder(p.paramValue)) {
-      resolved[p.paramName] = sessionId || "";
-    } else if (p.paramValue && p.paramValue.trim() !== "") {
-      resolved[p.paramName] = p.paramValue;
+    const value = resolveRuntimePlaceholder(p.paramValue, sessionId || "", placeholderValues);
+    if (value && value.trim() !== "") {
+      resolved[p.paramName] = value;
     }
   }
   return resolved;
@@ -53,7 +54,8 @@ export const resolveResultUrl = (
   sessionId?: string,
   fallbackResultUrl?: string,
   fallbackResultAuthorization?: string,
-  resourceParams?: Record<string, Record<string, string>>
+  resourceParams?: Record<string, Record<string, string>>,
+  placeholderValues?: PlaceholderValues,
 ): ResultUrlInfo | null => {
   // Handle service chain analytics
   if (selectedAnalytics.type === "serviceChain") {
@@ -63,7 +65,7 @@ export const resolveResultUrl = (
 
     // Custom URL
     if (source === 'custom' && serviceChain.custom_result_url) {
-      const resolvedParams = resolveQueryParams(chainQueryParams, sessionId);
+      const resolvedParams = resolveQueryParams(chainQueryParams, sessionId, placeholderValues);
       return {
         url: serviceChain.custom_result_url,
         method: "GET",
@@ -78,7 +80,7 @@ export const resolveResultUrl = (
     // Fallback URL from PDC config
     if (source === 'fallback') {
       if (fallbackResultUrl) {
-        const resolvedParams = resolveQueryParams(chainQueryParams, sessionId);
+        const resolvedParams = resolveQueryParams(chainQueryParams, sessionId, placeholderValues);
         return {
           url: fallbackResultUrl,
           method: "GET",
@@ -102,7 +104,7 @@ export const resolveResultUrl = (
       const representationUrl = (lastResource.api_response_representation as { url?: string })?.url;
 
       if (representationUrl && representationUrl.trim() !== "") {
-        const resolvedParams = resolveQueryParams(chainQueryParams, sessionId);
+        const resolvedParams = resolveQueryParams(chainQueryParams, sessionId, placeholderValues);
         return {
           url: representationUrl,
           method: "GET",
@@ -121,7 +123,7 @@ export const resolveResultUrl = (
     // Legacy fallback: last service URL in chain
     if (serviceChain.services && serviceChain.services.length > 0) {
       const lastService = serviceChain.services[serviceChain.services.length - 1];
-      const resolvedParams = resolveQueryParams(chainQueryParams, sessionId);
+      const resolvedParams = resolveQueryParams(chainQueryParams, sessionId, placeholderValues);
       return {
         url: lastService.service,
         method: "GET",
@@ -176,7 +178,7 @@ export const resolveResultUrl = (
         const params: Record<string, string> = {};
         
         // First, apply result_query_params from admin config (with placeholder resolution)
-        const resolvedResultParams = resolveQueryParams(resourceQueryParams, sessionId);
+        const resolvedResultParams = resolveQueryParams(resourceQueryParams, sessionId, placeholderValues);
         Object.entries(resolvedResultParams).forEach(([key, value]) => {
           params[key] = value;
         });
@@ -202,10 +204,9 @@ export const resolveResultUrl = (
             // Only fallback to database parameters if no result_query_params configured
             const dbParams = getParamValuesMap(dataResource.parameters);
             Object.entries(dbParams).forEach(([key, value]) => {
-              if (isSessionIdPlaceholder(value)) {
-                params[key] = sessionId || "";
-              } else if (value && value.trim() !== "") {
-                params[key] = value;
+              const resolvedValue = resolveRuntimePlaceholder(value, sessionId || "", placeholderValues);
+              if (resolvedValue && resolvedValue.trim() !== "") {
+                params[key] = resolvedValue;
               }
             });
           }

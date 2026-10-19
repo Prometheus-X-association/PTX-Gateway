@@ -21,6 +21,7 @@ interface HumanValidationPageProps {
   analyticsQueryParams: Record<string, string>;
   sessionId: string;
   pdcUrl?: string;
+  placeholderValues?: Record<string, string>;
   onApprove: () => void;
   onReject: () => void;
 }
@@ -146,6 +147,7 @@ const HumanValidationPage = ({
   analyticsQueryParams,
   sessionId,
   pdcUrl,
+  placeholderValues,
   onApprove, 
   onReject 
 }: HumanValidationPageProps) => {
@@ -175,9 +177,10 @@ const HumanValidationPage = ({
       sessionId,
       undefined,
       undefined,
-      selectedData.resourceParams
+      selectedData.resourceParams,
+      placeholderValues,
     );
-  }, [selectedAnalytics, selectedData, sessionId]);
+  }, [selectedAnalytics, selectedData, sessionId, placeholderValues]);
 
   const pdcPayload = useMemo(() => {
     return generatePdcPayload(

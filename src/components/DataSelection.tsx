@@ -17,7 +17,7 @@ import {
   getParamValuesMap,
   getParamActionsMap as getParamActionsMapFromParams,
 } from "@/types/dataspace";
-import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { resolveRuntimePlaceholder } from "@/utils/placeholders";
 
 interface ManualJsonResource {
   id: string;
@@ -49,6 +49,7 @@ interface DataSelectionProps {
   selectedAnalytics?: AnalyticsOption | null;
   isDebugMode?: boolean;
   dataSelectionSettings?: DataSelectionSettings | null;
+  placeholderValues?: Record<string, string>;
   onExtractedContent?: (text: string) => void;
 }
 
@@ -79,6 +80,7 @@ const DataSelection = ({
   selectedAnalytics,
   isDebugMode = false,
   dataSelectionSettings = null,
+  placeholderValues = {},
   onExtractedContent,
 }: DataSelectionProps) => {
   const { sessionId, resetSession } = useProcessSession();
@@ -217,11 +219,7 @@ const DataSelection = ({
         const resolvedParams: Record<string, string> = {};
         
         for (const [key, value] of Object.entries(prefillParams)) {
-          if (isSessionIdPlaceholder(value)) {
-            resolvedParams[key] = sessionId;
-          } else {
-            resolvedParams[key] = value;
-          }
+          resolvedParams[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
         }
         
         // Only include if there are params
@@ -243,11 +241,7 @@ const DataSelection = ({
           const resolvedParams: Record<string, string> = {};
           
           for (const [key, value] of Object.entries(prefillParams)) {
-            if (isSessionIdPlaceholder(value)) {
-              resolvedParams[key] = sessionId;
-            } else {
-              resolvedParams[key] = value;
-            }
+            resolvedParams[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
           }
           
           initialParams[api.id] = resolvedParams;
@@ -270,7 +264,7 @@ const DataSelection = ({
       
       setServiceChainInitialized(true);
     }
-  }, [selectedAnalytics, apiResources, uploadResources, manualJsonResources, serviceChainInitialized, sessionId]);
+  }, [selectedAnalytics, apiResources, uploadResources, manualJsonResources, serviceChainInitialized, sessionId, placeholderValues]);
 
   // Reset initialization flag and service chain params when analytics selection changes
   useEffect(() => {
@@ -339,11 +333,7 @@ const DataSelection = ({
     const resolvedParams: Record<string, string> = {};
     
     for (const [key, value] of Object.entries(prefillParams)) {
-      if (isSessionIdPlaceholder(value)) {
-        resolvedParams[key] = sessionId;
-      } else {
-        resolvedParams[key] = value;
-      }
+      resolvedParams[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
     }
     
     return resolvedParams;
@@ -1119,6 +1109,7 @@ const DataSelection = ({
               params={apiParams}
               isDebugMode={isDebugMode}
               disableDeselect={selectedAnalytics?.type === "serviceChain"}
+              placeholderValues={placeholderValues}
             />
           </div>
         )}

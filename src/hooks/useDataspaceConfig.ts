@@ -20,6 +20,7 @@ import {
   ProcessingPageSettings,
 } from "@/types/dataspace";
 import { Json } from "@/integrations/supabase/types";
+import { resolveOrganizationPlaceholders } from "@/utils/placeholders";
 
 // Helper to safely parse JSONB parameters array
 const parseParameters = (params: Json | null): ResourceParameter[] => {
@@ -233,6 +234,7 @@ export const useDataspaceConfig = (
     customVisualizations: [],
     dataSelectionSettings: null,
     processingPageSettings: null,
+    placeholderValues: {},
     isLoading: true,
     error: null,
   });
@@ -317,6 +319,18 @@ export const useDataspaceConfig = (
       const customVisualizations = getResultPageCustomVisualizations(effectiveGlobalFeatures);
       const dataSelectionSettings = getDataSelectionSettings(effectiveGlobalFeatures);
       const processingPageSettings = getProcessingPageSettings(effectiveGlobalFeatures);
+      const effectiveOrganizationId = organizationId
+        ?? pdcData?.organization_id
+        ?? resourcesData?.[0]?.organization_id
+        ?? chainsData?.[0]?.organization_id;
+      let placeholderValues: Record<string, string> = {};
+      try {
+        placeholderValues = await resolveOrganizationPlaceholders(effectiveOrganizationId);
+      } catch (placeholderError) {
+        // Placeholder resolution should not hide the configured resources. Keep
+        // unresolved values visible and report the failure for diagnostics.
+        console.error("Error resolving organization placeholders:", placeholderError);
+      }
 
       // Parse PDC config
       const pdcConfig: PdcConfig | null = pdcData
@@ -409,6 +423,7 @@ export const useDataspaceConfig = (
         customVisualizations,
         dataSelectionSettings,
         processingPageSettings,
+        placeholderValues,
         isLoading: false,
         error: null,
       });

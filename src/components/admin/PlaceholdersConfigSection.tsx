@@ -266,8 +266,8 @@ const PlaceholdersConfigSection = () => {
 
       setDialogOpen(false);
       await fetchPlaceholders();
-    } catch (err: any) {
-      if (err?.code === "23505") {
+    } catch (err: unknown) {
+      if (typeof err === "object" && err !== null && "code" in err && err.code === "23505") {
         toast.error("A placeholder with this key already exists");
       } else {
         toast.error("Failed to save placeholder");
@@ -303,11 +303,16 @@ const PlaceholdersConfigSection = () => {
 
       if (data?.error) {
         setTestResult({ error: data.error });
+        toast.error(`Placeholder test failed: ${data.error}`);
       } else {
         setTestResult({ value: data?.value });
+        const tested = placeholders.find((placeholder) => placeholder.id === id);
+        toast.success(`${tested?.placeholder_key || "Placeholder"} resolved to: ${String(data?.value ?? "")}`);
       }
-    } catch (err: any) {
-      setTestResult({ error: err.message || "Test failed" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Test failed";
+      setTestResult({ error: message });
+      toast.error(`Placeholder test failed: ${message}`);
     } finally {
       setIsTesting(false);
     }
@@ -443,7 +448,7 @@ const PlaceholdersConfigSection = () => {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        {p.placeholder_type === "dynamic" && !isBuiltin && (
+                        {!isBuiltin && (
                           <Button
                             variant="ghost"
                             size="icon"

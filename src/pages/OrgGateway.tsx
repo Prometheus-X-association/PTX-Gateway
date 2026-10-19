@@ -25,7 +25,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Json } from "@/integrations/supabase/types";
 import { applyOrganizationVisualizationSettings, getVisualizationSettingsFromOrgSettings } from "@/utils/visualizationSettings";
 import { getParamValuesMap } from "@/types/dataspace";
-import { isSessionIdPlaceholder } from "@/utils/paramSanitizer";
+import { resolveOrganizationPlaceholders, resolveRuntimePlaceholder } from "@/utils/placeholders";
 import { resolveChatUploadConfig } from "@/utils/chatUploadConfig";
 
 interface SelectedDataType {
@@ -96,6 +96,7 @@ const buildPreselectedQueryParams = (
   searchParams: URLSearchParams,
   option: AnalyticsOption,
   sessionId: string,
+  placeholderValues: Record<string, string>,
 ): Record<string, string> => {
   if (option.type !== "software") return {};
 
@@ -103,7 +104,7 @@ const buildPreselectedQueryParams = (
   const next: Record<string, string> = {};
 
   Object.entries(defaults).forEach(([key, value]) => {
-    next[key] = isSessionIdPlaceholder(value) ? sessionId : value;
+    next[key] = resolveRuntimePlaceholder(value, sessionId, placeholderValues);
   });
 
   Object.keys(defaults).forEach((key) => {
@@ -439,6 +440,7 @@ const OrgGatewayContent = ({
   dataResources,
   serviceChains,
   credentialPlugins,
+  placeholderValues,
 }: {
   organization: Organization;
   pdcConfig: PdcConfig | null;
@@ -452,6 +454,7 @@ const OrgGatewayContent = ({
   dataResources: DataResource[];
   serviceChains: ServiceChain[];
   credentialPlugins: CredentialPluginConfig[];
+  placeholderValues: Record<string, string>;
 }) => {
   const [searchParams] = useSearchParams();
   const { user, isAuthenticated
@@ -577,6 +580,7 @@ const OrgGatewayContent = ({
           pdcConfig?.fallback_result_url || undefined,
           pdcConfig?.fallback_result_authorization || undefined,
           data.resourceParams,
+          placeholderValues,
         )
       : null;
     const ragDocKey = buildRagDocStorageKey(resolvedResultUrl, organization.id);
@@ -655,7 +659,7 @@ const OrgGatewayContent = ({
       setForcedResultData(null);
       setForcedResultNotice(null);
       setSelectedAnalytics(preselected);
-      setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId));
+      setAnalyticsQueryParams(buildPreselectedQueryParams(searchParams, preselected, sessionId, placeholderValues));
       goToStep(getStepIndex("Choose Data"));
     };
     void startPreselectedFlow();
@@ -671,6 +675,7 @@ const OrgGatewayContent = ({
     resetSession,
     organization.slug,
     sessionId,
+    placeholderValues,
     getStepIndex,
     goToStep,
     clearBrowserDocuments,
@@ -707,9 +712,10 @@ const OrgGatewayContent = ({
       activeProcessSessionId,
       pdcConfig?.fallback_result_url || undefined,
       pdcConfig?.fallback_result_authorization || undefined,
-      selectedData.resourceParams
+      selectedData.resourceParams,
+      placeholderValues,
     );
-  }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig]);
+  }, [selectedAnalytics, selectedData, activeProcessSessionId, pdcConfig, placeholderValues]);
 
   const handleRestart = () => {
     resetSession();
@@ -991,6 +997,7 @@ const OrgGatewayContent = ({
               serviceChains={serviceChains}
               isDebugMode={isDebugMode}
               credentialPlugins={credentialPlugins}
+              placeholderValues={placeholderValues}
             />
           )}
           {currentStepName === "Choose Data" && (
@@ -1001,6 +1008,7 @@ const OrgGatewayContent = ({
               selectedAnalytics={selectedAnalytics}
               isDebugMode={isDebugMode}
               dataSelectionSettings={dataSelectionSettings}
+              placeholderValues={placeholderValues}
               onExtractedContent={(text) => {
                 rag.indexData(text, "document");
                 setSessionDocText(text);
@@ -1015,6 +1023,7 @@ const OrgGatewayContent = ({
               analyticsQueryParams={effectiveAnalyticsQueryParams}
               sessionId={activeProcessSessionId}
               pdcUrl={pdcConfig?.pdc_url}
+              placeholderValues={placeholderValues}
               onApprove={handleValidationApprove}
               onReject={handleValidationReject}
             />
@@ -1083,6 +1092,7 @@ const OrgGateway = () => {
   const [credentialPlugins, setCredentialPlugins] = useState<CredentialPluginConfig[]>([]);
   const [dataSelectionSettings, setDataSelectionSettings] = useState<DataSelectionSettings | null>(null);
   const [processingPageSettings, setProcessingPageSettings] = useState<ProcessingPageSettings | null>(null);
+  const [placeholderValues, setPlaceholderValues] = useState<Record<string, string>>({});
   const [verticalStepBarTopText, setVerticalStepBarTopText] = useState("");
   const [allowContinueOnPdcError, setAllowContinueOnPdcError] = useState(false);
   const themeCleanupRef = useRef<(() => void) | null>(null);
@@ -1122,6 +1132,7 @@ const OrgGateway = () => {
         setCustomVisualizations([]);
         setDataSelectionSettings(null);
         setProcessingPageSettings(null);
+        setPlaceholderValues({});
         setVerticalStepBarTopText("");
         setAllowContinueOnPdcError(false);
 
@@ -1155,6 +1166,15 @@ const OrgGateway = () => {
 
         themeCleanupRef.current = themeCleanup;
         setOrganization(orgData);
+
+        try {
+          const resolvedPlaceholderValues = await resolveOrganizationPlaceholders(orgData.id);
+          if (!mounted) return;
+          setPlaceholderValues(resolvedPlaceholderValues);
+        } catch (placeholderError) {
+          // Keep the gateway usable when an optional custom generator fails.
+          console.error("Error resolving organization placeholders:", placeholderError);
+        }
 
         // Issue short-lived org execution token for public gateway processing.
         const { data: tokenData, error: tokenError } = await supabase.functions.invoke("pdc-auth", {
@@ -1391,6 +1411,7 @@ const OrgGateway = () => {
         verticalStepBarTopText={verticalStepBarTopText}
         allowContinueOnPdcError={allowContinueOnPdcError}
         credentialPlugins={credentialPlugins}
+        placeholderValues={placeholderValues}
       />
     </ProcessSessionProvider>
   );

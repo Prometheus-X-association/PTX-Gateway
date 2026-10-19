@@ -426,7 +426,16 @@ Resolves dynamic parameter placeholders at runtime. Supports built-in generators
 ```
 POST /functions/v1/resolve-placeholder
 Body: { placeholder_id: string, organization_id: string, test_only?: boolean }
+
+# Resolve every custom placeholder referenced by visible gateway resources
+POST /functions/v1/resolve-placeholder
+Body: { organization_id: string, resolve_runtime: true }
 ```
+
+Placeholder values support interpolation. For example, a parameter value of
+`[target_#genSessionId]` resolves to `target_<generated-session-id>`; the outer
+square brackets act as template delimiters and are removed. Custom placeholders
+and multiple placeholders in the same value are supported as well.
 
 ### `embed-auth` — Embed Token Management
 
