@@ -1,6 +1,6 @@
 // Utility to generate PDC payload from selected analytics and data
 
-import { AnalyticsOption, DataResource, ServiceChainEmbeddedResource, getParamActionsMap } from "@/types/dataspace";
+import { AnalyticsOption, DataResource, ServiceChainEmbeddedResource, ServiceChainService, getParamActionsMap } from "@/types/dataspace";
 import { sanitizeParams } from "@/utils/paramSanitizer";
 
 export interface PdcPayload {
@@ -77,7 +77,8 @@ export const generatePdcPayload = (
       selectedAnalytics.data.catalog_id,
       selectedAnalytics.data.embedded_resources,
       serviceChainResourceParams || {},
-      sessionId
+      sessionId,
+      selectedAnalytics.data.services
     );
   }
 
@@ -192,7 +193,8 @@ const generateServiceChainPayload = (
   catalogId: string,
   embeddedResources: ServiceChainEmbeddedResource[],
   resourceParams: Record<string, Record<string, string>>,
-  sessionId: string
+  sessionId: string,
+  chainServices: ServiceChainService[] = []
 ): PdcPayload => {
   // Sort embedded resources by service_index
   const sortedResources = [...embeddedResources].sort((a, b) => a.service_index - b.service_index);
@@ -205,6 +207,47 @@ const generateServiceChainPayload = (
       purposes: [],
     };
   }
+
+  const buildEntry = (resource: ServiceChainEmbeddedResource) =>
+    buildResourceEntry(
+      resource.resource_url,
+      resourceParams[resource.resource_url] || {},
+      resource.parameters,
+      getParamActionsMap(resource.parameters),
+      sessionId
+    );
+
+  // Route by owning service offering, mirroring the connector: data of services[0] -> resources,
+  // software of services[last] -> purposes, every other chain node (middle steps and pre
+  // branches) -> serviceChainParams. pdc-execute re-applies this against the live catalog.
+  const steps = chainServices.filter((step) => !!step?.service);
+  const canRouteByOffering = steps.length > 0 && sortedResources.every((resource) => !!resource.service_offering);
+  if (canRouteByOffering) {
+    const firstService = steps[0].service;
+    const lastService = steps[steps.length - 1].service;
+    const resources: PdcPayload["resources"] = [];
+    const purposes: PdcPayload["purposes"] = [];
+    const serviceChainParams: NonNullable<PdcPayload["serviceChainParams"]> = [];
+
+    sortedResources.forEach((resource) => {
+      const entry = buildEntry(resource);
+      if (resource.resource_type === "data" && resource.service_offering === firstService) {
+        resources.push(entry);
+      } else if (resource.resource_type === "software" && resource.service_offering === lastService) {
+        purposes.push(entry);
+      } else if (entry.params) {
+        serviceChainParams.push(entry);
+      }
+    });
+
+    const routedPayload: PdcPayload = { contract: contractUrl, serviceChainId: catalogId, resources, purposes };
+    if (serviceChainParams.length > 0) {
+      routedPayload.serviceChainParams = serviceChainParams;
+    }
+    return routedPayload;
+  }
+
+  // Legacy rows without service_offering: fall back to role/index heuristics.
 
   // All leading data nodes are independent inputs. This supports fan-in chains
   // such as data A + data B -> software -> terminal software.

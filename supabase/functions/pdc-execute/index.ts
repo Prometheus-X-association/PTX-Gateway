@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { type PdcExchangePayload, ServiceChainPayloadError, routeServiceChainPayload } from "../_shared/serviceChainPayload.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -16,20 +17,21 @@ const LOCAL_SUPABASE_JWT_FALLBACK = "super-secret-jwt-token-with-at-least-32-cha
 interface PdcExecuteRequest {
   org_execution_token?: string;
   timeout_seconds?: number;
-  payload: {
-    contract: string;
-    purposeId: string;
-    resourceId: string;
-    resources: Array<{
-      resource: string;
-      params?: { query: Array<Record<string, string>> };
-    }>;
-    purposes: Array<{
-      resource: string;
-      params?: { query: Array<Record<string, string>> };
-    }>;
-  };
+  payload: PdcExchangePayload;
 }
+
+const CATALOG_FETCH_TIMEOUT_MS = 15000;
+
+const fetchCatalogJson = async (url: string): Promise<unknown> => {
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(CATALOG_FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch catalog document ${url}: ${response.status}`);
+  }
+  return response.json();
+};
 
 interface ExecutionTokenPayload {
   typ: string;
@@ -286,6 +288,28 @@ serve(async (req) => {
     console.log("PDC Execute - Org:", orgContext.orgId);
     console.log("PDC Execute - URL:", activeConfig.pdc_url);
 
+    // Service chains: route each resource to resources / purposes / serviceChainParams
+    // based on which chain service offering owns it. Non-chain payloads pass through unchanged.
+    let exchangePayload: PdcExchangePayload;
+    try {
+      exchangePayload = await routeServiceChainPayload(payload, fetchCatalogJson);
+    } catch (routingError) {
+      if (routingError instanceof ServiceChainPayloadError) {
+        return new Response(
+          JSON.stringify({
+            error: routingError.message,
+            content: { success: false, error: routingError.message },
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      throw routingError;
+    }
+
+    if (exchangePayload.serviceChainId) {
+      console.log("PDC Execute - Routed service chain payload:", JSON.stringify(exchangePayload));
+    }
+
     // Create headers for the PDC request using server-side token
     const pdcHeaders: HeadersInit = {
       'Content-Type': 'application/json',
@@ -300,7 +324,7 @@ serve(async (req) => {
       const response = await fetch(activeConfig.pdc_url, {
         method: 'POST',
         headers: pdcHeaders,
-        body: JSON.stringify(payload),
+        body: JSON.stringify(exchangePayload),
         signal: controller.signal,
       });
 

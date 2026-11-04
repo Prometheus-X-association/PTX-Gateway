@@ -552,12 +552,16 @@ const ResourcesConfigSection = () => {
             extractedEmbeddedSignatures.has(getEmbeddedResourceSignature(resource))
           );
 
+          // Adding or removing a pre branch shifts service_index values, so fall back to
+          // matching by resource URL to keep admin-edited params of moved resources.
           const mergedEmbedded = c.embedded_resources.map(er => {
             const existing = existingEmbeddedStillPresent.find(
               ee =>
                 ee.service_index === er.service_index &&
                 ee.resource_url === er.resource_url &&
                 ee.contract_url === er.contract_url
+            ) ?? existingEmbedded.find(
+              ee => ee.resource_url === er.resource_url && ee.contract_url === er.contract_url
             );
             if (existing) {
               // Merge parameters by key:
