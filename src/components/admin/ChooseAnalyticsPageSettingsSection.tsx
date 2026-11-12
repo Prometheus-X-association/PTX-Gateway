@@ -8,24 +8,35 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ChevronDown, ChevronRight, Eye, FileText, Loader2, Pencil, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, Building2, ChevronDown, ChevronRight, Eye, FileArchive, FileText, Loader2, Pencil, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { AnalyticsPagePluginType, CredentialEntry, CredentialPluginConfig } from "@/types/dataspace";
 import { buildCredentialSrcdoc, createCredentialPngObjectUrl } from "@/utils/credentialPreview";
+import { buildBundleSrcdoc, bundleTargetIds, parsePluginBundleZip } from "@/utils/pluginBundle";
 import { mergeGlobalFeatureSection } from "@/utils/globalConfigFeatures";
 
 const PLUGIN_TYPES: { value: AnalyticsPagePluginType; label: string; description: string }[] = [
   {
+    value: "carisma_v2",
+    label: "T-AI CARiSMA v2 · Multi-organization",
+    description: "Upload one .zip with an admin HTML page, a client HTML page (\"client\" in its file name), organizations.json, a reports/ folder and a diagrams/ folder. All organizations load automatically in both views.",
+  },
+  {
     value: "carisma",
-    label: "T-AI CARiSMA",
-    description: "Compliance certificate viewer. Supports an admin HTML template, an optional gateway HTML template, and per-target JSON + PNG data pairs.",
+    label: "T-AI CARiSMA v1",
+    description: "Single-report certificate viewer. An admin HTML template, an optional gateway HTML template, and per-target JSON + PNG data pairs.",
   },
 ];
 
+/** Plugins saved before versioning have no plugin_type; they are v1. */
+const pluginTypeOf = (p: { plugin_type?: AnalyticsPagePluginType }): AnalyticsPagePluginType => p.plugin_type ?? "carisma";
+
 const pluginTypeLabel = (t?: AnalyticsPagePluginType) =>
-  PLUGIN_TYPES.find((p) => p.value === t)?.label ?? "T-AI CARiSMA";
+  PLUGIN_TYPES.find((p) => p.value === (t ?? "carisma"))?.label ?? "T-AI CARiSMA v1";
+
+const pluginShortLabel = (t?: AnalyticsPagePluginType) => (t === "carisma_v2" ? "CARiSMA v2" : "CARiSMA v1");
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -65,15 +76,19 @@ interface PluginForm {
   description: string;
   htmlFile: File | null;
   gatewayHtmlFile: File | null;
+  zipFile: File | null;
+  targetIds: string[];
 }
 
 const emptyEntryForm = (): EntryForm => ({ label: "", jsonFile: null, pngFile: null, targetIds: [] });
 const emptyPluginForm = (): PluginForm => ({
-  plugin_type: "carisma",
+  plugin_type: "carisma_v2",
   name: "",
   description: "",
   htmlFile: null,
   gatewayHtmlFile: null,
+  zipFile: null,
+  targetIds: [],
 });
 
 const ChooseAnalyticsPageSettingsSection = () => {
@@ -112,6 +127,15 @@ const ChooseAnalyticsPageSettingsSection = () => {
   const [pluginError, setPluginError] = useState<string | null>(null);
   const htmlFileRef = useRef<HTMLInputElement>(null);
   const gatewayHtmlFileRef = useRef<HTMLInputElement>(null);
+  const zipFileRef = useRef<HTMLInputElement>(null);
+
+  // Archived plugins section
+  const [showArchived, setShowArchived] = useState(false);
+
+  // v2: replace bundle ZIP, edit per-organization targets
+  const [replacingZipFor, setReplacingZipFor] = useState<string | null>(null);
+  const [bundleWarnings, setBundleWarnings] = useState<Record<string, string[]>>({});
+  const [editingTargets, setEditingTargets] = useState<{ pluginId: string; ids: string[] } | null>(null);
 
   // Rendered preview of one saved HTML + JSON + PNG entry
   const [preview, setPreview] = useState<{
@@ -199,6 +223,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
   const handleAddPlugin = async () => {
     setPluginError(null);
     if (!pluginForm.name.trim()) { setPluginError("Name is required."); return; }
+    if (pluginForm.plugin_type === "carisma_v2") { await handleAddBundlePlugin(); return; }
     if (!pluginForm.htmlFile) { setPluginError("HTML template file is required."); return; }
     setIsSaving(true);
     try {
@@ -225,6 +250,71 @@ const ChooseAnalyticsPageSettingsSection = () => {
     } catch (e) { setPluginError(e instanceof Error ? e.message : "Failed"); }
     finally { setIsSaving(false); }
   };
+
+  const resetAddPluginForm = () => {
+    setShowAddPlugin(false);
+    setPluginForm(emptyPluginForm());
+    setPluginError(null);
+    if (htmlFileRef.current) htmlFileRef.current.value = "";
+    if (gatewayHtmlFileRef.current) gatewayHtmlFileRef.current.value = "";
+    if (zipFileRef.current) zipFileRef.current.value = "";
+  };
+
+  const handleAddBundlePlugin = async () => {
+    if (!pluginForm.zipFile) { setPluginError("Plugin ZIP file is required."); return; }
+    setIsSaving(true);
+    try {
+      const { bundle, warnings } = await parsePluginBundleZip(pluginForm.zipFile);
+      const newPlugin: CredentialPluginConfig = {
+        id: `plugin-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        plugin_type: "carisma_v2",
+        name: pluginForm.name.trim(),
+        description: pluginForm.description.trim() || undefined,
+        is_active: true,
+        html_content: "",
+        credentials: [],
+        bundle: { ...bundle, target_resource_ids: pluginForm.targetIds },
+      };
+      await persist([...plugins, newPlugin]);
+      setBundleWarnings((w) => ({ ...w, [newPlugin.id]: warnings }));
+      resetAddPluginForm();
+      setExpandedId(newPlugin.id);
+    } catch (e) { setPluginError(e instanceof Error ? e.message : "Failed to read the ZIP file"); }
+    finally { setIsSaving(false); }
+  };
+
+  const handleReplaceZip = async (plugin: CredentialPluginConfig, file: File) => {
+    setIsSaving(true);
+    try {
+      const { bundle, warnings } = await parsePluginBundleZip(file);
+      // The "show on" targets belong to the plugin, so they carry over to the new bundle.
+      const targets = bundleTargetIds(plugin.bundle);
+      await persist(plugins.map((p) => (p.id === plugin.id ? { ...p, bundle: { ...bundle, target_resource_ids: targets } } : p)));
+      setBundleWarnings((w) => ({ ...w, [plugin.id]: warnings }));
+      setReplacingZipFor(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to replace the plugin ZIP");
+    } finally { setIsSaving(false); }
+  };
+
+  const saveBundleTargets = async () => {
+    if (!editingTargets) return;
+    const { pluginId, ids } = editingTargets;
+    await persist(plugins.map((p) => {
+      if (p.id !== pluginId || !p.bundle) return p;
+      const { org_targets: _legacy, ...rest } = p.bundle;
+      return { ...p, bundle: { ...rest, target_resource_ids: ids } };
+    }));
+    setEditingTargets(null);
+  };
+
+  const archivePlugin = (id: string) => {
+    if (expandedId === id) setExpandedId(null);
+    void persist(plugins.map((p) => (p.id === id ? { ...p, archived: true, archived_at: new Date().toISOString(), is_active: false } : p)));
+  };
+
+  const restorePlugin = (id: string) =>
+    void persist(plugins.map((p) => (p.id === id ? { ...p, archived: false, archived_at: undefined } : p)));
 
   const toggleActive = (id: string, val: boolean) =>
     void persist(plugins.map((p) => (p.id === id ? { ...p, is_active: val } : p)));
@@ -378,6 +468,27 @@ const ChooseAnalyticsPageSettingsSection = () => {
     }
   };
 
+  const openBundlePreview = (plugin: CredentialPluginConfig, view: "admin" | "client") => {
+    if (!plugin.bundle) return;
+    try {
+      if (previewPngUrlRef.current) {
+        URL.revokeObjectURL(previewPngUrlRef.current);
+        previewPngUrlRef.current = null;
+      }
+      setPreview({
+        pluginId: plugin.id,
+        entryId: view,
+        pluginName: plugin.name,
+        pluginDescription: plugin.description,
+        entryLabel: plugin.bundle.use_case_name || plugin.bundle.file_name,
+        templateLabel: view === "admin" ? "Admin view" : "Client view",
+        srcdoc: buildBundleSrcdoc(plugin.bundle, view),
+      });
+    } catch {
+      toast.error("Could not open the plugin preview");
+    }
+  };
+
   const toggleEntryTarget = (id: string, checked: boolean) =>
     setEntryForm((p) => ({ ...p, targetIds: checked ? [...p.targetIds, id] : p.targetIds.filter((t) => t !== id) }));
 
@@ -386,6 +497,156 @@ const ChooseAnalyticsPageSettingsSection = () => {
 
   const targetNames = (ids: string[]) =>
     ids.length === 0 ? "No targets" : resources.filter((r) => ids.includes(r.id)).map((r) => r.name).join(", ") || `${ids.length} target(s)`;
+
+  const renderTargetChecklist = (selected: string[], onToggle: (id: string, checked: boolean) => void) => (
+    <div className="rounded-md border p-2 max-h-44 overflow-y-auto space-y-1.5 bg-background">
+      {resources.length === 0 && (
+        <p className="text-xs text-muted-foreground">No resources found.</p>
+      )}
+      {resources.map((r) => (
+        <label key={r.id} className="flex items-center gap-2 text-xs cursor-pointer">
+          <Checkbox
+            checked={selected.includes(r.id)}
+            onCheckedChange={(c) => onToggle(r.id, c === true)}
+          />
+          <span className="flex-1 truncate">{r.name}</span>
+          <Badge variant="outline" className="text-[10px] px-1 shrink-0">
+            {r.type === "software" ? "SW" : "SC"}
+          </Badge>
+        </label>
+      ))}
+    </div>
+  );
+
+  // ── v2 bundle body ────────────────────────────────────────────────────────
+
+  const renderBundleBody = (plugin: CredentialPluginConfig) => {
+    const bundle = plugin.bundle;
+    const warnings = bundleWarnings[plugin.id] ?? [];
+    const reportCount = bundle?.files.filter((f) => f.path.startsWith("reports/")).length ?? 0;
+    const diagramCount = bundle?.files.filter((f) => f.path.startsWith("diagrams/")).length ?? 0;
+    return (
+      <>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-md border bg-muted/10 px-3 py-2">
+          <FileArchive className="h-4 w-4 text-muted-foreground shrink-0 hidden sm:block" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm truncate">{bundle?.file_name ?? "No bundle uploaded"}</p>
+            {bundle && (
+              <p className="text-xs text-muted-foreground">
+                {bundle.organizations.length} organization{bundle.organizations.length === 1 ? "" : "s"} · {reportCount} report{reportCount === 1 ? "" : "s"} · {diagramCount} diagram{diagramCount === 1 ? "" : "s"}
+                {" · "}uploaded {new Date(bundle.uploaded_at).toLocaleString()}
+              </p>
+            )}
+          </div>
+          {replacingZipFor === plugin.id ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                className="text-xs"
+                disabled={isSaving}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleReplaceZip(plugin, f);
+                }}
+              />
+              {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setReplacingZipFor(null)}>
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1">
+              <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => openBundlePreview(plugin, "admin")} disabled={!bundle}>
+                <Eye className="h-3.5 w-3.5 mr-1" /> Admin view
+              </Button>
+              <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => openBundlePreview(plugin, "client")} disabled={!bundle}>
+                <Eye className="h-3.5 w-3.5 mr-1" /> Client view
+              </Button>
+              {!plugin.archived && (
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setReplacingZipFor(plugin.id)}>
+                  Replace ZIP
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {warnings.length > 0 && (
+          <ul className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs space-y-0.5 list-disc list-inside">
+            {warnings.map((w) => <li key={w}>{w}</li>)}
+          </ul>
+        )}
+
+        {bundle && (() => {
+          const targets = bundleTargetIds(bundle);
+          const isEditing = editingTargets?.pluginId === plugin.id;
+          return (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Show on analytics options</p>
+              <div className="rounded-md border px-3 py-2.5 bg-background space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                  <p className="text-xs text-muted-foreground flex-1 min-w-0">
+                    {targets.length === 0
+                      ? "Not shown on any analytics option yet."
+                      : targetNames(targets)}
+                  </p>
+                  {!isEditing && !plugin.archived && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs shrink-0 self-start sm:self-auto"
+                      onClick={() => setEditingTargets({ pluginId: plugin.id, ids: [...targets] })}
+                      disabled={isSaving}
+                    >
+                      <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+                    </Button>
+                  )}
+                </div>
+                {isEditing && (
+                  <div className="space-y-2">
+                    {renderTargetChecklist(editingTargets.ids, (id, checked) =>
+                      setEditingTargets((cur) => cur && ({
+                        ...cur,
+                        ids: checked ? [...cur.ids, id] : cur.ids.filter((t) => t !== id),
+                      })),
+                    )}
+                    <div className="flex gap-2">
+                      <Button size="sm" className="h-7 text-xs" onClick={() => void saveBundleTargets()} disabled={isSaving}>
+                        {isSaving ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Save className="h-3 w-3 mr-1" />}
+                        Save
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setEditingTargets(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground pt-1">
+                Organizations in this bundle
+              </p>
+              <p className="text-xs text-muted-foreground pl-1">
+                All organizations load automatically as tabs in the admin and client views.
+              </p>
+              <div className="rounded-md border divide-y bg-background">
+                {bundle.organizations.map((org) => (
+                  <div key={org.id} className="flex items-start gap-2 px-3 py-2">
+                    <Building2 className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">{org.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{org.id}{org.type ? ` · ${org.type}` : ""}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+      </>
+    );
+  };
 
   // ── Entry form (shared layout used for both add and edit) ─────────────────
 
@@ -453,23 +714,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
 
       <div className="space-y-1.5">
         <Label className="text-xs">Show on analytics options</Label>
-        <div className="rounded-md border p-2 max-h-44 overflow-y-auto space-y-1.5 bg-background">
-          {resources.length === 0 && (
-            <p className="text-xs text-muted-foreground">No resources found.</p>
-          )}
-          {resources.map((r) => (
-            <label key={r.id} className="flex items-center gap-2 text-xs cursor-pointer">
-              <Checkbox
-                checked={opts.form.targetIds.includes(r.id)}
-                onCheckedChange={(c) => opts.onToggleTarget(r.id, c === true)}
-              />
-              <span className="flex-1 truncate">{r.name}</span>
-              <Badge variant="outline" className="text-[10px] px-1 shrink-0">
-                {r.type === "software" ? "SW" : "SC"}
-              </Badge>
-            </label>
-          ))}
-        </div>
+        {renderTargetChecklist(opts.form.targetIds, opts.onToggleTarget)}
       </div>
 
       {opts.error && <p className="text-xs text-destructive">{opts.error}</p>}
@@ -487,6 +732,361 @@ const ChooseAnalyticsPageSettingsSection = () => {
   );
 
   // ── Render ────────────────────────────────────────────────────────────────
+
+  const activePlugins = plugins.filter((p) => !p.archived);
+  const archivedPlugins = plugins.filter((p) => p.archived);
+
+  const renderPlugin = (plugin: CredentialPluginConfig) => {
+      const isExpanded = expandedId === plugin.id;
+      const pluginType = pluginTypeOf(plugin);
+      const typeLabel = pluginTypeLabel(pluginType);
+      const isBundle = pluginType === "carisma_v2";
+      const toggleExpanded = () => {
+        if (isExpanded) {
+          setExpandedId(null);
+          cancelEntryForm();
+          cancelEditEntry();
+          setReplacingHtmlFor(null);
+          setReplacingGatewayHtmlFor(null);
+          setReplacingZipFor(null);
+          setEditingTargets(null);
+        }
+        else setExpandedId(plugin.id);
+      };
+      const isEditingName = editingPluginNameId === plugin.id;
+
+      return (
+        <div key={plugin.id} className="rounded-lg border overflow-hidden">
+          {/* Plugin header */}
+          <div className="flex items-center gap-2 px-4 py-3 bg-muted/20">
+            {/* Expand/collapse chevron */}
+            <button
+              type="button"
+              className="shrink-0 p-0.5 rounded hover:bg-muted/50"
+              onClick={() => {
+                toggleExpanded();
+              }}
+            >
+              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+
+            {/* Plugin name — view or inline edit */}
+            {isEditingName ? (
+              <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                <Input
+                  ref={pluginNameInputRef}
+                  value={editingPluginNameVal}
+                  onChange={(e) => setEditingPluginNameVal(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") savePluginName();
+                    if (e.key === "Escape") cancelEditPluginName();
+                  }}
+                  className="h-7 text-sm flex-1 min-w-0"
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 text-primary shrink-0"
+                  onClick={savePluginName}
+                  disabled={isSaving}
+                  title="Save name"
+                >
+                  {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 shrink-0"
+                  onClick={cancelEditPluginName}
+                  title="Cancel"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <div
+                className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
+                onClick={() => {
+                  toggleExpanded();
+                }}
+              >
+                <span className="font-medium text-sm truncate">{plugin.name}</span>
+                <button
+                  type="button"
+                  className="shrink-0 p-0.5 rounded opacity-40 hover:opacity-100 hover:bg-muted/50 transition-opacity"
+                  onClick={(e) => { e.stopPropagation(); startEditPluginName(plugin); }}
+                  title="Edit plugin name"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <Badge variant="secondary" className="shrink-0 text-xs font-normal" title={typeLabel}>
+                  {pluginShortLabel(pluginType)}
+                </Badge>
+                {plugin.archived ? (
+                  <Badge variant="outline" className="shrink-0 text-xs">Archived</Badge>
+                ) : (
+                  <Badge variant={plugin.is_active ? "default" : "outline"} className="shrink-0 text-xs">
+                    {plugin.is_active ? "Active" : "Inactive"}
+                  </Badge>
+                )}
+                <Badge variant="outline" className="shrink-0 text-xs hidden sm:inline-flex">
+                  {isBundle
+                    ? `${plugin.bundle?.organizations.length ?? 0} org${plugin.bundle?.organizations.length === 1 ? "" : "s"}`
+                    : `${plugin.credentials.length} entr${plugin.credentials.length === 1 ? "y" : "ies"}`}
+                </Badge>
+              </div>
+            )}
+
+            {/* Right controls */}
+            {plugin.archived ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs shrink-0"
+                onClick={() => restorePlugin(plugin.id)}
+                disabled={isSaving}
+                title="Restore plugin (stays inactive until you switch it on)"
+              >
+                <ArchiveRestore className="h-3.5 w-3.5 mr-1" /> Restore
+              </Button>
+            ) : (
+              <>
+                <Switch checked={plugin.is_active} onCheckedChange={(v) => toggleActive(plugin.id, v)} disabled={isSaving} />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={() => archivePlugin(plugin.id)}
+                  disabled={isSaving}
+                  title="Archive plugin (hides it from the gateway)"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                </Button>
+              </>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-destructive hover:text-destructive shrink-0"
+              onClick={() => deletePlugin(plugin.id)}
+              disabled={isSaving}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+
+          {/* Expanded body */}
+          {isExpanded && (
+            <div className="px-4 pb-4 pt-3 space-y-4">
+              {plugin.description && (
+                <p className="text-xs text-muted-foreground">{plugin.description}</p>
+              )}
+
+              {isBundle ? renderBundleBody(plugin) : (<>
+              {/* Admin/default HTML template row */}
+              <div className="flex items-center gap-3 rounded-md border bg-muted/10 px-3 py-2">
+                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm">Admin HTML template</span>
+                  <span className="text-xs text-muted-foreground ml-2">required · gateway fallback</span>
+                </div>
+                {replacingHtmlFor === plugin.id ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={replaceHtmlRef}
+                      type="file"
+                      accept=".html,text/html"
+                      className="text-xs"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleReplaceHtml(plugin.id, f);
+                      }}
+                    />
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setReplacingHtmlFor(null)}>
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setReplacingHtmlFor(plugin.id)}>
+                    Replace
+                  </Button>
+                )}
+              </div>
+
+              {/* Optional gateway-specific HTML template row */}
+              <div className="flex items-center gap-3 rounded-md border bg-muted/10 px-3 py-2">
+                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm">Gateway HTML template</span>
+                  <span className="text-xs text-muted-foreground ml-2">
+                    {plugin.gateway_html_content ? "custom template active" : "optional · using admin template"}
+                  </span>
+                </div>
+                {replacingGatewayHtmlFor === plugin.id ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="file"
+                      accept=".html,text/html"
+                      className="text-xs"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void handleReplaceGatewayHtml(plugin.id, file);
+                      }}
+                    />
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setReplacingGatewayHtmlFor(null)}>
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setReplacingGatewayHtmlFor(plugin.id)}>
+                      {plugin.gateway_html_content ? "Replace" : "Upload"}
+                    </Button>
+                    {plugin.gateway_html_content && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                        onClick={() => removeGatewayHtml(plugin.id)}
+                        disabled={isSaving}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Data entries */}
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {typeLabel} data entries
+                </p>
+
+                {plugin.credentials.length === 0 && addingEntryTo !== plugin.id && (
+                  <p className="text-xs text-muted-foreground pl-1">
+                    No entries yet — each entry maps a JSON + PNG pair to specific analytics options.
+                  </p>
+                )}
+
+                {plugin.credentials.map((entry) => {
+                  const isEditingThis = editingEntryKey?.pluginId === plugin.id && editingEntryKey.entryId === entry.id;
+                  if (isEditingThis) {
+                    return (
+                      <div key={entry.id}>
+                        {renderEntryForm({
+                          pluginId: plugin.id,
+                          title: "Edit entry",
+                          form: editEntryForm,
+                          error: editEntryError,
+                          onChangeLabel: (v) => setEditEntryForm((p) => ({ ...p, label: v })),
+                          onChangeJson: (f) => setEditEntryForm((p) => ({ ...p, jsonFile: f })),
+                          onChangePng: (f) => setEditEntryForm((p) => ({ ...p, pngFile: f })),
+                          onToggleTarget: toggleEditEntryTarget,
+                          onSave: () => void saveEditEntry(plugin.id, entry.id),
+                          onCancel: cancelEditEntry,
+                          isEdit: true,
+                        })}
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={entry.id} className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 rounded-md border px-3 py-2.5 bg-background">
+                      <div className="space-y-0.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium">
+                            {entry.label || <span className="text-muted-foreground italic">No display name</span>}
+                          </p>
+                          {entry.label && (
+                            <Badge variant="secondary" className="text-[10px] px-1.5 h-4 font-normal">badge label</Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground truncate">{targetNames(entry.target_resource_ids)}</p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1 sm:justify-end shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => openPreview(plugin, entry, "admin")}
+                          disabled={isSaving}
+                          title="Preview the admin HTML with this JSON and PNG"
+                        >
+                          <Eye className="h-3.5 w-3.5 mr-1" />
+                          Admin Preview
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => openPreview(plugin, entry, "gateway")}
+                          disabled={isSaving}
+                          title={plugin.gateway_html_content
+                            ? "Preview the gateway HTML with this JSON and PNG"
+                            : "Preview the gateway using the admin HTML fallback"}
+                        >
+                          <Eye className="h-3.5 w-3.5 mr-1" />
+                          Gateway Preview
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => startEditEntry(plugin.id, entry)}
+                          disabled={isSaving}
+                          title="Edit entry"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          onClick={() => deleteEntry(plugin.id, entry.id)}
+                          disabled={isSaving}
+                          title="Delete entry"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Add-entry form */}
+                {addingEntryTo === plugin.id ? (
+                  renderEntryForm({
+                    pluginId: plugin.id,
+                    title: `New ${typeLabel} entry`,
+                    form: entryForm,
+                    error: entryError,
+                    onChangeLabel: (v) => setEntryForm((p) => ({ ...p, label: v })),
+                    onChangeJson: (f) => setEntryForm((p) => ({ ...p, jsonFile: f })),
+                    onChangePng: (f) => setEntryForm((p) => ({ ...p, pngFile: f })),
+                    onToggleTarget: toggleEntryTarget,
+                    onSave: () => void handleAddEntry(plugin.id),
+                    onCancel: cancelEntryForm,
+                  })
+                ) : editingEntryKey?.pluginId !== plugin.id && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full h-7 text-xs border-dashed"
+                    onClick={() => startAddEntry(plugin.id)}
+                  >
+                    <Plus className="h-3 w-3 mr-1" />
+                    Add {typeLabel} entry
+                  </Button>
+                )}
+              </div>
+              </>)}
+            </div>
+          )}
+        </div>
+      );
+  };
 
   if (isLoading) {
     return (
@@ -508,343 +1108,47 @@ const ChooseAnalyticsPageSettingsSection = () => {
         </CardTitle>
         <CardDescription>
           Add verification plugins that appear as badge buttons on analytics option cards in the gateway.
-          Each plugin has an admin HTML template, an optional gateway-specific HTML template, and multiple data entries targeted to analytics options.
-          Currently supported: <strong>T-AI CARiSMA</strong> — compliance certificate viewer (HTML + JSON + PNG).
+          <strong>T-AI CARiSMA v2</strong> takes one ZIP with admin and client pages plus reports and diagrams for several organizations.
+          <strong> T-AI CARiSMA v1</strong> (HTML templates + JSON/PNG entries) is still supported. Archive a plugin to hide it from the gateway without deleting it.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
 
-        {plugins.length === 0 && !showAddPlugin && (
+        {activePlugins.length === 0 && !showAddPlugin && (
           <p className="text-sm text-muted-foreground rounded-md border p-4 bg-muted/30">
-            No verification plugins configured yet. Add a T-AI CARiSMA plugin to display compliance certificates on analytics cards.
+            No active verification plugins. Add a T-AI CARiSMA plugin to display compliance results on analytics cards.
           </p>
         )}
 
-        {plugins.map((plugin) => {
-          const isExpanded = expandedId === plugin.id;
-          const typeLabel = pluginTypeLabel(plugin.plugin_type);
-          const isEditingName = editingPluginNameId === plugin.id;
+        {activePlugins.map(renderPlugin)}
 
-          return (
-            <div key={plugin.id} className="rounded-lg border overflow-hidden">
-              {/* Plugin header */}
-              <div className="flex items-center gap-2 px-4 py-3 bg-muted/20">
-                {/* Expand/collapse chevron */}
-                <button
-                  type="button"
-                  className="shrink-0 p-0.5 rounded hover:bg-muted/50"
-                  onClick={() => {
-                    if (isExpanded) {
-                      setExpandedId(null);
-                      cancelEntryForm();
-                      cancelEditEntry();
-                      setReplacingHtmlFor(null);
-                      setReplacingGatewayHtmlFor(null);
-                    }
-                    else setExpandedId(plugin.id);
-                  }}
-                >
-                  {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                </button>
-
-                {/* Plugin name — view or inline edit */}
-                {isEditingName ? (
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <Input
-                      ref={pluginNameInputRef}
-                      value={editingPluginNameVal}
-                      onChange={(e) => setEditingPluginNameVal(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") savePluginName();
-                        if (e.key === "Escape") cancelEditPluginName();
-                      }}
-                      className="h-7 text-sm flex-1 min-w-0"
-                    />
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-primary shrink-0"
-                      onClick={savePluginName}
-                      disabled={isSaving}
-                      title="Save name"
-                    >
-                      {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                    </Button>
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 shrink-0"
-                      onClick={cancelEditPluginName}
-                      title="Cancel"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ) : (
-                  <div
-                    className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
-                    onClick={() => {
-                      if (isExpanded) {
-                        setExpandedId(null);
-                        cancelEntryForm();
-                        cancelEditEntry();
-                        setReplacingHtmlFor(null);
-                        setReplacingGatewayHtmlFor(null);
-                      }
-                      else setExpandedId(plugin.id);
-                    }}
-                  >
-                    <span className="font-medium text-sm truncate">{plugin.name}</span>
-                    <button
-                      type="button"
-                      className="shrink-0 p-0.5 rounded opacity-40 hover:opacity-100 hover:bg-muted/50 transition-opacity"
-                      onClick={(e) => { e.stopPropagation(); startEditPluginName(plugin); }}
-                      title="Edit plugin name"
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                    <Badge variant="secondary" className="shrink-0 text-xs font-normal">
-                      {typeLabel}
-                    </Badge>
-                    <Badge variant={plugin.is_active ? "default" : "outline"} className="shrink-0 text-xs">
-                      {plugin.is_active ? "Active" : "Inactive"}
-                    </Badge>
-                    <Badge variant="outline" className="shrink-0 text-xs">
-                      {plugin.credentials.length} entr{plugin.credentials.length === 1 ? "y" : "ies"}
-                    </Badge>
-                  </div>
-                )}
-
-                {/* Right controls */}
-                <Switch checked={plugin.is_active} onCheckedChange={(v) => toggleActive(plugin.id, v)} disabled={isSaving} />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-destructive hover:text-destructive shrink-0"
-                  onClick={() => deletePlugin(plugin.id)}
-                  disabled={isSaving}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+        {archivedPlugins.length > 0 && (
+          <div className="rounded-lg border border-dashed">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-muted-foreground hover:bg-muted/30"
+              onClick={() => setShowArchived((v) => !v)}
+            >
+              {showArchived ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              <Archive className="h-4 w-4" />
+              Archived plugins
+              <Badge variant="outline" className="text-xs">{archivedPlugins.length}</Badge>
+              <span className="ml-auto text-xs">Not shown in the gateway</span>
+            </button>
+            {showArchived && (
+              <div className="space-y-3 px-3 pb-3">
+                {archivedPlugins.map(renderPlugin)}
               </div>
-
-              {/* Expanded body */}
-              {isExpanded && (
-                <div className="px-4 pb-4 pt-3 space-y-4">
-                  {plugin.description && (
-                    <p className="text-xs text-muted-foreground">{plugin.description}</p>
-                  )}
-
-                  {/* Admin/default HTML template row */}
-                  <div className="flex items-center gap-3 rounded-md border bg-muted/10 px-3 py-2">
-                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm">Admin HTML template</span>
-                      <span className="text-xs text-muted-foreground ml-2">required · gateway fallback</span>
-                    </div>
-                    {replacingHtmlFor === plugin.id ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          ref={replaceHtmlRef}
-                          type="file"
-                          accept=".html,text/html"
-                          className="text-xs"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) void handleReplaceHtml(plugin.id, f);
-                          }}
-                        />
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setReplacingHtmlFor(null)}>
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setReplacingHtmlFor(plugin.id)}>
-                        Replace
-                      </Button>
-                    )}
-                  </div>
-
-                  {/* Optional gateway-specific HTML template row */}
-                  <div className="flex items-center gap-3 rounded-md border bg-muted/10 px-3 py-2">
-                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm">Gateway HTML template</span>
-                      <span className="text-xs text-muted-foreground ml-2">
-                        {plugin.gateway_html_content ? "custom template active" : "optional · using admin template"}
-                      </span>
-                    </div>
-                    {replacingGatewayHtmlFor === plugin.id ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="file"
-                          accept=".html,text/html"
-                          className="text-xs"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) void handleReplaceGatewayHtml(plugin.id, file);
-                          }}
-                        />
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setReplacingGatewayHtmlFor(null)}>
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1">
-                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setReplacingGatewayHtmlFor(plugin.id)}>
-                          {plugin.gateway_html_content ? "Replace" : "Upload"}
-                        </Button>
-                        {plugin.gateway_html_content && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-                            onClick={() => removeGatewayHtml(plugin.id)}
-                            disabled={isSaving}
-                          >
-                            Remove
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Data entries */}
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {typeLabel} data entries
-                    </p>
-
-                    {plugin.credentials.length === 0 && addingEntryTo !== plugin.id && (
-                      <p className="text-xs text-muted-foreground pl-1">
-                        No entries yet — each entry maps a JSON + PNG pair to specific analytics options.
-                      </p>
-                    )}
-
-                    {plugin.credentials.map((entry) => {
-                      const isEditingThis = editingEntryKey?.pluginId === plugin.id && editingEntryKey.entryId === entry.id;
-                      if (isEditingThis) {
-                        return (
-                          <div key={entry.id}>
-                            {renderEntryForm({
-                              pluginId: plugin.id,
-                              title: "Edit entry",
-                              form: editEntryForm,
-                              error: editEntryError,
-                              onChangeLabel: (v) => setEditEntryForm((p) => ({ ...p, label: v })),
-                              onChangeJson: (f) => setEditEntryForm((p) => ({ ...p, jsonFile: f })),
-                              onChangePng: (f) => setEditEntryForm((p) => ({ ...p, pngFile: f })),
-                              onToggleTarget: toggleEditEntryTarget,
-                              onSave: () => void saveEditEntry(plugin.id, entry.id),
-                              onCancel: cancelEditEntry,
-                              isEdit: true,
-                            })}
-                          </div>
-                        );
-                      }
-                      return (
-                        <div key={entry.id} className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 rounded-md border px-3 py-2.5 bg-background">
-                          <div className="space-y-0.5 min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-sm font-medium">
-                                {entry.label || <span className="text-muted-foreground italic">No display name</span>}
-                              </p>
-                              {entry.label && (
-                                <Badge variant="secondary" className="text-[10px] px-1.5 h-4 font-normal">badge label</Badge>
-                              )}
-                            </div>
-                            <p className="text-xs text-muted-foreground truncate">{targetNames(entry.target_resource_ids)}</p>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-1 sm:justify-end shrink-0">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 px-2 text-xs"
-                              onClick={() => openPreview(plugin, entry, "admin")}
-                              disabled={isSaving}
-                              title="Preview the admin HTML with this JSON and PNG"
-                            >
-                              <Eye className="h-3.5 w-3.5 mr-1" />
-                              Admin Preview
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 px-2 text-xs"
-                              onClick={() => openPreview(plugin, entry, "gateway")}
-                              disabled={isSaving}
-                              title={plugin.gateway_html_content
-                                ? "Preview the gateway HTML with this JSON and PNG"
-                                : "Preview the gateway using the admin HTML fallback"}
-                            >
-                              <Eye className="h-3.5 w-3.5 mr-1" />
-                              Gateway Preview
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => startEditEntry(plugin.id, entry)}
-                              disabled={isSaving}
-                              title="Edit entry"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 text-destructive hover:text-destructive"
-                              onClick={() => deleteEntry(plugin.id, entry.id)}
-                              disabled={isSaving}
-                              title="Delete entry"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {/* Add-entry form */}
-                    {addingEntryTo === plugin.id ? (
-                      renderEntryForm({
-                        pluginId: plugin.id,
-                        title: `New ${typeLabel} entry`,
-                        form: entryForm,
-                        error: entryError,
-                        onChangeLabel: (v) => setEntryForm((p) => ({ ...p, label: v })),
-                        onChangeJson: (f) => setEntryForm((p) => ({ ...p, jsonFile: f })),
-                        onChangePng: (f) => setEntryForm((p) => ({ ...p, pngFile: f })),
-                        onToggleTarget: toggleEntryTarget,
-                        onSave: () => void handleAddEntry(plugin.id),
-                        onCancel: cancelEntryForm,
-                      })
-                    ) : editingEntryKey?.pluginId !== plugin.id && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full h-7 text-xs border-dashed"
-                        onClick={() => startAddEntry(plugin.id)}
-                      >
-                        <Plus className="h-3 w-3 mr-1" />
-                        Add {typeLabel} entry
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+            )}
+          </div>
+        )}
 
         {/* Add-plugin form */}
         {showAddPlugin ? (
           <div className="rounded-lg border p-4 space-y-4 bg-muted/10">
             <div className="flex items-center justify-between">
               <p className="font-medium text-sm">New Verification Plugin</p>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setShowAddPlugin(false); setPluginForm(emptyPluginForm()); setPluginError(null); }}>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={resetAddPluginForm}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
@@ -882,16 +1186,53 @@ const ChooseAnalyticsPageSettingsSection = () => {
                 <Input
                   value={pluginForm.name}
                   onChange={(e) => setPluginForm((p) => ({ ...p, name: e.target.value }))}
-                  placeholder={pluginForm.plugin_type === "carisma" ? "e.g. T-AI CARiSMA" : "Plugin name"}
+                  placeholder={pluginForm.plugin_type === "carisma_v2" ? "e.g. T-AI CARiSMA" : "e.g. T-AI CARiSMA v1"}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Shown as the fallback badge label on analytics cards. Individual entries can override this with their own display name.
+                  {pluginForm.plugin_type === "carisma_v2"
+                    ? "Shown as the badge label on the analytics cards mapped to an organization."
+                    : "Shown as the fallback badge label on analytics cards. Individual entries can override this with their own display name."}
                 </p>
               </div>
               <div className="space-y-2 md:col-span-2">
                 <Label>Description</Label>
                 <Textarea value={pluginForm.description} onChange={(e) => setPluginForm((p) => ({ ...p, description: e.target.value }))} rows={2} placeholder="Optional" />
               </div>
+              {pluginForm.plugin_type === "carisma_v2" ? (<>
+              <div className="space-y-2 md:col-span-2">
+                <Label className="flex items-center gap-1">
+                  <FileArchive className="h-3.5 w-3.5" /> Plugin ZIP <span className="text-destructive">*</span>
+                </Label>
+                <input
+                  ref={zipFileRef}
+                  type="file"
+                  accept=".zip,application/zip"
+                  className="w-full text-sm"
+                  onChange={(e) => setPluginForm((p) => ({ ...p, zipFile: e.target.files?.[0] ?? null }))}
+                />
+                <pre className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground overflow-x-auto">{`<bundle>/
+├── TAI-CARiSMA.html          admin view
+├── TAI-CARiSMA-client.html   client view ("client" in the name)
+├── organizations.json        organization registry
+├── reports/                  one result JSON per organization
+└── diagrams/                 one diagram image per organization`}</pre>
+                <p className="text-xs text-muted-foreground">
+                  The ZIP may contain one top-level folder. Report and diagram paths are read from organizations.json. Max 10 MB unpacked.
+                </p>
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label>Show on analytics options</Label>
+                {renderTargetChecklist(pluginForm.targetIds, (id, checked) =>
+                  setPluginForm((p) => ({
+                    ...p,
+                    targetIds: checked ? [...p.targetIds, id] : p.targetIds.filter((t) => t !== id),
+                  })),
+                )}
+                <p className="text-xs text-muted-foreground">
+                  One setting for the whole bundle. You can change it later.
+                </p>
+              </div>
+              </>) : (<>
               <div className="space-y-2 md:col-span-2">
                 <Label className="flex items-center gap-1">
                   <FileText className="h-3.5 w-3.5" /> Admin HTML template <span className="text-destructive">*</span>
@@ -918,6 +1259,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
                   When provided, this template is shown on gateway and embed pages. It uses the same JSON + PNG entries as the admin template.
                 </p>
               </div>
+              </>)}
             </div>
 
             {pluginError && <p className="text-sm text-destructive">{pluginError}</p>}
@@ -926,7 +1268,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
               <Button onClick={() => void handleAddPlugin()} disabled={isSaving}>
                 {isSaving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving...</> : <><Save className="h-4 w-4 mr-2" />Save Plugin</>}
               </Button>
-              <Button variant="outline" onClick={() => { setShowAddPlugin(false); setPluginForm(emptyPluginForm()); setPluginError(null); }}>
+              <Button variant="outline" onClick={resetAddPluginForm}>
                 Cancel
               </Button>
             </div>

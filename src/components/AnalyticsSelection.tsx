@@ -19,6 +19,7 @@ import {
 } from "@/types/dataspace";
 import { resolveRuntimePlaceholder } from "@/utils/placeholders";
 import { buildCredentialSrcdoc, createCredentialPngObjectUrl } from "@/utils/credentialPreview";
+import { buildBundleSrcdoc, bundleTargetIds } from "@/utils/pluginBundle";
 
 // Re-export type for backward compatibility
 export type { AnalyticsOption } from "@/types/dataspace";
@@ -124,6 +125,19 @@ const AnalyticsSelection = ({
       pluginDescription: plugin.description,
       entryLabel: entry.label,
       srcdoc: buildCredentialSrcdoc(plugin.gateway_html_content || plugin.html_content, entry.json_content, pngUrl),
+    });
+  }, []);
+
+  const openBundleModal = useCallback((plugin: CredentialPluginConfig) => {
+    if (!plugin.bundle) return;
+    credentialBlobUrls.current.forEach((u) => URL.revokeObjectURL(u));
+    credentialBlobUrls.current = [];
+    setCredentialModal({
+      pluginId: plugin.id,
+      pluginName: plugin.name,
+      pluginDescription: plugin.description,
+      entryLabel: plugin.bundle.use_case_name ?? "",
+      srcdoc: buildBundleSrcdoc(plugin.bundle, "client"),
     });
   }, []);
 
@@ -408,23 +422,30 @@ const AnalyticsSelection = ({
           className={`analytics-card ${optionSelected ? "selected" : ""} relative cursor-pointer`}
         >
           {(() => {
-            let credMatch: { plugin: CredentialPluginConfig; entry: CredentialEntry } | null = null;
+            let credMatch: { label: string; open: () => void } | null = null;
             if (credentialPlugins) {
               for (const p of credentialPlugins) {
-                if (!p.is_active) continue;
+                if (!p.is_active || p.archived) continue;
+                if (p.plugin_type === "carisma_v2") {
+                  if (bundleTargetIds(p.bundle).includes(option.data.id)) {
+                    credMatch = { label: p.name, open: () => openBundleModal(p) };
+                    break;
+                  }
+                  continue;
+                }
                 const e = p.credentials?.find((c) => c.target_resource_ids.includes(option.data.id));
-                if (e) { credMatch = { plugin: p, entry: e }; break; }
+                if (e) { credMatch = { label: e.label || p.name, open: () => openCredentialModal(p, e) }; break; }
               }
             }
             const credButton = credMatch ? (
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); openCredentialModal(credMatch.plugin, credMatch.entry); }}
+                onClick={(e) => { e.stopPropagation(); credMatch.open(); }}
                 className="theme-badge theme-provider-badge transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-primary hover:text-primary-foreground hover:shadow-md hover:shadow-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                aria-label={`Open ${credMatch.entry.label || credMatch.plugin.name} for ${info.name}`}
+                aria-label={`Open ${credMatch.label} for ${info.name}`}
               >
                 <ShieldCheck className="w-3 h-3" />
-                {credMatch.entry.label || credMatch.plugin.name}
+                {credMatch.label}
               </button>
             ) : null;
 

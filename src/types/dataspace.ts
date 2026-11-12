@@ -91,7 +91,43 @@ export interface DataPagePluginConfig {
   is_active: boolean;
 }
 
-export type AnalyticsPagePluginType = "carisma";
+/**
+ * "carisma"    — v1: admin/gateway HTML templates + per-target JSON/PNG entries.
+ * "carisma_v2" — v2: one uploaded ZIP bundle (admin + client HTML, organizations.json,
+ *                reports/ and diagrams/) covering multiple organizations.
+ */
+export type AnalyticsPagePluginType = "carisma" | "carisma_v2";
+
+/** A file extracted from an uploaded plugin ZIP bundle, keyed by its path relative to the bundle root. */
+export interface PluginBundleFile {
+  path: string;
+  mime: string;
+  encoding: "text" | "base64";
+  content: string;
+}
+
+export interface PluginBundleOrganization {
+  id: string;
+  name: string;
+  type?: string;
+}
+
+export interface PluginBundle {
+  file_name: string;
+  uploaded_at: string;
+  admin_html: string;
+  client_html: string;
+  /** Path of the registry file relative to the bundle root (usually organizations.json). */
+  registry_path: string;
+  /** Registry, reports, diagrams and any other non-HTML files from the bundle. */
+  files: PluginBundleFile[];
+  organizations: PluginBundleOrganization[];
+  use_case_name?: string;
+  /** Analytics option ids (software / service chain) the badge appears on — one setting for the whole bundle. */
+  target_resource_ids: string[];
+  /** @deprecated Early per-organization mapping; read only as a fallback for target_resource_ids. */
+  org_targets?: Record<string, string[]>;
+}
 
 export interface CredentialEntry {
   id: string;
@@ -112,6 +148,11 @@ export interface CredentialPluginConfig {
   /** Optional client-facing template used by gateway and embed pages. */
   gateway_html_content?: string;
   credentials: CredentialEntry[];
+  /** Archived plugins are kept for reference but never shown in the gateway. */
+  archived?: boolean;
+  archived_at?: string;
+  /** Present for "carisma_v2" plugins. */
+  bundle?: PluginBundle;
 }
 
 export interface DataSelectionSettings {
