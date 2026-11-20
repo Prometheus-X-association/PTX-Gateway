@@ -54,6 +54,12 @@ export interface ParsedBundle {
 
 interface RegistryOrg {
   id?: unknown;
+  /** Offering (service) name shown as the tab label. */
+  offeringName?: unknown;
+  /** Organization that provides the offering. */
+  organizationName?: unknown;
+  organization?: unknown;
+  /** Legacy fallback for offeringName. */
   name?: unknown;
   type?: unknown;
   reportFile?: unknown;
@@ -118,20 +124,32 @@ export async function parsePluginBundleZip(file: File): Promise<ParsedBundle> {
   const organizations: PluginBundleOrganization[] = [];
   const seen = new Set<string>();
   for (const [i, raw] of (registry.organizations as RegistryOrg[]).entries()) {
-    const id = typeof raw?.id === "string" ? raw.id.trim() : "";
-    const name = typeof raw?.name === "string" ? raw.name.trim() : "";
-    if (!id || !name) throw new Error(`Organization #${i + 1} in ${REGISTRY_FILE} needs an "id" and a "name".`);
+    const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+    const id = str(raw?.id);
+    // Same naming rule as the bundled pages: offeringName, falling back to the legacy "name".
+    const name = str(raw?.offeringName) || str(raw?.name);
+    const provider = str(raw?.organizationName) || str(raw?.organization);
+    if (!id) throw new Error(`Organization #${i + 1} in ${REGISTRY_FILE} needs an "id".`);
+    if (!name && !provider) {
+      throw new Error(`Organization "${id}" in ${REGISTRY_FILE} needs an "offeringName" or "organizationName" (or legacy "name").`);
+    }
     if (seen.has(id)) throw new Error(`Duplicate organization id "${id}" in ${REGISTRY_FILE}.`);
     seen.add(id);
 
     const report = typeof raw.reportFile === "string" ? normalizeBundlePath(raw.reportFile) : "";
-    if (!report || !rel[report]) throw new Error(`Report file for "${name}" (${String(raw.reportFile ?? "missing")}) is not in the ZIP.`);
-    try { JSON.parse(strFromU8(rel[report])); } catch { throw new Error(`Report file ${report} for "${name}" is not valid JSON.`); }
+    const label = name || provider;
+    if (!report || !rel[report]) throw new Error(`Report file for "${label}" (${String(raw.reportFile ?? "missing")}) is not in the ZIP.`);
+    try { JSON.parse(strFromU8(rel[report])); } catch { throw new Error(`Report file ${report} for "${label}" is not valid JSON.`); }
 
     const diagram = typeof raw.diagramFile === "string" ? normalizeBundlePath(raw.diagramFile) : "";
-    if (!diagram || !rel[diagram]) warnings.push(`Diagram for "${name}" (${String(raw.diagramFile ?? "missing")}) is not in the ZIP.`);
+    if (!diagram || !rel[diagram]) warnings.push(`Diagram for "${label}" (${String(raw.diagramFile ?? "missing")}) is not in the ZIP.`);
 
-    organizations.push({ id, name, type: typeof raw.type === "string" ? raw.type : undefined });
+    organizations.push({
+      id,
+      name: label,
+      organization_name: provider && provider !== label ? provider : undefined,
+      type: str(raw.type) || undefined,
+    });
   }
 
   const files: PluginBundleFile[] = [];

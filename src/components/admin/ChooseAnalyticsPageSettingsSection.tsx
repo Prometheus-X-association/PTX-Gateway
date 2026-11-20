@@ -636,7 +636,7 @@ const ChooseAnalyticsPageSettingsSection = () => {
                     <Building2 className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                     <div className="min-w-0">
                       <p className="text-sm truncate">{org.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{org.id}{org.type ? ` · ${org.type}` : ""}</p>
+                      <p className="text-xs text-muted-foreground truncate">{org.id}{org.organization_name ? ` · ${org.organization_name}` : ""}{org.type ? ` · ${org.type}` : ""}</p>
                     </div>
                   </div>
                 ))}

@@ -108,7 +108,10 @@ export interface PluginBundleFile {
 
 export interface PluginBundleOrganization {
   id: string;
+  /** Offering name (registry offeringName, or legacy name); the organization name if no offering is given. */
   name: string;
+  /** Providing organization (registry organizationName), when it differs from name. */
+  organization_name?: string;
   type?: string;
 }
 
